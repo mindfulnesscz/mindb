@@ -2,7 +2,7 @@
 
 Prepend the **SHARED CONTEXT block** from `DONE_01_security-hardening-S0-S7.md`.
 
-**Part A is LANDED** (commit `f790fbb`) — but was written in an environment with no Rust toolchain,
+**Part A is LANDED** (commit `d66d3b2`) — but was written in an environment with no Rust toolchain,
 so **it has never been compiled**. Run `npm run check` before merging. Parts B and C are open.
 
 _Filed 2026-08-06 from a report of a spinning beachball during a run on the installed build, with a

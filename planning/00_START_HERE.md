@@ -10,7 +10,7 @@ _Last updated 2026-08-06 (00a/00b/00c filed for the 3.2.2 hotfix)._
 ## 🚢 In the 3.2.2 hotfix
 
 `00a`, `00b`, `00c` are queued for **3.2.2** — branch `hotfix/3.2.2`, changelog section already open.
-`00b` part A is **landed** (`f790fbb`) but has **never been compiled** — run `npm run check` before
+`00b` part A is **landed** (`d66d3b2`) but has **never been compiled** — run `npm run check` before
 merging. Everything else is open.
 
 ## ▶ Run next — in this order
