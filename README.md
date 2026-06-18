@@ -1,35 +1,119 @@
-# Package Maker
+# dc-hub
 
-Scans a source folder, collects output files into package folders, mirrors them to a target, generates thumbnails, and builds an Obsidian DAM (Digital Asset Manager) — with version filtering, exclusion marks, and configurable folder patterns.
+Digital asset pipeline for ESS Marketing. Distributes, publishes, thumbnails, and indexes marketing materials into Obsidian — with version filtering, Dropbox/OneDrive integration, and automatic naming translation.
 
 ---
 
 ## Table of Contents
 
-- [Folder Structure](#folder-structure)
-- [File Naming](#file-naming)
-  - [Tags](#tags)
-  - [Description](#description)
-  - [Version](#version)
-- [Tag Vocabulary](#tag-vocabulary)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Running the app](#running-the-app)
+- [Folder structure](#folder-structure)
+- [File naming](#file-naming)
+  - [Filename pattern](#filename-pattern)
+  - [Slot 1 — Entity](#slot-1--entity)
+  - [Slot 2 — Angle](#slot-2--angle)
+  - [Slot 3 — Format](#slot-3--format)
+  - [Versioning](#versioning)
 - [Tasks](#tasks)
+  - [Generate thumbnails](#generate-thumbnails)
   - [Distribute](#distribute)
-  - [Publish](#publish)
-  - [Generate Thumbnails](#generate-thumbnails)
-  - [Obsidian DAM](#obsidian-dam)
-- [Excluding Files and Folders](#excluding-files-and-folders)
-- [Version Filtering](#version-filtering)
-- [Settings](#settings)
+  - [Publish on cloud](#publish-on-cloud)
+  - [Publish to DAM](#publish-to-dam)
+- [Excluding files and folders](#excluding-files-and-folders)
+- [Version filtering](#version-filtering)
+- [Dropbox integration](#dropbox-integration)
+- [OneDrive integration](#onedrive-integration)
+- [Settings reference](#settings-reference)
+- [Adding new tags](#adding-new-tags)
 
 ---
 
-## Folder Structure
+## Requirements
 
-Each project folder follows a fixed four-folder layout:
+| Requirement | Version | Notes |
+| --- | --- | --- |
+| **Python** | 3.10 or later | [python.org/downloads](https://python.org/downloads) |
+| **LibreOffice** | any recent | PPTX → thumbnail conversion. [libreoffice.org](https://libreoffice.org) |
+| **poppler** | any | PDF → thumbnail. `brew install poppler` |
+| **webp** | any | WebP encoding. `brew install webp` |
 
-```text
+Python and Homebrew are the only hard dependencies to install manually. LibreOffice, poppler, and webp are only needed if you use **Generate thumbnails** — the rest of the app works without them.
+
+Install Homebrew (macOS) if you don't have it:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+Install the CLI tools:
+
+```bash
+brew install poppler webp
+```
+
+---
+
+## Installation
+
+Clone or download the repository, then let the launcher handle the rest on first run. No manual `pip install` needed.
+
+```bash
+git clone <repo-url> dc-hub
+cd dc-hub
+```
+
+The `.venv` virtual environment and Python dependencies (`customtkinter`, `darkdetect`) are created automatically the first time you launch the app.
+
+---
+
+## Running the app
+
+### macOS — double-click launcher
+
+Double-click `run.command` in Finder.
+
+> First run only: macOS may show a security warning. Go to **System Settings → Privacy & Security** and click "Open Anyway".
+
+The launcher:
+1. Creates `.venv` if it doesn't exist yet.
+2. Installs/updates `requirements.txt` (once per day).
+3. Starts the app.
+
+### macOS — Terminal
+
+```bash
+cd /path/to/dc-hub
+python3 -m venv .venv          # only needed once
+source .venv/bin/activate
+pip install -r requirements.txt # only needed once
+python app.py
+```
+
+### Windows — double-click launcher
+
+Double-click `run.bat`. Same auto-setup logic as the macOS launcher.
+
+### Windows — Command Prompt
+
+```bat
+cd \path\to\dc-hub
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python app.py
+```
+
+---
+
+## Folder structure
+
+Each project folder follows this layout:
+
+```
 My Project/
-├── [00] 📦 My Project/   ← package (auto-populated, do not edit manually)
+├── [00] 📦 My Project/   ← package (auto-populated — do not edit manually)
 ├── [01] IN/              ← source inputs, originals, raw imports
 ├── [02] WRK/             ← work in progress, iterations
 └── [03] OUT/             ← finished files — only these are deployed
@@ -43,251 +127,281 @@ My Project/
 | `[03] OUT` | The only folder that matters for deployment |
 
 **Rules:**
-
-- Only files inside `[03] OUT` are ever copied, published, or indexed in Obsidian.
+- Only files inside `[03] OUT` are ever copied, published, or indexed.
 - The `[00] 📦` folder is managed by the tool — don't store anything there manually.
-- Subfolders inside `[03] OUT` are supported — see below.
+- Subfolders inside `[03] OUT` are supported (gallery folders and regular subfolders).
 
-### Multiple files in [03] OUT
+### Gallery folders
 
-Every file in `[03] OUT` is handled independently:
+A gallery folder is a direct subfolder of `[03] OUT` that:
+- has a name matching the `(Tag)…` naming convention, and
+- contains at least one image file (`.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.tif`, `.bmp`).
 
-- Each file gets its own Obsidian note.
-- Each `.pptx`, `.ppt`, `.pptm`, or `.pdf` file gets its own thumbnail.
-- Each file is individually distributed to the package and published to the target.
+Gallery folders are treated as a **single asset**: one Obsidian note, one thumbnail (from the first image alphabetically), and the entire folder is copied as a unit to the target.
 
-### Subfolders in [03] OUT
-
-Subfolders in `[03] OUT` behave differently depending on what they contain.
-
-**Gallery folder** — a subfolder that:
-
-- has a name matching the `[TAG]…` naming convention, and
-- contains at least one image file (`.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.tif`, `.bmp`)
-
-A gallery folder is treated as a **single asset**. It gets one Obsidian note, the first image alphabetically is used as its thumbnail, and the entire folder is copied as a unit to the target. Use this for image sets, carousel assets, or any collection of images belonging to one deliverable.
-
-```text
+```
 [03] OUT/
-├── [ESS][SAL][DK]v2-0-0.pptx          ← regular file → one note, one thumbnail
-└── [ESS][SM][CRS] Social Pack v1-0/    ← gallery folder → one note, folder copied whole
+├── (ESS)(SAL)(SlD)v2-0-0.pptx           ← regular file → one note, one thumbnail
+└── (ESS)(SM)(Crs) Social Pack v1-0/     ← gallery folder → one note, folder copied whole
     ├── slide-01.jpg
     ├── slide-02.jpg
     └── slide-03.jpg
 ```
 
-**Regular subfolder** — any subfolder that does not qualify as a gallery. Files inside are traversed recursively and each file is handled individually, the same as files directly in `[03] OUT`. The subfolder path is mirrored in the DAM vault so notes stay organised.
+---
+
+## File naming
+
+### Filename pattern
+
+```
+(Entity)(Angle)(Format)vX-Y-Z.ext
+(Entity)(Angle)(Format)(Description)vX-Y-Z.ext
+```
+
+| Part | Required | Rule |
+| --- | --- | --- |
+| `(Entity)` | Yes | Slot 1 — what the asset is about. See [Slot 1](#slot-1--entity). |
+| `(Angle)` | Yes | Slot 2 — purpose or content type. See [Slot 2](#slot-2--angle). |
+| `(Format)` | Yes | Slot 3 — physical deliverable. See [Slot 3](#slot-3--format). |
+| `(Description)` | Optional | Plain-language label — short, human-scannable. |
+| `vX-Y-Z` | Optional | Semantic version. See [Versioning](#versioning). |
+
+> **Round brackets `()` are the standard from v1.0.** Square brackets `[]` are still parsed as a legacy alias — existing files do not need to be renamed immediately, but new files should use `()`.
+
+> **No dates in filenames.** The version number is the source of truth for file currency.
+
+**Examples:**
+
+```
+(p-Rns)(SAL)(SlD)v2-0-1.pptx
+(p-DpP)(SAL)(SlD)v3-0-5.pptx
+(p-Wax)(SAL)(SlD)(Flood Control)v3-1-13.pptx
+(c-BMW)(ABM)(SlD)v1-0-0.pptx
+(p-TpC)(ABM)(SlD)(China Bumpers)v1-0-0.pptx
+(ESS)(REL)(SlD)(Highlights)v3-2-2.pptx
+(e-PEX)(EVT)(Prn)(Booth Design)v1-0-0.pdf
+(ESS)(SM)(Img)(Happy Birthday)v1-0-0.jpg
+(ESS)(CRP)(Vid)(Easy To Use)v1-0-0.mp4
+(ESS)(CMP)(Crs)(DIP Campaign)v1-0-0.jpg
+(x-AuF)(PTN)(SlD)v2-1-0.pptx
+```
+
+**Translated export names** (what SharePoint / OneDrive sees):
+
+```
+(p-Sln)(SAL)(SlD)v1-2-1.pptx             →  Sealing Sales Slide Deck v1-2-1.pptx
+(ESS)(SAL)(SlD)(Main Company)v2-0-0.pptx →  ESS Sales Slide Deck — Main Company v2-0-0.pptx
+(c-BMW)(ABM)(SlD)v3-1-0.pptx             →  BMW Account-Based Slide Deck v3-1-0.pptx
+```
 
 ---
 
-## File Naming
+### Slot 1 — Entity
 
-Files inside `[03] OUT` must follow this pattern:
+What or who the asset is about. Five subtypes, each with a clear shortcode prefix.
 
-```text
-[TAG1][TAG2][TAG3] Description v1-2-3.ext
-```
+**Company-wide**
 
-```text
-[ESS][SAL][DK]v2-0-0.pptx
-[ESS][SAL][DK] Main Company Introduction v2-3-14.pptx
-[BMW][ABM][DK]v1-0-0.pptx
-[_Sea][SAL][DK] Flood Control v3-1-13.pptx
-[P-EXP][EVT][PRI] Booth Design v1-0-0.pdf
-[ESS][SM][IMG] Happy Birthday v1-0-0.jpg
-```
+| Shortcode | Label | When to use |
+| --- | --- | --- |
+| `ESS` | ESS | Not product-specific; belongs to the ESS brand overall. |
 
-### Tags
+**ESS products — prefix `p-`**
 
-- Any number of `[TAG]` brackets, in any order.
-- Tags must appear **at the very start** of the filename.
-- Each tag is a shortcode from the vocabulary (see [Tag Vocabulary](#tag-vocabulary)).
-- Unknown tags are silently skipped — no error, but a note is added to the Obsidian card.
-- A file with no bracket tags at all gets flagged as incomplete.
+| Shortcode | Label | Shortcode | Label |
+| --- | --- | --- | --- |
+| `p-Rns` | Rinsing | `p-Cld` | Cloud |
+| `p-DpP` | Dip Paint | `p-AIQ` | AnodeIQ |
+| `p-EtC` | E-Coating | `p-BlB` | Black Box |
+| `p-Ovn` | Oven | `p-PIQ` | PaintIQ |
+| `p-Sln` | Sealing | `p-AtR` | Automate Reporting |
+| `p-SIQ` | SealingIQ | `p-Mrg` | Merge |
+| `p-Wax` | Waxing | `p-Als` | Alsim |
+| `p-SpW` | Spray Waxing | `p-EnO` | Encapsulated Oven |
+| `p-TpC` | Top Coating | `p-EnP` | Encapsulated Paint Shop |
+| `p-PwC` | Powder Coating | | |
+| `p-And` | Anodizing | | |
 
-### Description
+**Customers — prefix `c-`**
 
-- Optional plain-language label placed **after** all bracket tags.
-- Can be preceded by a space or underscore — both are stripped.
-- Keep it short and human-scannable.
+| Shortcode | Label | Shortcode | Label |
+| --- | --- | --- | --- |
+| `c-ABB` | ABB | `c-MRC` | MRC |
+| `c-AUD` | Audi | `c-MTS` | MTS |
+| `c-BMW` | BMW | `c-SKD` | Skoda |
+| `c-CEE` | CEE | `c-STE` | Stellantis |
+| `c-EBZ` | EBZ | `c-COA` | COA-CFD |
+| `c-GM` | GM | `c-GUI` | GUI |
+| `c-INE` | INEOS | | |
+| `c-JLR` | JLR | | |
 
-### Version
+**External partners — prefix `x-`**
 
-- Optional. Place it after the description (or after the tags if no description).
-- Accepted formats: `v1`, `v1-2`, `v1-2-3`, `v1.2`, `v1.2.3`, `V1`, `V2-1` (case-insensitive, any separator).
-- Dots are normalised to hyphens on export: `v1.2.3` → `v1-2-3`.
-- No version? The Obsidian card shows `---` in the Version field and won't be re-updated on subsequent runs.
+| Shortcode | Label |
+| --- | --- |
+| `x-AuF` | Autoform |
+| `x-JJ` | JJ |
 
-> No dates in filenames. Version is the source of truth for file currency.
+**Events & conferences — prefix `e-`**
+
+| Shortcode | Label | Shortcode | Label |
+| --- | --- | --- | --- |
+| `e-PEX` | Paint Expo | `e-SRC` | SRC |
+| `e-PS30` | PS-2030 | `e-SAE` | SAE |
+| `e-PSD` | PS-D | `e-Wbn` | Webinar |
+| `e-ICS` | ICS | | |
 
 ---
 
-## Tag Vocabulary
+### Slot 2 — Angle
 
-All recognised shortcodes. Tags are grouped by type but can appear in any order in the filename.
+The purpose or content type of the asset.
 
-### Topic — what the piece is about
+**Sales & marketing**
 
-| Tag | Label |
+| Shortcode | Label | Shortcode | Label |
+| --- | --- | --- | --- |
+| `SAL` | Sales | `TST` | Testimonial |
+| `TEC` | Technical | `CSS` | Case Study |
+| `OVR` | Overview | `SUC` | Success Story |
+| `BCS` | Business Case | `UC` | Use Case |
+| `ABM` | Account-Based | `PPT` | Pain Point |
+| `SML` | Simulation | | |
+
+**Content type**
+
+| Shortcode | Label | Shortcode | Label |
+| --- | --- | --- | --- |
+| `CMP` | Campaign | `SUS` | Sustainability |
+| `REL` | Product Release | `HRE` | Hiring |
+| `SM` | Social Media | `ILL` | Illustration |
+| `TRN` | Training | `3D` | 3D |
+
+**Context**
+
+| Shortcode | Label |
 | --- | --- |
-| `[ESS]` | ESS |
-| `[_Rin]` | Rinsing |
-| `[_Dip]` | Dip Paint |
-| `[_E-C]` | E-Coating |
-| `[_Ovn]` | Oven |
-| `[_Sea]` | Sealing |
-| `[_Wax]` | Waxing |
-| `[_Tpc]` | Top Coating |
-| `[_Pwd]` | Powder Coating |
-| `[_Ano]` | Anodizing |
-| `[_Cld]` | Cloud |
-| `[_A-M]` | Anode Master |
-| `[_BB]` | Black Box |
-| `[_PIQ]` | Paint Analyzer |
-| `[_A-R]` | Automate Reporting |
-| `[_Mrg]` | Merge |
-| `[_Als]` | Alsim |
-| `[ABB]` | ABB |
-| `[AUD]` | Audi |
-| `[BMW]` | BMW |
-| `[CEE]` | CEE |
-| `[EBZ]` | EBZ |
-| `[GM]` | GM |
-| `[INE]` | INE |
-| `[JLR]` | JLR |
-| `[MRC]` | MRC |
-| `[MTS]` | MTS |
-| `[SKD]` | SKD |
-| `[STE]` | Stellantis |
-| `[P-EXP]` | Paint Expo |
-| `[PS30]` | PS30 |
-| `[ICS]` | ICS |
-| `[SRC]` | SRC |
-| `[SAE]` | SAE |
+| `BRD` | Brand |
+| `CRP` | Corporate |
+| `EVT` | Event |
+| `PTN` | Partner |
+| `ADD` | Add-On |
 
-### Type — the purpose of the piece
+---
 
-| Tag | Label |
+### Slot 3 — Format
+
+What the deliverable physically is.
+
+**Documents & presentations**
+
+| Shortcode | Label | Icon |
+| --- | --- | --- |
+| `SlD` | Slide Deck | 🗂️ |
+| `PDF` | PDF | 📄 |
+| `Dcm` | Word Document | 📝 |
+| `1Pg` | One-Pager | 📋 |
+| `Hnd` | Handover | 🤝 |
+| `Mnl` | Manual | 📖 |
+| `Art` | Article | ✍️ |
+
+**Media & visual**
+
+| Shortcode | Label | Icon |
+| --- | --- | --- |
+| `Vid` | Video | 🎬 |
+| `Img` | Static Image | 🖼️ |
+| `Crs` | Carousel | 🎠 |
+| `Bnn` | Banner | |
+| `Prn` | Print | 🖨️ |
+| `Web` | Web Asset | 🌐 |
+| `Gdy` | Goodie | 🎁 |
+| `PrP` | Profile Picture | |
+| `Gll` | Gallery | 🖼️ |
+
+**Image background variants**
+
+| Shortcode | Label |
 | --- | --- |
-| `[SAL]` | Sales Pitch |
-| `[TEC]` | Technical |
-| `[OVR]` | Overview |
-| `[BCS]` | Business Case |
-| `[ABM]` | Account-Based |
-| `[ADD]` | Add-On |
-| `[BRD]` | Brand |
-| `[CRP]` | Corporate |
-| `[EVT]` | Event |
-| `[PTN]` | Partner |
-| `[TRA]` | Training |
-| `[SM]` | Social Media |
-| `[TST]` | Testimonial |
-| `[CSS]` | Case Study |
-| `[SUC]` | Success Story |
-| `[UC]` | Use Case |
-| `[REL]` | Product Release |
-| `[HIR]` | Hiring |
-| `[SUS]` | Sustainability |
-| `[PPT]` | Pain Point |
-| `[CMP]` | Campaign |
-| `[ENO]` | Encapsulated Oven |
-| `[ILL]` | Illust |
+| `WhtB` | White Background |
+| `GryB` | Gray Background |
+| `TrpB` | Transparent Background |
 
-### Format — what the deliverable physically is
+---
 
-| Tag | Label |
+### Versioning
+
+```
+(p-Sln)(SAL)(SlD)v3-0-5.pptx
+(ESS)(SAL)(SlD)(Main Company Introduction)v2-3-14.pptx
+```
+
+Format: `vMAJOR-MINOR-PATCH` using hyphens (not dots).
+
+| Segment | Changes when… |
 | --- | --- |
-| `[VID]` | 🎬 Video |
-| `[DK]` | 🗂️ Slide Deck |
-| `[PDF]` | 📄 PDF Document |
-| `[DOC]` | 📝 Word Document |
-| `[1P]` | 📋 One-Pager |
-| `[HAN]` | 🤝 Handover |
-| `[MN]` | 📖 User Manual |
-| `[SL]` | 🧩 Add-on Slide |
-| `[IMG]` | 🖼️ Static Image |
-| `[CRS]` | 🎠 Carousel |
-| `[ART]` | ✍️ Article |
-| `[PRI]` | 🖨️ Print File |
-| `[GDY]` | 🎁 Goodie |
-| `[BNR]` | 🏳️ Banner |
-| `[WEB]` | 🌐 Web Asset |
-| `[WB]` | White Bkg |
-| `[GB]` | Gray Bkg |
-| `[TB]` | Transp Bkg |
+| MAJOR | Complete redesign or structural overhaul |
+| MINOR | New sections, significant content additions |
+| PATCH | Copy edits, tweaks, small visual fixes |
 
-To add new tags, edit `vocabulary.json` — one entry per line, `type` must be `topic`, `type`, or `format`.
+The version is displayed on the cover slide. The matching `-thumb.webp` thumbnail always shares the same version string and is renamed as a pair.
 
 ---
 
 ## Tasks
 
+### Generate thumbnails
+
+Generates a WebP thumbnail from the first slide or page of every `.pptx`, `.ppt`, `.pptm`, and `.pdf` file inside `[03] OUT`. Saved next to the source file as `{filename}-thumb.webp`.
+
+Requires: LibreOffice, poppler (`pdftoppm`), webp (`cwebp`).
+
+Thumbnails are never generated inside `[00] 📦` folders and never overwrite an existing thumbnail. Delete the `.webp` file manually to force regeneration.
+
+---
+
 ### Distribute
 
 Finds every `[00] 📦` folder, clears it, then fills it from sibling `[03] OUT` folders.
 
-```text
-My Project/
-├── [00] 📦 My Project/     ← cleared then populated
-├── [02] WRK/
-│   └── [03] OUT/
-│       └── [ESS][SAL][DK]v1-2-0.pptx   ← collected ✓
-└── [03] OUT/
-    └── [BMW][ABM][DK]v1-0-0.pptx        ← collected ✓
-```
-
-- Copies files **flat** into the package by default (subfolder structure not preserved unless Pack subfolders is on).
-- Filenames are **translated to full human-readable names** on copy: `[ESS][SAL][DK]v2-0-0.pptx` → `ESS Sales Pitch Slide Deck v2-0-0.pptx`.
+- Collects files **flat** into the package by default (subfolder structure is preserved if **Preserve folder structure in packages** is on).
+- Filenames are **translated to full human-readable names** on copy: `(ESS)(SAL)(SlD)v2-0-0.pptx` → `ESS Sales Slide Deck v2-0-0.pptx`.
 - Orphaned files (no longer in any `[03] OUT`) are removed from the package automatically.
-
-### Publish
-
-Mirrors `[03] OUT` contents from source into an equivalent path inside the target folder. Everything else (`[01] IN`, `[02] WRK`, etc.) is ignored.
-
-- Filenames are translated to human-readable names on copy.
-- A file is only overwritten if the source is newer or a different size — unchanged files are skipped.
-- **Target folders and files are never deleted.** SharePoint and Dropbox links stay intact.
-- Files and folders no longer represented in `[03] OUT` are renamed with a `🚫` prefix instead of being removed. This flags them as disconnected without breaking their share links.
-
-### Generate Thumbnails
-
-Generates a WebP thumbnail from the first slide or page of every `.pptx`, `.ppt`, `.pptm`, and `.pdf` file. Saved next to the source file as `{filename}-thumb.webp`.
-
-Requires three CLI tools:
-
-| Tool | Purpose | Install (macOS) |
-| --- | --- | --- |
-| `soffice` | PPTX → PDF | [LibreOffice](https://www.libreoffice.org) |
-| `pdftoppm` | PDF page → PNG | `brew install poppler` |
-| `cwebp` | PNG → WebP | `brew install webp` |
-
-Thumbnails are never generated inside `[00] 📦` folders.
-
-### Obsidian DAM
-
-Builds an Obsidian vault overlay — one markdown note per asset, grouped into canvas files for visual navigation.
-
-**Notes** are created in the DAM root (configured in Settings). Each note contains:
-
-- Thumbnail embed
-- Inline tags from all matched vocabulary entries
-- Metadata table: Version, Created, Dropbox/OneDrive links, Source, tags
-- A note at the bottom if any tags were unrecognised
-
-**Canvases** are auto-generated per scope. A folder containing a `[📦]` package becomes its own canvas scope — assets inside are grouped on a canvas named `_X FOLDER NAME -c3.canvas`. All assets outside any package scope appear on `_X ROOT -c3.canvas`.
-
-Canvas layout rules:
-
-- Assets are arranged in clusters by their position in the folder hierarchy.
-- Direct children of the scope root share one cluster.
-- Siblings one level deeper form sub-clusters, positioned with smaller gaps.
-- Clusters are sorted: direct children first, then by `[n]` folder number.
+- When **Keep highest version only** is on, only the file with the highest version number among files sharing the same base name is kept.
 
 ---
 
-## Excluding Files and Folders
+### Publish on cloud
 
-**Automatically skipped — no action needed:**
+Mirrors `[03] OUT` contents from source into an equivalent path inside the SharePoint / OneDrive target folder.
+
+- Filenames are translated to human-readable names on copy.
+- Unchanged files (same size as destination) are skipped.
+- Files no longer present in `[03] OUT` are renamed with a `🚫` prefix in the target instead of being deleted — this flags them as disconnected without breaking their existing share links.
+- **Flat export to OneDrive** (sub-option): additionally copies all assets into a single flat folder for the OneDrive marketing kit, deduplicating by version.
+
+---
+
+### Publish to DAM
+
+Builds an Obsidian vault overlay — one markdown note per asset, with auto-generated canvas files for visual navigation.
+
+Each note contains:
+- Thumbnail embed (from the matching `-thumb.webp` file)
+- Inline `#tags` from all matched vocabulary entries
+- Metadata table: Version, Created, Dropbox link, OneDrive link, Source, tag labels
+- A warning callout at the bottom if any tags were unrecognised
+
+Canvases are auto-generated per scope. A folder containing a `[00] 📦` package becomes its own canvas scope. Notes are grouped into clusters by their position in the folder hierarchy, sorted by `[n]` folder number.
+
+After running Publish to DAM, use the **Update OneDrive Links** button (once files have synced to OneDrive) to inject OneDrive sharing links into the relevant notes.
+
+---
+
+## Excluding files and folders
+
+**Automatically skipped:**
 
 | Pattern | Reason |
 | --- | --- |
@@ -296,7 +410,7 @@ Canvas layout rules:
 
 **Manual exclusion:** prefix any file or folder name with `⦰` to exclude it from all operations.
 
-Copy the character: **`⦰`**  
+Copy the character: **`⦰`**
 macOS shortcut: `Control + Command + Space` → search "circled division slash"
 
 | Where applied | Effect |
@@ -308,26 +422,92 @@ macOS shortcut: `Control + Command + Space` → search "circled division slash"
 
 ---
 
-## Version Filtering
+## Version filtering
 
-When **Keep highest version only** is enabled, only the file with the highest version number among files sharing the same base name is kept. Older versions are skipped.
+When **Keep highest version only** is enabled, only the file with the highest `vX-Y-Z` number among files sharing the same base name is collected. Older versions are skipped (not deleted).
 
 | File | Result |
 | --- | --- |
-| `[ESS][SAL][DK]v1-0-0.pptx` | ✗ skipped |
-| `[ESS][SAL][DK]v1-2-0.pptx` | ✓ kept |
-| `[BMW][ABM][DK].pptx` | ✓ always kept (no version) |
+| `(ESS)(SAL)(SlD)v1-0-0.pptx` | ✗ skipped |
+| `(ESS)(SAL)(SlD)v1-2-0.pptx` | ✓ kept |
+| `(c-BMW)(ABM)(SlD).pptx` | ✓ always kept (no version) |
 
 ---
 
-## Settings
+## Dropbox integration
+
+Dropbox sharing links are automatically embedded into Obsidian notes when the source folder lives inside a Dropbox-synced directory.
+
+**Setup:**
+1. Go to [dropbox.com/developers/apps](https://dropbox.com/developers/apps) and create an app (Scoped access, Full Dropbox).
+2. Copy the **App key**.
+3. In dc-hub: open **Settings**, paste the App key into **Dropbox app key**, save.
+4. Click **Connect** next to Dropbox. Your browser opens the Dropbox authorisation page.
+5. Approve. The app receives and stores tokens automatically (with silent refresh).
+
+Links are cached per version — if the file version hasn't changed, the existing link is reused without an API call.
+
+---
+
+## OneDrive integration
+
+OneDrive sharing links are injected into notes as a separate step after files have synced.
+
+**Setup:**
+1. Register a free app at [portal.azure.com](https://portal.azure.com) → App registrations → New registration.
+   - Platform: Mobile and desktop application
+   - Enable: Allow public client flows (Device code flow)
+   - Permissions: `Files.ReadWrite`, `offline_access`
+2. Copy the **Application (client) ID**.
+3. In dc-hub: open **Settings**, paste it into **OneDrive app client ID**. Set **OneDrive tenant ID** to your organisation's Directory ID (or leave as `common` for personal accounts).
+4. Click **Connect** next to OneDrive. Follow the device code instructions shown in the log.
+
+After running **Publish on cloud → Flat export to OneDrive** and waiting for files to sync, click **Update OneDrive Links** to inject the links into notes.
+
+---
+
+## Settings reference
+
+Open with the **⚙ Settings** button in the top-right corner of the app.
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| **Package folder prefix** | `[00] 📦` | Prefix that identifies a package folder |
-| **Output folder name** | `[03] OUT` | Name of the folder holding deployed files |
-| **Exclude mark** | `⦰` | Prefix that marks a file or folder as excluded |
-| **Thumbnail width (px)** | `320` | Thumbnail output width (height scales proportionally) |
-| **Thumbnail quality** | `70` | WebP quality 0–100 |
+| Filter mode | `blacklist` | `blacklist` skips items with the exclude mark; `whitelist` keeps only items with the include mark |
+| Package folder prefix | `[00] 📦` | Prefix that identifies a package folder |
+| Output folder name | `[03] OUT` | Name of the folder holding deployed files |
+| Exclude mark | `⦰` | Prefix that marks a file or folder as excluded (blacklist mode) |
+| Include mark | `🏁` | Prefix that marks a file or folder as included (whitelist mode) |
+| Thumbnail width (px) | `640` | Thumbnail output width; height scales proportionally |
+| Thumbnail quality | `70` | WebP quality 0–100 |
+| DAM folder depth | `0` | How many levels of source folder hierarchy to mirror in the DAM (0 = flat) |
+| Dropbox app key | — | Your Dropbox app's App key (from the Dropbox developer console) |
+| OneDrive app client ID | — | Azure app registration Client ID |
+| OneDrive tenant ID | `common` | Azure Directory (tenant) ID, or `common` for personal accounts |
 
-Saved to `settings.json` next to `app.py`. Delete the file to reset to defaults.
+Settings are saved to `settings.json` next to `app.py`. Delete `settings.json` to reset to defaults (folder paths are preserved in the UI after reset).
+
+---
+
+## Adding new tags
+
+1. Open `vocabulary.json`.
+2. Add a new entry to the `"tags"` array.
+3. Choose the correct `"slot"`: `entity`, `angle`, or `format`.
+4. Choose the correct `"subtype"`:
+   - Entity: `company`, `product`, `customer`, `partner`, or `event`
+   - Angle: `sales-mktg`, `content`, or `context`
+   - Format: `document`, `media`, or `image-var`
+5. Apply the correct **shortcode prefix**:
+
+   | What you're adding | Prefix | Example |
+   | --- | --- | --- |
+   | New ESS product | `p-` | `p-New` |
+   | New customer | `c-` | `c-VWG` |
+   | New partner | `x-` | `x-Xyz` |
+   | New event | `e-` | `e-ABC` |
+   | Angle or Format | none | `SAL`, `SlD` |
+
+6. Use `CamelCase` for the shortcode body (3–5 characters is ideal).
+7. Add the matching row to the relevant table in `NAMING CONVENTION.md`.
+
+**Never use** `_`, `±`, `~`, `=` prefixes — those are legacy and are silently remapped via `legacy_aliases` in `vocabulary.json`.

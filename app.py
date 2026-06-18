@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 """
-Package Collector  v2.0
-────────────────────────
-Distribute: scans source for [00] 📦 folders, collects files from sibling
-            [03] OUT folders, version-filters, and copies them flat.
-Publish:    mirrors [03] OUT contents to an equivalent target path, skipping
-            everything except the output files (like rsync --delete per folder).
-Thumbnails: generates a WebP thumbnail from the first slide/page of every
-            PPTX, PPT, PPTM and PDF file found in source (skips package folders).
+dc-hub  v1.0
+-----------------------------------------------------------------------------
+Distribute:  scans source for [00] 📦 folders, collects files from sibling
+             [03] OUT folders, version-filters, and copies them flat.
+Publish:     mirrors [03] OUT contents to an equivalent target path, skipping
+             everything except the output files (like rsync --delete per folder).
+Thumbnails:  generates a WebP thumbnail from the first slide/page of every
+             PPTX, PPT, PPTM and PDF file found in source (skips package folders).
+Obsidian:    builds a DAM vault overlay -- one note per asset, canvases per scope.
+
+Filename convention:  (Entity)(Angle)(Format)(Description)vX-Y-Z.ext
+                      Round brackets () are canonical from v1.0.
+                      Square brackets [] are accepted as a legacy alias.
+Vocabulary:           vocabulary.json  -- canonical shortcode registry.
+                      legacy_aliases   -- silent remapping of old shortcodes.
 """
 
 import customtkinter as ctk
@@ -1704,13 +1711,24 @@ def run_onedrive_link_update(flat_folder: Path, vault: Path, settings: dict,
 _VOCABULARY_CACHE: dict | None = None
 
 def _load_vocabulary() -> dict:
+    """Return shortcode → tag entry mapping, including legacy alias resolution.
+    legacy_aliases in vocabulary.json maps old shortcodes (e.g. '_Rns', '±DIP')
+    to their canonical v1.0 replacements. Old files on disk are parsed silently
+    without warnings — no need to rename them immediately.
+    """
     global _VOCABULARY_CACHE
     if _VOCABULARY_CACHE is None:
         try:
             p = Path(__file__).parent / 'vocabulary.json'
             with open(p, encoding='utf-8') as f:
                 data = json.load(f)
-            _VOCABULARY_CACHE = {t['shortcode']: t for t in data.get('tags', [])}
+            base = {t['shortcode']: t for t in data.get('tags', [])}
+            for old_sc, new_sc in data.get('legacy_aliases', {}).items():
+                if old_sc.startswith('_comment'):
+                    continue
+                if new_sc in base and old_sc not in base:
+                    base[old_sc] = base[new_sc]
+            _VOCABULARY_CACHE = base
         except Exception:
             _VOCABULARY_CACHE = {}
     return _VOCABULARY_CACHE
@@ -1723,11 +1741,15 @@ def _parse_asset_filename(stem: str) -> dict:
     """Parse filename stem. Returns tags (matched), unknown_tags (not in vocab),
     description, version, yymm, error. error is only set if there are NO bracket tags."""
     r = {'tags': [], 'unknown_tags': [], 'description': None, 'version': None, 'yymm': None, 'error': None}
-    lead = re.match(r'^(\[[^\]]+\])+', stem)
+    # Match a leading run of either (\u2026) or [\u2026] groups (may be mixed on legacy files)
+    lead = re.match(r'^(?:\([^)]+\)|\[[^\]]+\])+', stem)
     if not lead:
         r['error'] = 'No bracket tags at start of filename'
         return r
-    raw_tags = re.findall(r'\[([^\]]+)\]', lead.group(0))
+
+    # Extract inner content from both bracket styles
+    raw_tags = re.findall(r'(?:\(([^)]+)\)|\[([^\]]+)\])', lead.group(0))
+    raw_tags = [a or b for a, b in raw_tags]   # each tuple has one non-empty str
     vocab = _load_vocabulary()
     for tag in raw_tags:
         if re.fullmatch(r'\d{2}(0[1-9]|1[0-2])', tag):
@@ -1750,9 +1772,11 @@ def _parse_asset_filename(stem: str) -> dict:
 
 
 def _fmt_entry(parsed: dict) -> dict | None:
-    """Return the first format-type tag entry from a parsed result, or None."""
+    """Return the first format-slot tag entry from a parsed result, or None.
+    Checks 'slot' (v1.0 schema) with fallback to legacy 'type' field.
+    """
     for t in parsed.get('tags', []):
-        if t.get('type') == 'format':
+        if t.get('slot') == 'format' or t.get('type') == 'format':
             return t
     return None
 
@@ -1848,7 +1872,7 @@ def _make_note(parsed: dict, fmt_entry, thumb_name, source_file: str,
         warning_block = (
             f'\n> [!warning] Filename has no bracket tags\n'
             f'> **File:** `{source_file}`  \n'
-            f'> Please rename using `[TAG1][TAG2]…` convention.\n'
+            f'> Please rename using `(Entity)(Angle)(Format)` convention.\n'
         )
     elif parsed.get('unknown_tags'):
         tags_str = ', '.join(f'[{t}]' for t in parsed['unknown_tags'])
@@ -2662,7 +2686,7 @@ class SettingsModal(ctk.CTkToplevel):
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("📦  Package Collector")
+        self.title("📦  dc-hub")
         self.geometry("1100x760")
         self.minsize(900, 580)
         self.configure(fg_color=C_BG)
