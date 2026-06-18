@@ -1,0 +1,19 @@
+# Python environment
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# macOS
+.DS_Store
+
+# Settings file contains secrets (Dropbox/OneDrive tokens + local paths)
+# Use settings.example.json as a reference instead
+settings.json
+
+# Claude local settings
+.claude/settings.local.json
+
+# Runtime-generated thumbnails
+*-thumb.webp
