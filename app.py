@@ -1820,7 +1820,13 @@ def _make_note(parsed: dict, fmt_entry, thumb_name, source_file: str,
     name    = _build_note_name(parsed, fmt_e)
 
     # Obsidian inline tags from all matched vocab entries + dam
-    obs_tags = [t['obsidian_tag'].split('/')[-1] for t in parsed.get('tags', [])]
+    # obsidian_tag may contain space-separated values for tag inheritance
+    # e.g. 'brochure print' generates both #brochure and #print
+    obs_tags = []
+    for t in parsed.get('tags', []):
+        for tag in t['obsidian_tag'].split():
+            if tag not in obs_tags:
+                obs_tags.append(tag)
     obs_tags.append('dam')
     has_issues = bool(parsed.get('error') or parsed.get('unknown_tags'))
     if has_issues:

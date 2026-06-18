@@ -1,211 +1,231 @@
-# ESS Marketing Materials — Naming Convention v2.0
+# ESS Marketing Materials -- Naming Convention v2.1
 
-This document is the canonical reference for naming folders and files in the ESS marketing asset library. It is written to be read by both humans and automated agents (e.g. the dc-hub deploy script).
+This document is the canonical reference for naming folders and files in the ESS
+marketing asset library. It is written to be read by both humans and automated
+agents (e.g. the dc-hub deploy script).
 
 ---
 
 ## Filename pattern
 
 ```
-(Entity)(Angle)(Format)Description vX-Y-Z.ext
-(Entity)(Angle)(Format)(Description)vX-Y-Z.ext
+(Tag)(Tag)...(Tag) Description vX-Y-Z.ext
 ```
 
-| Part            | Required     | Rule                                                                                   |
-| --------------- | ------------ | -------------------------------------------------------------------------------------- |
-| `(Entity)`      | Yes          | Slot 1 — what the asset is about. See **Entity** section below.                        |
-| `(Angle)`       | Yes          | Slot 2 — purpose or content type. See **Angle** table.                                 |
-| `(Format)`      | Yes          | Slot 3 — what the deliverable physically is. See **Format** table.                     |
-| `(Description)` | Optional     | Plain-language label — either in brackets or as a space-separated suffix before `v`.   |
-| `vX-Y-Z`        | Optional     | Semantic version — e.g. `v3-0-5`. See **Versioning** section.                          |
+A filename is a sequence of one or more bracket tags followed by an optional
+plain-language description and an optional version number.
 
-> **Round brackets `()` only.** Square brackets `[]` are no longer used in asset filenames. They caused issues with SharePoint, OneDrive URL encoding, and shell globbing. Folder infrastructure names (`[01] IN`, `[03] OUT`, etc.) are unchanged — they are managed by the tool, not by users.
+| Part | Required | Rule |
+| --- | --- | --- |
+| `(Tag)` | At least one | Any shortcode from the vocabulary. Repeat as needed. |
+| `Description` | Optional | Plain-language label after the last bracket. Keep it short. |
+| `vX-Y-Z` | Optional | Semantic version -- see **Versioning** section. |
 
-> **No dates in filenames.** The version number is the source of truth for file currency.
+> **Round brackets `()` only.** Square brackets `[]` are parsed as a legacy alias
+> for files not yet renamed, but all new files must use `()`.
 
----
-
-## Slot 1 — Entity
-
-The first bracket identifies *what* or *who* the asset is about. Five subtypes, each with a clear prefix.
-
-### Company-wide
-
-| Shortcode | Label        | When to use                                     |
-| --------- | ------------ | ----------------------------------------------- |
-| `ESS`     | ESS          | Not product-specific; belongs to the ESS brand. |
-
-### ESS products — prefix `p-`
-
-The `p-` prefix signals an ESS-owned product or solution.
-
-| Shortcode  | Label                   |
-| ---------- | ----------------------- |
-| `p-Rns`    | Rinsing                 |
-| `p-DpP`    | Dip Paint               |
-| `p-EtC`    | E-Coating               |
-| `p-Ovn`    | Oven                    |
-| `p-Sln`    | Sealing                 |
-| `p-SIQ`    | SealingIQ               |
-| `p-Wax`    | Waxing                  |
-| `p-SpW`    | Spray Waxing            |
-| `p-TpC`    | Top Coating             |
-| `p-PwC`    | Powder Coating          |
-| `p-And`    | Anodizing               |
-| `p-Cld`    | Cloud                   |
-| `p-AIQ`    | AnodeIQ                 |
-| `p-BlB`    | Black Box               |
-| `p-PIQ`    | PaintIQ                 |
-| `p-AtR`    | Automate Reporting      |
-| `p-Mrg`    | Merge                   |
-| `p-Als`    | Alsim                   |
-| `p-EnO`    | Encapsulated Oven       |
-| `p-EnP`    | Encapsulated Paint Shop |
-
-### Customers — prefix `c-`
-
-| Shortcode | Label      | Shortcode | Label      |
-| --------- | ---------- | --------- | ---------- |
-| `c-ABB`   | ABB        | `c-JLR`   | JLR        |
-| `c-AUD`   | Audi       | `c-MRC`   | MRC        |
-| `c-BMW`   | BMW        | `c-MTS`   | MTS        |
-| `c-CEE`   | CEE        | `c-SKD`   | Skoda      |
-| `c-EBZ`   | EBZ        | `c-STE`   | Stellantis |
-| `c-GM`    | GM         | `c-COA`   | COA-CFD    |
-| `c-INE`   | INEOS      | `c-GUI`   | GUI        |
-
-### External partners — prefix `x-`
-
-The `x-` prefix signals an external partner, integrator, or collaborator that is not an ESS product and not a direct customer.
-
-| Shortcode | Label    |
-| --------- | -------- |
-| `x-AuF`   | Autoform |
-| `x-JJ`    | JJ       |
-
-### Events & conferences — prefix `e-`
-
-| Shortcode  | Label      |
-| ---------- | ---------- |
-| `e-PEX`    | Paint Expo |
-| `e-PS30`   | PS-2030    |
-| `e-PSD`    | PS-D       |
-| `e-ICS`    | ICS        |
-| `e-SRC`    | SRC        |
-| `e-SAE`    | SAE        |
-| `e-Wbn`    | Webinar    |
+> **No dates in filenames.** Version number is the source of truth for file currency.
 
 ---
 
-## Slot 2 — Angle
+## Tag dimensions
 
-The second bracket identifies the *purpose* or *content type* of the asset.
+Every shortcode belongs to one of three dimensions. Each dimension answers a
+different question about the asset. You can use **any number of tags from any
+dimension** -- there is no enforced limit of one per dimension.
 
-### Sales & marketing
+### Dimension 1 -- Entity: *who or what is this about?*
 
-| Shortcode | Label          | Shortcode | Label          |
-| --------- | -------------- | --------- | -------------- |
-| `SAL`     | Sales          | `TST`     | Testimonial    |
-| `TEC`     | Technical      | `CSS`     | Case Study     |
-| `OVR`     | Overview       | `SUC`     | Success Story  |
-| `BCS`     | Business Case  | `UC`      | Use Case       |
-| `ABM`     | Account-Based  | `PPT`     | Pain Point     |
-| `SML`     | Simulation     |           |                |
+Identifies the subject(s) of the asset: products, customers, partners, events,
+or the company as a whole. Use multiple entity tags whenever an asset covers
+more than one subject.
 
-### Content type
+```
+(p-Sln)(p-EtC)(SAL)(SlD)v1-0-0.pptx    -- covers both Sealing and E-Coating
+(c-BMW)(c-AUD)(ABM)(SlD)v1-0-0.pptx    -- account deck for BMW and Audi
+(e-PEX)(p-Sln)(EVT)(Bnn)v1-0-0.pdf     -- Paint Expo banner, Sealing topic
+```
 
-| Shortcode | Label           | Shortcode | Label          |
-| --------- | --------------- | --------- | -------------- |
-| `CMP`     | Campaign        | `SUS`     | Sustainability |
-| `REL`     | Product Release | `HRE`     | Hiring         |
-| `SM`      | Social Media    | `ILL`     | Illustration   |
-| `TRN`     | Training        | `3D`      | 3D             |
+**Shortcode prefix rules for Entity tags:**
 
-### Context
+| Prefix | Subtype | Example |
+| --- | --- | --- |
+| `ESS` | Company-wide (no prefix) | `ESS` |
+| `p-` | ESS product | `p-Sln`, `p-EtC` |
+| `c-` | Customer | `c-BMW`, `c-AUD` |
+| `x-` | External partner | `x-AuF`, `x-JJ` |
+| `e-` | Event / conference | `e-PEX`, `e-Wbn` |
 
-| Shortcode | Label     |
-| --------- | --------- |
-| `BRD`     | Brand     |
-| `CRP`     | Corporate |
-| `EVT`     | Event     |
-| `PTN`     | Partner   |
-| `ADD`     | Add-On    |
+**ESS products**
+
+| Shortcode | Label | Shortcode | Label |
+| --- | --- | --- | --- |
+| `p-Rns` | Rinsing | `p-Cld` | Cloud |
+| `p-DpP` | Dip Paint | `p-AIQ` | AnodeIQ |
+| `p-EtC` | E-Coating | `p-BlB` | Black Box |
+| `p-Ovn` | Oven | `p-PIQ` | PaintIQ |
+| `p-Sln` | Sealing | `p-AtR` | Automate Reporting |
+| `p-SIQ` | SealingIQ | `p-Mrg` | Merge |
+| `p-Wax` | Waxing | `p-Als` | Alsim |
+| `p-SpW` | Spray Waxing | `p-EnO` | Encapsulated Oven |
+| `p-TpC` | Top Coating | `p-EnP` | Encapsulated Paint Shop |
+| `p-PwC` | Powder Coating | | |
+| `p-And` | Anodizing | | |
+
+**Customers**
+
+| Shortcode | Label | Shortcode | Label |
+| --- | --- | --- | --- |
+| `c-ABB` | ABB | `c-MRC` | MRC |
+| `c-AUD` | Audi | `c-MTS` | MTS |
+| `c-BMW` | BMW | `c-SKD` | Skoda |
+| `c-CEE` | CEE | `c-STE` | Stellantis |
+| `c-EBZ` | EBZ | `c-COA` | COA-CFD |
+| `c-GM` | GM | `c-GUI` | GUI |
+| `c-INE` | INEOS | | |
+| `c-JLR` | JLR | | |
+
+**External partners**
+
+| Shortcode | Label |
+| --- | --- |
+| `x-AuF` | Autoform |
+| `x-JJ` | JJ |
+
+**Events & conferences**
+
+| Shortcode | Label | Shortcode | Label |
+| --- | --- | --- | --- |
+| `e-PEX` | Paint Expo | `e-SRC` | SRC |
+| `e-PS30` | PS-2030 | `e-SAE` | SAE |
+| `e-PSD` | PS-D | `e-Wbn` | Webinar |
+| `e-ICS` | ICS | | |
 
 ---
 
-## Slot 3 — Format
+### Dimension 2 -- Angle: *what is the purpose?*
 
-The third bracket identifies *what the deliverable physically is*.
+Identifies the content type or intent of the asset.
 
-### Documents & presentations
+**Sales & marketing**
 
-| Shortcode | Label         | Icon |
-| --------- | ------------- | ---- |
-| `SlD`     | Slide Deck    | 🗂️  |
-| `PDF`     | PDF           | 📄   |
-| `Dcm`     | Word Document | 📝   |
-| `1Pg`     | One-Pager     | 📋   |
-| `Hnd`     | Handover      | 🤝   |
-| `Mnl`     | Manual        | 📖   |
-| `Art`     | Article       | ✍️   |
+| Shortcode | Label | Shortcode | Label |
+| --- | --- | --- | --- |
+| `SAL` | Sales | `TST` | Testimonial |
+| `TEC` | Technical | `CSS` | Case Study |
+| `OVR` | Overview | `SUC` | Success Story |
+| `BCS` | Business Case | `UC` | Use Case |
+| `ABM` | Account-Based | `PPT` | Pain Point |
+| `SML` | Simulation | | |
 
-### Media & visual
+**Content type**
 
-| Shortcode | Label           | Icon |
-| --------- | --------------- | ---- |
-| `Vid`     | Video           | 🎬   |
-| `Img`     | Static Image    | 🖼️  |
-| `Crs`     | Carousel        | 🎠   |
-| `Bnn`     | Banner          |      |
-| `Prn`     | Print           | 🖨️  |
-| `Web`     | Web Asset       | 🌐   |
-| `Gdy`     | Goodie          | 🎁   |
-| `PrP`     | Profile Picture |      |
-| `Gll`     | Gallery         | 🖼️  |
+| Shortcode | Label | Shortcode | Label |
+| --- | --- | --- | --- |
+| `CMP` | Campaign | `SUS` | Sustainability |
+| `REL` | Product Release | `HRE` | Hiring |
+| `SM` | Social Media | `ILL` | Illustration |
+| `TRN` | Training | `3D` | 3D |
 
-### Image background variants
+**Context**
 
-Used as the format tag when the asset is an image delivered in multiple background variants.
+| Shortcode | Label |
+| --- | --- |
+| `BRD` | Brand |
+| `CRP` | Corporate |
+| `EVT` | Event |
+| `PTN` | Partner |
+| `ADD` | Add-On |
 
-| Shortcode | Label              |
-| --------- | ------------------ |
-| `WhtB`    | White Background   |
-| `GryB`    | Gray Background    |
-| `TrpB`    | Transparent Background |
+---
+
+### Dimension 3 -- Format: *what does the asset physically look like?*
+
+Identifies the deliverable type. Format tags carry **inherited Obsidian tags** --
+a more specific format automatically implies its broader category in the DAM,
+so you never need to add a redundant tag.
+
+**Documents & presentations**
+
+| Shortcode | Label | Obsidian tags |
+| --- | --- | --- |
+| `SlD` | Slide Deck | `#deck` `#document` |
+| `PDF` | PDF | `#pdf` `#document` |
+| `Dcm` | Word Document | `#doc` `#document` |
+| `1Pg` | One-Pager | `#onepager` `#document` |
+| `Hnd` | Handover | `#handover` `#document` |
+| `Mnl` | Manual | `#manual` `#document` |
+| `Art` | Article | `#article` `#document` |
+
+**Print & physical**
+
+| Shortcode | Label | Obsidian tags |
+| --- | --- | --- |
+| `Prn` | Print | `#print` |
+| `Bnn` | Banner | `#banner` `#print` |
+| `Gdy` | Goodie | `#goodie` `#print` |
+
+**Video & motion**
+
+| Shortcode | Label | Obsidian tags |
+| --- | --- | --- |
+| `Vid` | Video | `#video` |
+
+**Digital & social**
+
+| Shortcode | Label | Obsidian tags |
+| --- | --- | --- |
+| `Crs` | Carousel | `#carousel` `#social-media` |
+| `Web` | Web Asset | `#web` |
+| `PrP` | Profile Picture | `#profile-picture` `#social-media` |
+
+**Images**
+
+| Shortcode | Label | Obsidian tags |
+| --- | --- | --- |
+| `Img` | Static Image | `#image` |
+| `Gll` | Gallery | `#gallery` `#image` |
+| `WhtB` | White Background | `#white-bkg` `#image` |
+| `GryB` | Gray Background | `#gray-bkg` `#image` |
+| `TrpB` | Transparent Bkg | `#transp-bkg` `#image` |
+
+**Tag inheritance example:** `(e-PEX)(p-Sln)(EVT)(Bnn)v1-0-0.pdf`
+generates: `#paint-expo #sealing #event #banner #print #dam`
+You can now filter `#print` to find ALL print materials, or `#banner` for
+just banners, without ever writing `(Prn)(Bnn)` in the filename.
 
 ---
 
 ## Versioning
-
-Version numbers follow immediately after the last bracket group (or description):
 
 ```
 (p-Sln)(SAL)(SlD)v3-0-5.pptx
 (ESS)(SAL)(SlD)(Main Company Introduction)v2-3-14.pptx
 ```
 
-**Format:** `vMAJOR-MINOR-PATCH` using hyphens (not dots).
+Format: `vMAJOR-MINOR-PATCH` using hyphens (not dots).
 
-| Segment | Changes when…                               |
-| ------- | ------------------------------------------- |
-| MAJOR   | Complete redesign or structural overhaul    |
-| MINOR   | New sections, significant content additions |
-| PATCH   | Copy edits, tweaks, small visual fixes      |
+| Segment | Changes when... |
+| --- | --- |
+| MAJOR | Complete redesign or structural overhaul |
+| MINOR | New sections, significant content additions |
+| PATCH | Copy edits, tweaks, small visual fixes |
 
-The version is displayed on the cover slide. The matching `-thumb.webp` thumbnail always shares the same version string and is renamed as a pair.
+The version is displayed on the cover slide. The matching `-thumb.webp` thumbnail
+always shares the same version string and is renamed as a pair.
 
 ---
 
 ## Export filenames (SharePoint & OneDrive)
 
-When files are deployed, shortcodes are automatically translated to full human-readable names:
+Shortcodes are automatically translated to human-readable names on deploy:
 
 ```
-(p-Sln)(SAL)(SlD)v1-2-1.pptx                      →  Sealing Sales Slide Deck v1-2-1.pptx
-(ESS)(SAL)(SlD)(Main Company)v2-0-0.pptx           →  ESS Sales Slide Deck — Main Company v2-0-0.pptx
-(c-BMW)(ABM)(SlD)v3-1-0.pptx                       →  BMW Account-Based Slide Deck v3-1-0.pptx
-(e-PEX)(EVT)(Prn)(Booth Design)v1-0-0.pdf          →  Paint Expo Event Print — Booth Design v1-0-0.pdf
-(ESS)(SM)(Img)(Happy Birthday)v1-0-0.jpg           →  ESS Social Media Static Image — Happy Birthday v1-0-0.jpg
+(p-Sln)(SAL)(SlD)v1-2-1.pptx                    ->  Sealing Sales Slide Deck v1-2-1.pptx
+(ESS)(SAL)(SlD)(Main Company)v2-0-0.pptx         ->  ESS Sales Slide Deck -- Main Company v2-0-0.pptx
+(c-BMW)(ABM)(SlD)v3-1-0.pptx                     ->  BMW Account-Based Slide Deck v3-1-0.pptx
+(e-PEX)(p-Sln)(EVT)(Bnn)(Booth)v1-0-0.pdf        ->  Paint Expo Sealing Event Banner -- Booth v1-0-0.pdf
+(p-Sln)(p-EtC)(OVR)(SlD)v2-0-0.pptx             ->  Sealing E-Coating Overview Slide Deck v2-0-0.pptx
 ```
 
 ---
@@ -213,36 +233,29 @@ When files are deployed, shortcodes are automatically translated to full human-r
 ## How to add a new tag
 
 1. Open `vocabulary.json`.
-2. Add a new entry under `"tags"`.
-3. Choose the correct `"slot"` (`entity`, `angle`, or `format`).
-4. Choose the correct `"subtype"`:
-   - Entity: `company`, `product`, `customer`, `partner`, or `event`
-   - Angle: `sales-mktg`, `content`, or `context`
-   - Format: `document`, `media`, or `image-var`
-5. Apply the correct **shortcode prefix**:
+2. Add a new entry to the `"tags"` array.
+3. Set `"slot"` to `entity`, `angle`, or `format`.
+4. Set `"subtype"` to the appropriate sub-group (see existing entries).
+5. Apply the correct shortcode prefix for Entity tags (see table above).
+   Angle and Format tags use plain CamelCase with no prefix.
+6. Set `"obsidian_tag"` to one or more space-separated Obsidian tag names.
+   The first should be the most specific; any that follow are inherited
+   broader categories. Example: `"brochure print"` generates both `#brochure`
+   and `#print` on every note that uses this tag.
+7. Add the matching row to this document.
 
-   | What you're adding | Prefix | Example |
-   | ------------------ | ------ | ------- |
-   | New ESS product    | `p-`   | `p-New` |
-   | New customer       | `c-`   | `c-VWG` |
-   | New partner        | `x-`   | `x-Xyz` |
-   | New event          | `e-`   | `e-ABC` |
-   | Angle or Format    | none   | `SAL`, `SlD` |
-
-6. Use `CamelCase` for the shortcode body (3–5 characters is ideal).
-7. Update this document's tables to match.
-
-**Never use** `_`, `±`, `~`, `=` prefixes — those were legacy and are now mapped via `legacy_aliases` in `vocabulary.json`.
+**Never use** `_`, `+-`, `~`, `=` prefixes -- those are legacy and are silently
+remapped via `legacy_aliases` in `vocabulary.json`.
 
 ---
 
 ## Workflow subfolders
 
-| Folder     | Stage                       | Notes                                                             |
-| ---------- | --------------------------- | ----------------------------------------------------------------- |
-| `[01] IN`  | Source / input files        | Originals, client files, raw imports                              |
-| `[02] WRK` | Work in progress            | Active edits, iterations                                          |
-| `[03] OUT` | Published / deployed assets | **Only files here get deployed to Obsidian, Dropbox, SharePoint** |
+| Folder | Stage | Notes |
+| --- | --- | --- |
+| `[01] IN` | Source / input files | Originals, client files, raw imports |
+| `[02] WRK` | Work in progress | Active edits, iterations |
+| `[03] OUT` | Published / deployed assets | **Only files here get deployed** |
 
 ---
 
@@ -255,21 +268,26 @@ When files are deployed, shortcodes are automatically translated to full human-r
 (c-BMW)(ABM)(SlD)v1-0-0.pptx
 (p-TpC)(ABM)(SlD)(China Bumpers)v1-0-0.pptx
 (ESS)(REL)(SlD)(Highlights)v3-2-2.pptx
-(e-PEX)(EVT)(Prn)(Booth Design)v1-0-0.pdf
+(e-PEX)(EVT)(Bnn)(Booth Design)v1-0-0.pdf
 (ESS)(SM)(Img)(Happy Birthday)v1-0-0.jpg
 (ESS)(CRP)(Vid)(Easy To Use)v1-0-0.mp4
 (ESS)(CMP)(Crs)(DIP Campaign)v1-0-0.jpg
 (x-AuF)(PTN)(SlD)v2-1-0.pptx
+(e-PEX)(p-Sln)(p-EtC)(EVT)(Bnn)v1-0-0.pdf
+(p-Sln)(p-Wax)(p-DpP)(OVR)(SlD)(Three Products)v1-0-0.pptx
 ```
 
 ---
 
 ## Notes for the deploy agent
 
-- Parse filenames by extracting all leading `(…)` groups in order: Entity (tag 1), Angle (tag 2), Format (tag 3), optional Description (tag 4).
-- Also accept `[…]` groups for backward compatibility with files not yet renamed.
-- A filename is valid if it starts with `(` or `[` and contains at least three tag groups.
-- Resolve unknown shortcodes against `legacy_aliases` in `vocabulary.json` before flagging as unknown.
-- Entity subtype: first character `p` + `-` = ESS product, `c` + `-` = customer, `x` + `-` = partner, `e` + `-` = event, `ESS` = company-wide.
-- Version string: first token after all bracket groups matching `v\d+(-\d+)*` (no space required before `v`).
-- The canonical vocabulary is `vocabulary.json` next to `app.py`.
+- Parse filenames by extracting all leading `(...)` or `[...]` groups.
+- A filename is valid if it starts with a bracket group and contains at least one tag.
+- There is no enforced minimum or maximum number of tags per dimension.
+- Resolve unknown shortcodes against `legacy_aliases` before flagging as unknown.
+- Entity subtype: prefix `p-` = product, `c-` = customer, `x-` = partner,
+  `e-` = event, `ESS` = company-wide.
+- `obsidian_tag` may contain space-separated values -- split on whitespace to
+  get all Obsidian tags for a given shortcode.
+- Version string: first token after all bracket groups matching `v\d+(-\d+)*`.
+- Canonical vocabulary: `vocabulary.json` next to `app.py`.
