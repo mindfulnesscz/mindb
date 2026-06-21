@@ -1,0 +1,231 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--surface);
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+.header {
+  padding: var(--sp-5) var(--sp-8) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.headerTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-5);
+}
+
+.headerLeft {}
+
+.dimTitle {
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-display);
+  letter-spacing: var(--tracking-display);
+  color: var(--text);
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.countPill {
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--text-muted);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 2px 10px;
+  letter-spacing: 0.02em;
+}
+
+.dimSub {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  margin-top: var(--sp-1);
+  font-weight: var(--weight-regular);
+}
+
+.btnAddTag {
+  padding: var(--sp-3) var(--sp-5);
+  background: var(--cosmos-black);
+  color: var(--clear-white);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.btnAddTag:hover { background: var(--pure-black); }
+
+/* ── Dimension tabs ──────────────────────────────────────────────────────── */
+.tabs {
+  display: flex;
+  gap: 0;
+  margin-top: var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  padding: var(--sp-3) var(--sp-5);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  margin-bottom: -1px;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+.tab:hover { color: var(--text); }
+.tab.active {
+  color: var(--text);
+  border-bottom-color: var(--cosmos-black);
+  font-weight: var(--weight-semibold);
+}
+
+/* ── Table area ──────────────────────────────────────────────────────────── */
+.tableScroll {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.tableHead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: var(--sp-3) var(--sp-5);
+  text-align: left;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  z-index: 1;
+}
+
+/* Subtype group header row */
+.groupRow td {
+  background: var(--surface-sunken);
+  padding: var(--sp-2) var(--sp-5);
+}
+
+.groupRowInner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  cursor: pointer;
+  user-select: none;
+}
+
+.groupCaret {
+  transition: transform var(--dur-fast) var(--ease-out);
+  color: var(--text-muted);
+}
+.groupCaret.open { transform: rotate(90deg); }
+
+.groupLabel {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  flex: 1;
+}
+
+.groupPrefix {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--gray-400);
+}
+
+.groupCount {
+  font-size: 10px;
+  font-weight: var(--weight-bold);
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--gray-200);
+  color: var(--text-muted);
+}
+
+/* Tag rows */
+.tagRow td {
+  padding: var(--sp-3) var(--sp-5);
+  border-bottom: 1px solid var(--gray-150);
+  vertical-align: middle;
+}
+.tagRow:last-child td { border-bottom: none; }
+.tagRow:hover td { background: var(--surface-sunken); }
+
+.shortcodeChip {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  white-space: nowrap;
+}
+
+.subtypePill {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.obsTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+.obsTag {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 1px 7px;
+}
+
+.actions {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.btnAction {
+  padding: 3px 9px;
+  font-size: var(--text-xs);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  color: var(--text-muted);
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.btnAction:hover { background: var(--surface-sunken); color: var(--text); }
+.btnActionDelete { color: var(--signal-error); border-color: transparent; }
+.btnActionDelete:hover { background: rgba(194,59,59,0.06); border-color: var(--signal-error); color: var(--signal-error); }

@@ -1,0 +1,396 @@
+.root {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-canvas);
+  gap: 1px; /* hairline gaps between zones */
+}
+
+/* ── Zone A: Config sidebar ─────────────────────────────────────────────────── */
+.configSidebar {
+  width: var(--config-sidebar-width);
+  min-width: var(--config-sidebar-width);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-raised);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.sidebarHeader {
+  padding: var(--sp-5) var(--sp-5) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.sidebarTitle {
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-display);
+  letter-spacing: var(--tracking-display);
+  color: var(--text);
+  line-height: 1;
+}
+
+.sidebarCaption {
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+  margin-top: var(--sp-1);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.02em;
+}
+
+.accordionScroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* ── Run controls (pinned) ──────────────────────────────────────────────────── */
+.runControls {
+  flex-shrink: 0;
+  border-top: 2px solid var(--cosmos-black);
+  padding: var(--sp-4) var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  background: var(--surface-raised);
+}
+
+.runStatus {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  font-weight: var(--weight-medium);
+}
+
+.runStatusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--gray-300);
+  transition: background var(--dur-base) var(--ease-out);
+}
+.runStatusDot.running  { background: var(--signal-info); }
+.runStatusDot.stopping { background: var(--signal-warn); }
+.runStatusDot.completed { background: var(--signal-success); }
+.runStatusDot.error    { background: var(--signal-error); }
+
+.progressBar {
+  height: 2px;
+  background: var(--gray-200);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: var(--cosmos-black);
+  border-radius: var(--radius-pill);
+  transition: width var(--dur-base) var(--ease-out);
+}
+
+.btnRun {
+  width: 100%;
+  padding: var(--sp-4) var(--sp-5);
+  background: var(--cosmos-black);
+  color: var(--clear-white);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.btnRun:hover:not(:disabled) { background: var(--pure-black); }
+.btnRun:disabled {
+  background: var(--gray-200);
+  color: var(--gray-400);
+  cursor: not-allowed;
+}
+
+.runSecondaryRow {
+  display: flex;
+  gap: var(--sp-3);
+}
+
+.btnSecondary {
+  flex: 1;
+  padding: var(--sp-3) var(--sp-4);
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.btnSecondary:hover:not(:disabled) {
+  border-color: var(--gray-300);
+  color: var(--text);
+}
+.btnSecondary:disabled { opacity: 0.4; cursor: not-allowed; }
+.btnStop {
+  color: var(--signal-error);
+  border-color: var(--signal-error);
+}
+.btnStop:hover:not(:disabled) {
+  background: rgba(194, 59, 59, 0.06);
+  border-color: var(--signal-error);
+  color: var(--signal-error);
+}
+
+/* ── Zone B: Activity area ──────────────────────────────────────────────────── */
+.activityArea {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--surface);
+}
+
+/* Stats strip */
+.statsStrip {
+  flex-shrink: 0;
+  padding: var(--sp-4) var(--sp-6);
+  border-bottom: 1px solid var(--border);
+}
+
+.statsLabel {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: var(--sp-3);
+}
+
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: var(--sp-3);
+}
+
+.statCell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.statNumber {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: var(--weight-display);
+  color: var(--text);
+  line-height: 1;
+  letter-spacing: var(--tracking-display);
+}
+
+.statLabel {
+  font-size: 9px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Log area */
+.logArea {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.logHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-3) var(--sp-6) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.logTitle {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.btnClear {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: var(--sp-1) var(--sp-2);
+}
+.btnClear:hover { color: var(--text); }
+
+.logScroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-3) var(--sp-6);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.7;
+}
+
+.logEmpty {
+  color: var(--gray-300);
+  font-style: italic;
+  padding: var(--sp-7) 0;
+}
+
+.logLine {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: baseline;
+}
+
+.logTs {
+  color: var(--gray-300);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.logMarker {
+  flex-shrink: 0;
+  width: 1em;
+}
+
+.logMsg { word-break: break-word; }
+
+.logLine[data-type="section"] .logMsg {
+  font-weight: 700;
+  color: var(--cosmos-black);
+  font-family: var(--font-sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+.logLine[data-type="info"]         .logMsg { color: var(--gray-500); }
+.logLine[data-type="success"]      .logMsg { color: var(--signal-success); }
+.logLine[data-type="skip"]         .logMsg { color: var(--signal-warn); }
+.logLine[data-type="error"]        .logMsg { color: var(--signal-error); }
+.logLine[data-type="dim"]          .logMsg { color: var(--gray-400); }
+.logLine[data-type="disconnected"] .logMsg { color: #B45309; }
+
+/* ── Zone C: Issues panel ───────────────────────────────────────────────────── */
+.issuesPanel {
+  width: var(--issues-panel-width);
+  min-width: var(--issues-panel-width);
+  background: var(--surface-raised);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.issuesPanelHeader {
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.issuesPanelTitle {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.issuesPanelScroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-3) 0;
+}
+
+.issueGroup {
+  margin-bottom: var(--sp-2);
+}
+
+.issueGroupHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-5);
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.issueGroupHeader:hover { background: var(--gray-100); }
+
+.issueGroupCaret {
+  transition: transform var(--dur-fast) var(--ease-out);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.issueGroupCaret.open { transform: rotate(90deg); }
+
+.issueGroupLabel {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  flex: 1;
+}
+
+.issueBadge {
+  font-size: 10px;
+  font-weight: var(--weight-bold);
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--gray-200);
+  color: var(--text);
+  min-width: 20px;
+  text-align: center;
+}
+.issueBadge.error {
+  background: var(--cosmos-black);
+  color: var(--clear-white);
+}
+
+.issueRows { padding: 0 var(--sp-5) var(--sp-2); }
+
+.issueRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-2) 0;
+  border-left: 2px solid var(--border);
+  padding-left: var(--sp-4);
+  margin-left: var(--sp-2);
+}
+.issueRow + .issueRow { border-top: 1px solid var(--gray-150); }
+
+.issueFile {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text);
+  word-break: break-all;
+}
+
+.issueReason {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.issuesEmpty {
+  padding: var(--sp-8) var(--sp-5);
+  font-size: var(--text-sm);
+  color: var(--gray-300);
+  text-align: center;
+}
