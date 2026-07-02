@@ -1,333 +1,135 @@
-# Package Maker
+# DC Hub
 
-Scans a source folder, collects output files into package folders, mirrors them to a target, generates thumbnails, and builds an Obsidian DAM (Digital Asset Manager) — with version filtering, exclusion marks, and configurable folder patterns.
+Desktop app + web portal for the DC digital asset management pipeline. Processes, versions, distributes, and syncs marketing assets across cloud storage and a Supabase DAM backend.
 
----
-
-## Table of Contents
-
-- [Folder Structure](#folder-structure)
-- [File Naming](#file-naming)
-  - [Tags](#tags)
-  - [Description](#description)
-  - [Version](#version)
-- [Tag Vocabulary](#tag-vocabulary)
-- [Tasks](#tasks)
-  - [Distribute](#distribute)
-  - [Publish](#publish)
-  - [Generate Thumbnails](#generate-thumbnails)
-  - [Obsidian DAM](#obsidian-dam)
-- [Excluding Files and Folders](#excluding-files-and-folders)
-- [Version Filtering](#version-filtering)
-- [Settings](#settings)
+See [CHANGELOG.md](CHANGELOG.md) for full version history.
 
 ---
 
-## Folder Structure
+## What it does
 
-Each project folder follows a fixed four-folder layout:
+1. **Organise** — assets follow a strict bracket-tag naming convention (`(Entity)(Angle)(Format) Description vX-Y-Z.ext`) enforced by the vocabulary registry
+2. **Distribute** — copies assets from source → internal and client-facing destinations (local folders, Dropbox, OneDrive, Google Drive)
+3. **Publish to CDN** — uploads to Cloudflare R2, returns public CDN URLs
+4. **Sync to DAM** — upserts asset metadata and version history into Supabase; powers the web portal
+5. **Generate thumbnails** — PPTX and PDF → WebP sidecars via LibreOffice + pdftoppm + cwebp
+6. **Build Obsidian vault** — generates markdown notes with inherited taxonomy tags for the DAM
+
+---
+
+## Architecture
 
 ```text
-My Project/
-├── [00] 📦 My Project/   ← package (auto-populated, do not edit manually)
-├── [01] IN/              ← source inputs, originals, raw imports
-├── [02] WRK/             ← work in progress, iterations
-└── [03] OUT/             ← finished files — only these are deployed
+dc-hub-desktop/              ← this repo (Tauri 2 desktop app)
+  src/                       ← React + TypeScript frontend
+  src-tauri/                 ← Rust backend (Tauri commands)
+  NAMING CONVENTION.md       ← canonical naming reference (company-wide)
+  CHANGELOG.md
+  settings.json              ← local dev overrides (not committed)
+
+dc-hub-web/                  ← Next.js web portal (separate repo)
+  apps/portal/               ← client-facing DAM portal (reads Supabase via anon key)
+  packages/                  ← shared types and UI
+
+dc-hub-python/               ← legacy Python utilities (not under git)
+  app.py                     ← original pipeline script (v1)
+  vocab-manager.py           ← vocabulary editor (v1)
 ```
 
-| Folder | Role |
-| --- | --- |
-| `[00] 📦 …` | Collected package — cleared and repopulated on every Distribute run |
-| `[01] IN` | Inputs only — never deployed |
-| `[02] WRK` | Working files — never deployed |
-| `[03] OUT` | The only folder that matters for deployment |
+---
 
-**Rules:**
+## Naming convention
 
-- Only files inside `[03] OUT` are ever copied, published, or indexed in Obsidian.
-- The `[00] 📦` folder is managed by the tool — don't store anything there manually.
-- Subfolders inside `[03] OUT` are supported — see below.
-
-### Multiple files in [03] OUT
-
-Every file in `[03] OUT` is handled independently:
-
-- Each file gets its own Obsidian note.
-- Each `.pptx`, `.ppt`, `.pptm`, or `.pdf` file gets its own thumbnail.
-- Each file is individually distributed to the package and published to the target.
-
-### Subfolders in [03] OUT
-
-Subfolders in `[03] OUT` behave differently depending on what they contain.
-
-**Gallery folder** — a subfolder that:
-
-- has a name matching the `[TAG]…` naming convention, and
-- contains at least one image file (`.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.tif`, `.bmp`)
-
-A gallery folder is treated as a **single asset**. It gets one Obsidian note, the first image alphabetically is used as its thumbnail, and the entire folder is copied as a unit to the target. Use this for image sets, carousel assets, or any collection of images belonging to one deliverable.
+The filename format is the core data model for every asset in the library. The canonical reference is [NAMING CONVENTION.md](NAMING CONVENTION.md).
 
 ```text
-[03] OUT/
-├── [ESS][SAL][DK]v2-0-0.pptx          ← regular file → one note, one thumbnail
-└── [ESS][SM][CRS] Social Pack v1-0/    ← gallery folder → one note, folder copied whole
-    ├── slide-01.jpg
-    ├── slide-02.jpg
-    └── slide-03.jpg
+(Entity)(Angle)(Format) Description vX-Y-Z.ext
+
+(p-Sln)(SAL)(SlD) Main Deck v2-1-0.pptx
+(c-BMW)(ABM)(SlD)v3-0-0.pptx
+(e-PEX)(p-Sln)(EVT)(Bnn)v1-0-0.pdf
 ```
 
-**Regular subfolder** — any subfolder that does not qualify as a gallery. Files inside are traversed recursively and each file is handled individually, the same as files directly in `[03] OUT`. The subfolder path is mirrored in the DAM vault so notes stay organised.
+Tag dimensions:
+
+- **Entity** — who or what the asset is about (`p-Sln`, `c-BMW`, `e-PEX`, `ESS`, …)
+- **Angle** — purpose or content type (`SAL`, `TEC`, `ABM`, `EVT`, …)
+- **Format** — deliverable type (`SlD`, `PDF`, `Vid`, `Bnn`, …)
+
+Tags live in `src/assets/vocabulary.json` — the desktop app and web portal both read from this via Supabase.
 
 ---
 
-## File Naming
+## Supabase (DAM backend)
 
-Files inside `[03] OUT` must follow this pattern:
+Single Supabase project, multi-tenant via Row Level Security. All clients share the same tables; RLS policies enforce isolation by `client_id`.
+
+| Key | Where used |
+| --- | --- |
+| `supabaseServiceKey` (service_role) | Desktop pipeline — bypasses RLS for writes |
+| `supabaseAnonKey` | Web portal — respects RLS for reads |
+
+The service_role key is **never** used from a browser context. The Tauri app proxies all Supabase calls through the Rust `supabase_request` command (native `reqwest`) to avoid Supabase's browser-key restriction.
+
+Schema: `dc-hub-migration/` (separate directory, not tracked by this repo).
+
+---
+
+## Cloud storage (Cloudflare R2)
+
+Each client has its own R2 bucket config. The pipeline uploads assets and returns public CDN URLs, which are written into the Supabase `assets.download_urls` column.
+
+R2 operations are handled by native Rust commands (`upload_to_r2`, `list_r2_keys`, etc.) in `src-tauri/src/r2.rs`.
+
+---
+
+## Multi-client support
+
+Clients are configured in the Settings view. Each client has:
+
+- Source and target folder paths
+- Cloud destinations (local, Dropbox, OneDrive, GDrive)
+- Supabase project credentials
+- Cloudflare R2 credentials
+
+Client configs are stored in `tauri-plugin-store` (OS app-data dir), never in plain files.
+
+---
+
+## Development
+
+**Prerequisites:** Node.js 18+, Rust (stable), `cargo install tauri-cli`. For thumbnails: LibreOffice, poppler (`pdftoppm`), `cwebp`.
+
+```bash
+npm install
+npm run tauri dev
+```
+
+Frontend hot-reloads at `http://localhost:1420`. Rust recompiles on save.
+
+```bash
+npm run tauri build   # output: src-tauri/target/release/bundle/
+```
+
+**Stack:** Tauri 2 · React 19 · TypeScript · Vite 7 · Zustand · plain CSS Modules
+
+**Project structure:**
 
 ```text
-[TAG1][TAG2][TAG3] Description v1-2-3.ext
+src/
+  app/           # NavRail + root layout
+  features/      # Pipeline, Vocabulary, Generator, Settings, Clients, Cloud views
+  domain/        # vocabulary.ts, naming.ts, version.ts, client.ts
+  services/      # pipelineService, vocabService, settingsService, damService,
+                 # supabaseService, clientService, cloudService
+  store/         # Zustand stores (app, pipeline, vocabulary, settings, client)
+  styles/        # Design tokens (tokens.css) + global CSS
+
+src-tauri/src/
+  lib.rs         # generate_thumbnail, wait_for_oauth_redirect
+  supabase.rs    # supabase_request — native HTTP proxy for Supabase
+  r2.rs          # upload_to_r2, check_r2_connection, list_r2_keys, delete_r2_object
+  cloud.rs       # upload_to_dropbox
 ```
 
-```text
-[ESS][SAL][DK]v2-0-0.pptx
-[ESS][SAL][DK] Main Company Introduction v2-3-14.pptx
-[BMW][ABM][DK]v1-0-0.pptx
-[_Sea][SAL][DK] Flood Control v3-1-13.pptx
-[P-EXP][EVT][PRI] Booth Design v1-0-0.pdf
-[ESS][SM][IMG] Happy Birthday v1-0-0.jpg
-```
-
-### Tags
-
-- Any number of `[TAG]` brackets, in any order.
-- Tags must appear **at the very start** of the filename.
-- Each tag is a shortcode from the vocabulary (see [Tag Vocabulary](#tag-vocabulary)).
-- Unknown tags are silently skipped — no error, but a note is added to the Obsidian card.
-- A file with no bracket tags at all gets flagged as incomplete.
-
-### Description
-
-- Optional plain-language label placed **after** all bracket tags.
-- Can be preceded by a space or underscore — both are stripped.
-- Keep it short and human-scannable.
-
-### Version
-
-- Optional. Place it after the description (or after the tags if no description).
-- Accepted formats: `v1`, `v1-2`, `v1-2-3`, `v1.2`, `v1.2.3`, `V1`, `V2-1` (case-insensitive, any separator).
-- Dots are normalised to hyphens on export: `v1.2.3` → `v1-2-3`.
-- No version? The Obsidian card shows `---` in the Version field and won't be re-updated on subsequent runs.
-
-> No dates in filenames. Version is the source of truth for file currency.
-
----
-
-## Tag Vocabulary
-
-All recognised shortcodes. Tags are grouped by type but can appear in any order in the filename.
-
-### Topic — what the piece is about
-
-| Tag | Label |
-| --- | --- |
-| `[ESS]` | ESS |
-| `[_Rin]` | Rinsing |
-| `[_Dip]` | Dip Paint |
-| `[_E-C]` | E-Coating |
-| `[_Ovn]` | Oven |
-| `[_Sea]` | Sealing |
-| `[_Wax]` | Waxing |
-| `[_Tpc]` | Top Coating |
-| `[_Pwd]` | Powder Coating |
-| `[_Ano]` | Anodizing |
-| `[_Cld]` | Cloud |
-| `[_A-M]` | Anode Master |
-| `[_BB]` | Black Box |
-| `[_PIQ]` | Paint Analyzer |
-| `[_A-R]` | Automate Reporting |
-| `[_Mrg]` | Merge |
-| `[_Als]` | Alsim |
-| `[ABB]` | ABB |
-| `[AUD]` | Audi |
-| `[BMW]` | BMW |
-| `[CEE]` | CEE |
-| `[EBZ]` | EBZ |
-| `[GM]` | GM |
-| `[INE]` | INE |
-| `[JLR]` | JLR |
-| `[MRC]` | MRC |
-| `[MTS]` | MTS |
-| `[SKD]` | SKD |
-| `[STE]` | Stellantis |
-| `[P-EXP]` | Paint Expo |
-| `[PS30]` | PS30 |
-| `[ICS]` | ICS |
-| `[SRC]` | SRC |
-| `[SAE]` | SAE |
-
-### Type — the purpose of the piece
-
-| Tag | Label |
-| --- | --- |
-| `[SAL]` | Sales Pitch |
-| `[TEC]` | Technical |
-| `[OVR]` | Overview |
-| `[BCS]` | Business Case |
-| `[ABM]` | Account-Based |
-| `[ADD]` | Add-On |
-| `[BRD]` | Brand |
-| `[CRP]` | Corporate |
-| `[EVT]` | Event |
-| `[PTN]` | Partner |
-| `[TRA]` | Training |
-| `[SM]` | Social Media |
-| `[TST]` | Testimonial |
-| `[CSS]` | Case Study |
-| `[SUC]` | Success Story |
-| `[UC]` | Use Case |
-| `[REL]` | Product Release |
-| `[HIR]` | Hiring |
-| `[SUS]` | Sustainability |
-| `[PPT]` | Pain Point |
-| `[CMP]` | Campaign |
-| `[ENO]` | Encapsulated Oven |
-| `[ILL]` | Illust |
-
-### Format — what the deliverable physically is
-
-| Tag | Label |
-| --- | --- |
-| `[VID]` | 🎬 Video |
-| `[DK]` | 🗂️ Slide Deck |
-| `[PDF]` | 📄 PDF Document |
-| `[DOC]` | 📝 Word Document |
-| `[1P]` | 📋 One-Pager |
-| `[HAN]` | 🤝 Handover |
-| `[MN]` | 📖 User Manual |
-| `[SL]` | 🧩 Add-on Slide |
-| `[IMG]` | 🖼️ Static Image |
-| `[CRS]` | 🎠 Carousel |
-| `[ART]` | ✍️ Article |
-| `[PRI]` | 🖨️ Print File |
-| `[GDY]` | 🎁 Goodie |
-| `[BNR]` | 🏳️ Banner |
-| `[WEB]` | 🌐 Web Asset |
-| `[WB]` | White Bkg |
-| `[GB]` | Gray Bkg |
-| `[TB]` | Transp Bkg |
-
-To add new tags, edit `vocabulary.json` — one entry per line, `type` must be `topic`, `type`, or `format`.
-
----
-
-## Tasks
-
-### Distribute
-
-Finds every `[00] 📦` folder, clears it, then fills it from sibling `[03] OUT` folders.
-
-```text
-My Project/
-├── [00] 📦 My Project/     ← cleared then populated
-├── [02] WRK/
-│   └── [03] OUT/
-│       └── [ESS][SAL][DK]v1-2-0.pptx   ← collected ✓
-└── [03] OUT/
-    └── [BMW][ABM][DK]v1-0-0.pptx        ← collected ✓
-```
-
-- Copies files **flat** into the package by default (subfolder structure not preserved unless Pack subfolders is on).
-- Filenames are **translated to full human-readable names** on copy: `[ESS][SAL][DK]v2-0-0.pptx` → `ESS Sales Pitch Slide Deck v2-0-0.pptx`.
-- Orphaned files (no longer in any `[03] OUT`) are removed from the package automatically.
-
-### Publish
-
-Mirrors `[03] OUT` contents from source into an equivalent path inside the target folder. Everything else (`[01] IN`, `[02] WRK`, etc.) is ignored.
-
-- Filenames are translated to human-readable names on copy.
-- A file is only overwritten if the source is newer or a different size — unchanged files are skipped.
-- **Target folders and files are never deleted.** SharePoint and Dropbox links stay intact.
-- Files and folders no longer represented in `[03] OUT` are renamed with a `🚫` prefix instead of being removed. This flags them as disconnected without breaking their share links.
-
-### Generate Thumbnails
-
-Generates a WebP thumbnail from the first slide or page of every `.pptx`, `.ppt`, `.pptm`, and `.pdf` file. Saved next to the source file as `{filename}-thumb.webp`.
-
-Requires three CLI tools:
-
-| Tool | Purpose | Install (macOS) |
-| --- | --- | --- |
-| `soffice` | PPTX → PDF | [LibreOffice](https://www.libreoffice.org) |
-| `pdftoppm` | PDF page → PNG | `brew install poppler` |
-| `cwebp` | PNG → WebP | `brew install webp` |
-
-Thumbnails are never generated inside `[00] 📦` folders.
-
-### Obsidian DAM
-
-Builds an Obsidian vault overlay — one markdown note per asset, grouped into canvas files for visual navigation.
-
-**Notes** are created in the DAM root (configured in Settings). Each note contains:
-
-- Thumbnail embed
-- Inline tags from all matched vocabulary entries
-- Metadata table: Version, Created, Dropbox/OneDrive links, Source, tags
-- A note at the bottom if any tags were unrecognised
-
-**Canvases** are auto-generated per scope. A folder containing a `[📦]` package becomes its own canvas scope — assets inside are grouped on a canvas named `_X FOLDER NAME -c3.canvas`. All assets outside any package scope appear on `_X ROOT -c3.canvas`.
-
-Canvas layout rules:
-
-- Assets are arranged in clusters by their position in the folder hierarchy.
-- Direct children of the scope root share one cluster.
-- Siblings one level deeper form sub-clusters, positioned with smaller gaps.
-- Clusters are sorted: direct children first, then by `[n]` folder number.
-
----
-
-## Excluding Files and Folders
-
-**Automatically skipped — no action needed:**
-
-| Pattern | Reason |
-| --- | --- |
-| `[99]` anywhere in the name | Archive / backup folders |
-| `~$` prefix | Office temporary lock files |
-
-**Manual exclusion:** prefix any file or folder name with `⦰` to exclude it from all operations.
-
-Copy the character: **`⦰`**  
-macOS shortcut: `Control + Command + Space` → search "circled division slash"
-
-| Where applied | Effect |
-| --- | --- |
-| Any folder | Not traversed during any operation |
-| A sibling folder (Distribute) | Not searched for `[03] OUT` |
-| A file inside `[03] OUT` | Not copied, published, or indexed |
-| A `[00] 📦` folder | Not recognised as a package |
-
----
-
-## Version Filtering
-
-When **Keep highest version only** is enabled, only the file with the highest version number among files sharing the same base name is kept. Older versions are skipped.
-
-| File | Result |
-| --- | --- |
-| `[ESS][SAL][DK]v1-0-0.pptx` | ✗ skipped |
-| `[ESS][SAL][DK]v1-2-0.pptx` | ✓ kept |
-| `[BMW][ABM][DK].pptx` | ✓ always kept (no version) |
-
----
-
-## Settings
-
-| Setting | Default | Description |
-| --- | --- | --- |
-| **Package folder prefix** | `[00] 📦` | Prefix that identifies a package folder |
-| **Output folder name** | `[03] OUT` | Name of the folder holding deployed files |
-| **Exclude mark** | `⦰` | Prefix that marks a file or folder as excluded |
-| **Thumbnail width (px)** | `320` | Thumbnail output width (height scales proportionally) |
-| **Thumbnail quality** | `70` | WebP quality 0–100 |
-
-Saved to `settings.json` next to `app.py`. Delete the file to reset to defaults.
+Settings (folder paths, client configs, cloud tokens) are stored in the OS app-data directory via `tauri-plugin-store` — never in local files.
