@@ -18,8 +18,10 @@ plain-language description and an optional version number.
 | Part | Required | Rule |
 | --- | --- | --- |
 | `(Tag)` | At least one | Any shortcode from the vocabulary. Repeat as needed. |
-| `Description` | Optional | Plain-language label after the last bracket. Keep it short. |
+| `Description` | Optional | Plain-language label after the last bracket. Written without brackets. Keep it short and human-scannable. |
 | `vX-Y-Z` | Optional | Semantic version -- see **Versioning** section. |
+
+> **Description brackets are optional legacy.** Both `(ESS)(SAL)(SlD) Main Introduction v2-0-0.pptx` and `(ESS)(SAL)(SlD)(Main Introduction)v2-0-0.pptx` parse identically. New files should use the space-separated form without brackets.
 
 > **Round brackets `()` only.** Square brackets `[]` are parsed as a legacy alias
 > for files not yet renamed, but all new files must use `()`.
