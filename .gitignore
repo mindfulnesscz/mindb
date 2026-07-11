@@ -1,0 +1,14 @@
+node_modules
+dist
+dist-ssr
+.next
+out
+target
+.DS_Store
+*.local
+*.log
+*.tsbuildinfo
+
+# legacy, untracked on purpose
+python/
+dc-hub-desktop/
