@@ -12,13 +12,32 @@ The database schema is code: it lives in `supabase/migrations/` at the repo root
 
 ## Local development
 
-Requires Docker Desktop (or OrbStack) and the Supabase CLI.
+### One-time setup: Docker + Supabase CLI
+
+The local stack runs as Docker containers, so a container runtime must be installed and *running* before any `db:*` command.
+
+1. **Install Docker Desktop** from [docker.com](https://www.docker.com/products/docker-desktop/) (drag to Applications), or `brew install --cask docker-desktop`. OrbStack is a lighter alternative if you prefer (`brew install --cask orbstack`) — either provides the same `docker` daemon; install exactly one.
+2. **Launch it once** (`open -a Docker`) and complete the first-run dialog. Enable *Start Docker Desktop when you sign in* (Settings → General) so the daemon is always available.
+3. **Verify the daemon**: `docker info` should print a server version, not a connection error. If `docker` isn't found, add `/usr/local/bin` to your `PATH` — Docker Desktop symlinks its CLI there.
+4. **Resources** (Settings → Resources): the defaults are fine; the Supabase stack needs roughly 2 GB RAM and ~3 GB disk for images.
+5. **Install the Supabase CLI**: `brew install supabase/tap/supabase`.
+
+### Daily commands
 
 ```bash
-npm run db:start    # boots Postgres/Auth/PostgREST/Studio locally
+npm run db:start    # boots Postgres/Auth/PostgREST/Studio locally (first run pulls images)
 npm run db:reset    # rebuild from migrations + seed — your DB is disposable
+npm run db:stop     # free the resources when done
 npm run db:types    # regenerate database.types.ts from the local schema
 ```
+
+`db:start` prints the local URLs and keys when ready — API `http://127.0.0.1:54321`, Studio `http://localhost:54323`, plus the `anon` and `service_role` keys (fixed, well-known local dev values; safe to commit to `.env.local`).
+
+### Troubleshooting
+
+- `Cannot connect to the Docker daemon` — Docker Desktop isn't running; `open -a Docker` and wait for the whale icon to settle.
+- Port conflict on 54321–54324 — another Supabase project is running; `supabase stop --project-id <other>` or change ports in `supabase/config.toml`.
+- Stack in a weird state — `supabase stop --no-backup` then `npm run db:start` gives a clean slate; migrations + seed make the data fully reproducible.
 
 Studio runs at `http://localhost:54323`. The seed creates the `Acme Studio` demo client — create a user with an `@acme.test` address in Studio and it auto-joins as `client`; promote to `admin` in the `profiles` table for staff views.
 

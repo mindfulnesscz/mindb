@@ -22,6 +22,16 @@
 
 create extension if not exists "uuid-ossp";
 
+-- ── Role grants ──────────────────────────────────────────────
+-- Tables created via raw SQL don't get API-role grants automatically
+-- (production learned this with asset_events returning 403). RLS still
+-- gates every row — these grants only let PostgREST reach the tables.
+-- The `alter default privileges` lines cover objects from future migrations.
+grant usage on schema public to anon, authenticated, service_role;
+alter default privileges in schema public grant all on tables    to anon, authenticated, service_role;
+alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
+alter default privileges in schema public grant all on routines  to anon, authenticated, service_role;
+
 -- ── Clients ──────────────────────────────────────────────────
 create table public.clients (
   id                 uuid primary key default gen_random_uuid(),
