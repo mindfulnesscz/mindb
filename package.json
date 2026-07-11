@@ -1,0 +1,16 @@
+{
+  "name": "mindb",
+  "version": "2.2.0",
+  "private": true,
+  "description": "DC Hub monorepo — desktop pipeline (Tauri), client portal (web), documentation",
+  "scripts": {
+    "version:check": "node scripts/version.mjs check",
+    "version:patch": "node scripts/version.mjs patch",
+    "version:minor": "node scripts/version.mjs minor",
+    "version:major": "node scripts/version.mjs major",
+    "version:set": "node scripts/version.mjs",
+    "dev:desktop": "npm run tauri dev --prefix desktop",
+    "dev:web": "npm run dev --prefix web",
+    "dev:docs": "npm run dev --prefix docs"
+  }
+}

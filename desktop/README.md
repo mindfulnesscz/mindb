@@ -2,7 +2,7 @@
 
 Desktop app + web portal for the DC digital asset management pipeline. Processes, versions, distributes, and syncs marketing assets across cloud storage and a Supabase DAM backend.
 
-See [CHANGELOG.md](CHANGELOG.md) for full version history.
+See [CHANGELOG.md](../CHANGELOG.md) at the monorepo root for full version history, and [VERSIONING.md](../VERSIONING.md) for the unified version workflow.
 
 ---
 
@@ -20,20 +20,19 @@ See [CHANGELOG.md](CHANGELOG.md) for full version history.
 ## Architecture
 
 ```text
-desktop/                      ← this repo (Tauri 2 desktop app)
+desktop/                      ← this directory (Tauri 2 desktop app), part of the mindb monorepo
   src/                       ← React + TypeScript frontend
   src-tauri/                 ← Rust backend (Tauri commands)
   NAMING CONVENTION.md       ← canonical naming reference (company-wide)
-  CHANGELOG.md
   settings.json              ← local dev overrides (not committed)
 
-web/                          ← Next.js web portal (separate repo)
-  apps/portal/               ← client-facing DAM portal (reads Supabase via anon key)
-  packages/                  ← shared types and UI
+../web/                       ← client portal monorepo workspace (same repo)
+  apps/client-hub/           ← client-facing DAM portal (reads Supabase via anon key)
+  packages/asset-library/    ← shared types, filters, permissions
 
-python/                       ← legacy Python utilities (not under git)
-  app.py                     ← original pipeline script (v1)
-  vocab-manager.py           ← vocabulary editor (v1)
+../docs/                      ← Nextra documentation site (same repo)
+
+../python/                    ← legacy Python utilities (not under git)
 ```
 
 ---
