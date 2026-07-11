@@ -1,0 +1,13 @@
+{
+  "name": "dc-hub-front",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=apps/client-hub",
+    "build": "npm run build --workspace=apps/client-hub",
+    "typecheck": "npm run typecheck --workspace=packages/asset-library && npm run typecheck --workspace=apps/client-hub"
+  }
+}
