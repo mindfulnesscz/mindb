@@ -7,24 +7,24 @@ Built with [Nextra](https://nextra.site/) (Next.js).
 ## Running locally
 
 ```bash
-npm install
-npm run dev     # http://localhost:3001
+npm run setup       # from the monorepo root
+npm run dev:docs    # http://localhost:3001
 ```
 
-`npm run build` + `npm run start` for a production build.
+From `docs/`, `npm run dev`, `npm run build`, and `npm run start` remain available directly.
 
 ## Content map
 
 | Section | What's inside |
 |---|---|
-| `pages/getting-started/` | First run, architecture, trust boundaries |
+| `pages/getting-started/` | Contributor routine, first run, architecture, trust boundaries |
 | `pages/pipeline.mdx` | The desktop asset pipeline, step by step |
 | `pages/desktop/` | Pipeline lifecycle, logs, troubleshooting |
 | `pages/data-model/` | Assets, taxonomy, stable identity, sync semantics |
 | `pages/cloud-storage/` | R2 / Dropbox / OneDrive / Google Drive setup and comparison |
 | `pages/web-portal/` | Authentication, permissions, administration |
 | `pages/operations/` | Publishing runbook, troubleshooting |
-| `pages/reference/` | Repository map, code map |
+| `pages/reference/` | Commands, versioning, repository map, code map |
 
 Start at `pages/index.mdx` for the reading paths per role (operator, developer, cloud administrator).
 

@@ -1,0 +1,54 @@
+# Database environments
+
+The database schema is code: it lives in `supabase/migrations/` at the repo root, replayable from zero, and no SQL reaches production that didn't first exist as a migration file. The days of "run once in the SQL editor" are over — that practice produced silent drift (a portal download button reading a column the live DB wiped, functions that existed nowhere in source).
+
+## The three tiers
+
+| Tier | What | Schema arrives by |
+|---|---|---|
+| Local | Docker stack via `npm run db:start` | `npm run db:reset` — replays all migrations + `seed.sql` |
+| Staging | Hosted Supabase project | CI (`.github/workflows/db.yml`) pushes on merge to `main` |
+| Production | Live client-facing project | CI pushes on a `v*.*.*` release tag (approval-gated) |
+
+## Local development
+
+Requires Docker Desktop (or OrbStack) and the Supabase CLI.
+
+```bash
+npm run db:start    # boots Postgres/Auth/PostgREST/Studio locally
+npm run db:reset    # rebuild from migrations + seed — your DB is disposable
+npm run db:types    # regenerate database.types.ts from the local schema
+```
+
+Studio runs at `http://localhost:54323`. The seed creates the `Acme Studio` demo client — create a user with an `@acme.test` address in Studio and it auto-joins as `client`; promote to `admin` in the `profiles` table for staff views.
+
+Point the desktop app at local/staging by adding a client profile with that environment's URL and service key in Settings — environment is just connection values.
+
+## Making a schema change
+
+1. `supabase migration new <short_name>` — creates a timestamped file in `supabase/migrations/`.
+2. Write the SQL. `npm run db:reset` must succeed from zero.
+3. `npm run db:types` and commit the regenerated types with the migration.
+4. PR → CI validates the migrations replay. Merge → staging gets it. Release tag → production gets it.
+
+Never edit an already-merged migration; write a new one.
+
+## Baseline and production adoption
+
+`20260711000000_baseline.sql` is the production schema as of v2.3.0, verified against live introspection (it deliberately preserves production quirks; the migration after it fixes the `entities` column type). Production must **not** have the baseline pushed — when linking the prod project for the first time, mark it applied instead:
+
+```bash
+supabase link --project-ref <prod-ref>
+supabase migration repair --status applied 20260711000000
+supabase db push   # applies only migrations newer than the baseline
+```
+
+Two functions in the baseline (`get_all_profiles`, `update_user_role`) were reconstructed from portal usage because they existed only in production. After linking, run `supabase db diff --linked` and reconcile any differences with a repair migration.
+
+## CI secrets
+
+`db.yml` needs, in the `staging` / `production` GitHub environments: `SUPABASE_ACCESS_TOKEN` (personal access token), `SUPABASE_STAGING_REF` / `SUPABASE_PROD_REF` (project refs), `SUPABASE_STAGING_DB_PASSWORD` / `SUPABASE_PROD_DB_PASSWORD`. Configure the `production` environment to require manual approval.
+
+## Storage tiers
+
+R2 buckets follow the same split: production bucket plus a staging bucket, each configured per client-profile in the desktop app (endpoint/bucket/public domain are already per-client values). Local pipeline testing against the staging bucket + staging DB + a small test source folder rehearses a publish end-to-end without touching client-visible data.

@@ -1,5 +1,7 @@
 # Cloud security and sharing
 
+> **Current limitation:** desktop integration credentials are stored in local client configuration. A planned feature will add Supabase user authentication, protected token storage, and a trusted backend so permanent Supabase/R2 credentials no longer reach the desktop. See [Desktop authentication and secret-management plan](/desktop/authentication-plan).
+
 Use least-privilege provider apps and dedicated organizational destinations. A destination marked `internal` prevents its collected link from being written to client-facing metadata, but it does not change provider ACLs. Conversely, a `client` label does not itself grant provider access; link generation requests public/anonymous sharing.
 
 R2 public URLs and anonymous provider links are bearer links: anyone who obtains one may retain access independently of later portal role changes. For confidential assets, use a private bucket with signed delivery or provider organization-scoped links; those mechanisms are not implemented by the current portal.

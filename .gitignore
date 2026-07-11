@@ -10,3 +10,7 @@ target
 *.tsbuildinfo
 .claude/
 .vite/
+
+# supabase CLI local state
+supabase/.temp
+supabase/.branches

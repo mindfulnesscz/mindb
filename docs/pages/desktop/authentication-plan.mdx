@@ -1,0 +1,216 @@
+# Desktop authentication and secret-management plan
+
+> **Status: planned feature — not implemented.** The desktop application does not currently require a user login and still stores privileged credentials in its local client configuration. This page describes the intended security architecture; it must not be read as a description of current protection.
+
+## Objective
+
+The desktop should authenticate people through the same Supabase Auth project, profiles, and roles used by the web portal. Authentication should identify the operator, while a trusted backend authorizes privileged operations. Permanent infrastructure credentials must not be distributed to desktop installations.
+
+The target rule is:
+
+> Authentication tells the desktop who the user is; the backend decides what that user may do. Permanent service credentials never cross into the desktop process.
+
+## Current risk to remove
+
+The current `clients.json` model can contain:
+
+- the Supabase service-role key;
+- the R2 access key and secret;
+- Dropbox access and refresh tokens;
+- Google Drive access and refresh tokens plus client secret;
+- OneDrive access and refresh tokens.
+
+Client export currently serializes the full client model, which can also place these values into an exported JSON file. Local application data, backups, exports, malware, and shared OS accounts therefore have a large credential blast radius. The Supabase service-role key is the highest-risk item because it bypasses Row Level Security.
+
+## Target architecture
+
+```text
+Desktop application
+  │
+  │ Supabase user JWT
+  ▼
+Trusted Control API
+  ├── validates user, role, and client scope
+  ├── performs privileged Supabase operations
+  ├── issues scoped R2 upload capability
+  ├── manages shared provider connections
+  └── writes security audit events
+        │
+        ├── Supabase
+        ├── Cloudflare R2
+        ├── Dropbox
+        ├── Google Drive
+        └── OneDrive
+```
+
+Supabase Edge Functions are the natural first Control API candidate because authentication, profiles, roles, and client assignments already live in Supabase. The final implementation may split R2 operations into a Cloudflare Worker if native R2 bindings materially simplify the design.
+
+The desktop is a public client. Even when installed on a trusted employee workstation, its binary and local memory cannot safely hold an organization-wide permanent secret.
+
+## Planned desktop sign-in flow
+
+The desktop should reuse the web portal's email OTP/magic-link experience:
+
+1. Start in a signed-out screen before loading privileged client controls.
+2. Ask for the operator's email address.
+3. Call the existing `check_email_auth` RPC.
+4. Send a Supabase OTP/magic link using authorization code flow with PKCE.
+5. Open the verification link in the system browser.
+6. Return through a registered desktop deep link or loopback callback.
+7. Exchange the authorization code for a Supabase session.
+8. Load the same `profiles` row used by the web portal.
+9. Allow desktop operation only for approved roles and client assignments.
+10. Attach the short-lived Supabase access token to every Control API request.
+
+The initial role policy should permit `editor` and `admin`. If operators require narrower rights, introduce an explicit `operator` role rather than treating every authenticated member as a desktop publisher.
+
+Web and desktop may share authentication types, email classification, profile loading, and role-policy logic. Browser callback handling should remain platform-specific.
+
+## Authorization requirements
+
+Every privileged backend request must verify:
+
+- the JWT is valid and unexpired;
+- the user has a desktop-capable role;
+- the user is authorized for the requested `client_id`;
+- the operation is allowed for that role;
+- object paths, bucket names, and database inputs match server-controlled client configuration.
+
+Authentication alone must never imply access to all clients. UI visibility is not an authorization boundary; the backend and database policies remain authoritative.
+
+## Secret placement by integration
+
+| Integration | May exist in desktop | Must remain trusted/server-side |
+|---|---|---|
+| Supabase | Project URL, publishable/anon key, short-lived user session | Secret/service-role key |
+| Cloudflare R2 | Short-lived scoped credentials or signed operation | Parent R2 credentials/API token |
+| Dropbox | Public app ID and short-lived access token | Shared organizational refresh token, when centrally managed |
+| Google Drive | Desktop OAuth client ID and short-lived access token | Shared organizational refresh token |
+| OneDrive | Public client ID, tenant ID, short-lived access token | Shared organizational refresh token |
+
+### Supabase
+
+Move all service-role REST operations behind authenticated Control API endpoints. Each endpoint must enforce role and client scope before using the server-side secret key. The desktop should query ordinary user-accessible data with its user session and RLS wherever possible.
+
+### Cloudflare R2
+
+Remove permanent R2 credentials from client configuration. For a batch pipeline, the Control API should issue short-lived credentials restricted to one bucket, the client's allowed prefixes, required operations, and the shortest practical lifetime. A single object operation can instead use a short-lived presigned URL.
+
+The backend—not the desktop—must choose or validate object paths. Revoking the parent credential must invalidate delegated credentials.
+
+### Dropbox
+
+Keep authorization code with PKCE and request the minimum scopes. Prefer App Folder access when the workflow permits it. A personal connection can keep its refresh token in protected local storage; a shared organizational destination should keep the refresh token server-side.
+
+### Google Drive
+
+Use a Google OAuth client registered as a desktop/installed application with PKCE and a system-browser callback. Do not treat an embedded desktop `client_secret` as confidential. Reduce the full Drive scope when a narrower scope supports the workflow. Store shared-destination refresh tokens on the backend.
+
+### OneDrive
+
+Prefer system-browser authorization code flow with PKCE for the normal desktop experience. Device code can remain a fallback for environments where interactive browser callbacks are unavailable. The desktop remains a public client and should not receive a client secret.
+
+## Local secure storage
+
+Some per-user refresh/session tokens may need to survive locally. Move those values out of `clients.json` into Tauri Stronghold or an equivalent OS-protected credential store.
+
+The split should be:
+
+```text
+clients.json
+  client identity and branding
+  local paths
+  destination type and remote path
+  non-secret OAuth client IDs
+  bucket/public-domain identifiers
+
+secure local vault
+  Supabase refresh session
+  per-user Dropbox refresh token
+  per-user Google refresh token
+  per-user OneDrive refresh token
+```
+
+Protected local storage reduces accidental exposure through files and backups, but it does not turn the desktop into a trusted server. Service-role and parent R2 credentials must still be removed entirely.
+
+## Export and import behavior
+
+Client exports must become secret-free. They may contain ordinary configuration and vocabulary, but must strip:
+
+- service and R2 keys;
+- access, refresh, and session tokens;
+- OAuth client secrets;
+- any cached authorization headers.
+
+Importing an older bundle should detect secret-bearing fields, refuse or explicitly sanitize them, warn the user, and recommend credential rotation. Export files must be safe to attach to a support ticket without granting infrastructure access.
+
+## Session and operational controls
+
+The feature should include:
+
+- explicit sign-out and provider disconnect actions;
+- token/session expiration handling;
+- credential rotation and revocation procedures;
+- redaction of secrets and authorization headers from errors/logs;
+- audit records for publish, delete, destination, and administrative operations;
+- a way to revoke a workstation or user without rotating every integration;
+- a clear offline policy—privileged publishing should fail closed when authorization cannot be refreshed.
+
+## Delivery phases
+
+### Phase 1 — Contain plaintext exposure
+
+- Strip secrets from client exports.
+- Detect and sanitize old secret-bearing imports.
+- Introduce protected local secret storage.
+- Migrate existing local tokens and remove them from `clients.json`.
+- Rotate credentials that may have appeared in exports or backups.
+- Add log-redaction and export-sanitization tests.
+
+### Phase 2 — Add desktop identity
+
+- Add the Supabase magic-link/PKCE login gate.
+- Reuse profiles and role/client assignments.
+- Store the refresh session securely.
+- Add sign-out, expiration, and denied-access states.
+- Restrict desktop access to approved roles.
+
+### Phase 3 — Remove infrastructure credentials
+
+- Introduce authenticated Control API endpoints.
+- Move Supabase service-role operations server-side.
+- Replace permanent R2 keys with scoped temporary capability.
+- Validate every operation against user, role, client, and path.
+- Add privileged-operation audit records.
+
+### Phase 4 — Harden provider connections
+
+- Standardize Dropbox, Google, and OneDrive public-client OAuth flows.
+- Decide whether every destination is per-user or organization-shared.
+- Centralize shared refresh tokens.
+- Add revocation, rotation, reconnection, and ownership UI.
+
+## Acceptance criteria
+
+The feature is complete only when:
+
+- a signed-out user cannot enter the operational desktop UI;
+- an unauthorized role/client receives a server-side denial;
+- no Supabase service-role or permanent R2 credential exists in desktop files, exports, process arguments, or shipped configuration;
+- exported client bundles contain no secrets;
+- local refresh tokens use protected storage;
+- backend grants are short-lived and client/path scoped;
+- disconnect, sign-out, expiry, and revocation paths are tested;
+- audit logs identify the user, client, operation, target, result, and timestamp;
+- existing plaintext credentials have a documented migration and rotation procedure.
+
+## References
+
+- [Supabase API key security](https://supabase.com/docs/guides/getting-started/api-keys)
+- [Supabase Edge Function authentication](https://supabase.com/docs/guides/functions/auth)
+- [Cloudflare R2 temporary credentials](https://developers.cloudflare.com/r2/api/s3/temporary-credentials/)
+- [Cloudflare R2 presigned URLs](https://developers.cloudflare.com/r2/api/s3/presigned-urls/)
+- [Dropbox OAuth and PKCE](https://developers.dropbox.com/oauth-guide)
+- [Google OAuth for desktop applications](https://developers.google.com/identity/protocols/oauth2/native-app)
+- [Microsoft authorization code with PKCE](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow)
+- [Tauri Stronghold](https://v2.tauri.app/plugin/stronghold/)

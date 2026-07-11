@@ -1,16 +1,30 @@
 {
-  "name": "mindb",
-  "version": "2.3.0",
+  "name": "dc-hub-workspace",
   "private": true,
-  "description": "DC Hub monorepo — desktop pipeline (Tauri), client portal (web), documentation",
+  "version": "2.3.0",
+  "type": "module",
   "scripts": {
+    "setup": "npm ci --prefix desktop && npm ci --prefix web && npm ci --prefix docs",
+    "dev": "node scripts/dev.mjs",
+    "dev:desktop": "npm --prefix desktop run tauri dev",
+    "dev:web": "npm --prefix web run dev",
+    "dev:docs": "npm --prefix docs run dev",
+    "build": "npm run build:desktop && npm run build:web && npm run build:docs",
+    "build:desktop": "npm --prefix desktop run build",
+    "build:web": "npm --prefix web run build",
+    "build:docs": "npm --prefix docs run build",
+    "check": "npm run version:check && npm run build:desktop && npm run check:web && npm run build:docs && npm run check:rust",
+    "check:web": "npm --prefix web run typecheck",
+    "check:rust": "cargo check --locked --manifest-path desktop/src-tauri/Cargo.toml",
+    "db:start": "supabase start",
+    "db:stop": "supabase stop",
+    "db:reset": "supabase db reset",
+    "db:diff": "supabase db diff",
+    "db:types": "supabase gen types typescript --local > web/apps/client-hub/src/lib/database.types.ts",
     "version:check": "node scripts/version.mjs check",
     "version:patch": "node scripts/version.mjs patch",
     "version:minor": "node scripts/version.mjs minor",
     "version:major": "node scripts/version.mjs major",
-    "version:set": "node scripts/version.mjs",
-    "dev:desktop": "npm run tauri dev --prefix desktop",
-    "dev:web": "npm run dev --prefix web",
-    "dev:docs": "npm run dev --prefix docs"
+    "version:set": "node scripts/version.mjs"
   }
 }

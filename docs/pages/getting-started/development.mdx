@@ -1,0 +1,193 @@
+# Daily developer routine
+
+This page is the fastest path from a fresh clone to a reviewable contribution. DC Hub is one Git monorepo with three runnable applications and one shared release version.
+
+## 1. Install prerequisites
+
+Required for normal development:
+
+| Tool | Why it is needed |
+|---|---|
+| Node.js 22 and npm | Root launcher, desktop/web builds, documentation |
+| Rust stable (`rustc`, `cargo`) | Tauri native application and Rust checks |
+| Tauri 2 platform prerequisites | Native window/WebView and application bundles |
+| Git | Source control and Nextra edit metadata |
+
+Required only for exercising thumbnail conversion:
+
+- LibreOffice for PowerPoint/PDF conversion;
+- Poppler (`pdftoppm`);
+- WebP tools (`cwebp`).
+
+The exact OS packages required by Tauri differ between macOS, Windows, and Linux. Install the Tauri 2 prerequisites for the contributor's platform before diagnosing application build failures.
+
+## 2. Clone and install
+
+```bash
+git clone <repository-url> dc-hub
+cd dc-hub
+npm run setup
+```
+
+There is intentionally no root dependency tree. `npm run setup` executes `npm ci` independently in `desktop`, `web`, and `docs`, using each checked-in lockfile. Rerun it after pulling dependency or lockfile changes.
+
+Do not use a single recursive `npm install` as a substitute: these are separate package roots, and the web directory is the only npm workspace.
+
+## 3. Configure development data
+
+The web portal can start without credentials and uses mock data. For a real Supabase project:
+
+```bash
+cp web/apps/client-hub/.env.local.example web/apps/client-hub/.env.local
+```
+
+Fill in:
+
+```text
+VITE_SUPABASE_URL=https://<project-ref>.supabase.co
+VITE_SUPABASE_ANON_KEY=<anon-key>
+```
+
+Only the anon key belongs in browser configuration. Configure the desktop service-role key, client folders, R2 credentials, and provider OAuth applications inside the desktop Settings UI. These values are local secrets and must not enter Git, screenshots, fixtures, or logs.
+
+For schema work, run the local Supabase stack: `npm run db:start` (requires Docker), then `npm run db:reset` to replay `supabase/migrations` plus `supabase/seed.sql` from zero. See the database environments guide for staging/production flow.
+
+## 4. Start the system
+
+From the repository root:
+
+```bash
+npm run dev
+```
+
+The launcher starts and supervises:
+
+| Label | Command | Address |
+|---|---|---|
+| `desktop` | Tauri dev (`desktop`) | native window; Vite on `localhost:1420` |
+| `web` | client-hub Vite dev server | normally `localhost:5173` |
+| `docs` | Nextra/Next dev server | `localhost:3001` |
+
+Logs are prefixed by process. If one service exits with an error, the launcher stops the others so an incomplete stack is obvious. Press **Ctrl+C** to stop all children.
+
+To focus on one part:
+
+```bash
+npm run dev:desktop
+npm run dev:web
+npm run dev:docs
+```
+
+Port `1420` is strict for Tauri. Port `7623` must also be free when testing Dropbox or Google OAuth callbacks. OneDrive uses device-code authentication and does not use the callback port.
+
+## 5. Choose the correct change boundary
+
+| Change | Start here | Also review |
+|---|---|---|
+| Desktop screen or state | `desktop/src/features`, `desktop/src/store` | services called by the screen |
+| Scan/publish behavior | `desktop/src/services/pipelineService.ts` | pipeline, identity, CDN, sync docs |
+| Native I/O/API operation | `desktop/src-tauri/src` | Tauri capabilities and Rust check |
+| Naming/taxonomy | `desktop/src/domain`, vocabulary service | naming convention and database tag sync |
+| Portal UI | `web/apps/client-hub/src/features` | permissions and relevant service |
+| Portal query/schema | `web/apps/client-hub/src/services`, `database.types.ts` | migration, RLS/RPC, database docs |
+| Shared portal rules | `web/packages/asset-library` | both mock and configured modes |
+| Documentation | `docs/pages` and section `_meta.json` | links and production docs build |
+
+The desktop is privileged and can bypass Supabase RLS through its service-role key. The web app is untrusted browser code: UI permission helpers improve experience, but RLS/RPC policies must enforce security.
+
+## 6. Work in a small feedback loop
+
+1. Pull/rebase the latest `main` and confirm the tree contains no unrelated changes.
+2. Start the smallest relevant app, or use `npm run dev` for an end-to-end change.
+3. Make one coherent change.
+4. Exercise both the successful path and the nearest failure/empty path.
+5. Update the relevant documentation in the same commit when behavior, settings, schema, commands, or operator expectations change.
+6. Inspect `git diff` for secrets, generated output, accidental lockfile churn, and duplicated `.js` artifacts.
+
+Do not run two desktop pipelines against the same client/source tree simultaneously. They can race on manifests, provider destinations, cached R2 state, and database reconciliation.
+
+## 7. Testing by area
+
+There is currently no automated unit or integration test suite. The repository's automated gates are compilation, typechecking, Rust checking, version consistency, and documentation generation.
+
+### Desktop changes
+
+```bash
+npm run build:desktop
+npm run check:rust
+```
+
+Then manually verify the affected screen or pipeline stage with a small disposable fixture. For pipeline work, cover an unchanged file, changed file, new file, and removed/renamed file where relevant. Treat local output, R2, provider upload, Supabase sync, and portal display as separate assertions.
+
+### Web changes
+
+```bash
+npm run check:web
+npm run build:web
+```
+
+Check mock mode and configured Supabase mode when the change touches data or roles. Exercise public/member/editor/admin behavior as applicable; client-side permissions are not proof that RLS is correct.
+
+### Database changes
+
+Add a timestamped SQL migration under `supabase/migrations` (`supabase migration new <name>`), verify with `npm run db:reset`, and regenerate `database.types.ts` with `npm run db:types`. Test with the anon/session role used by the browser, not only as service role.
+
+### Documentation changes
+
+```bash
+npm run build:docs
+```
+
+Open the edited page through `npm run dev:docs`, check navigation, internal links, tables, code blocks, and narrow-screen readability.
+
+## Before opening a pull request
+
+Run the complete local gate:
+
+```bash
+npm run check
+git status --short
+git diff --check
+```
+
+The expected checks are:
+
+1. every version source matches the root version;
+2. desktop TypeScript/Vite build passes;
+3. both web workspaces typecheck;
+4. documentation production build passes;
+5. Cargo resolves the locked native application and passes `cargo check`.
+
+In the pull request, describe the affected boundary, manual scenarios tested, schema/configuration changes, and any partial-success or rollback considerations. Include screenshots for UI changes, but redact client data and credentials.
+
+### Current 2.3.0 baseline
+
+At the time of this documentation update, desktop compilation and documentation generation pass, but `npm run check:web` reports five pre-existing TypeScript errors:
+
+- generated database RPC arguments for `check_email_auth` and `get_client_portal` are typed as `undefined`;
+- the unused legacy `LoginView` expects a `signIn` method that is no longer exposed by `AuthContext`;
+- `authType` in `SignInModal` and `deleteClient` in `ClientsView` are unused under strict compiler settings.
+
+These are repository issues, not missing environment variables. A contribution should avoid adding new failures; preferably fix this baseline before making the aggregate `npm run check` a required green gate. `check:rust` also requires `cargo` to be installed and discoverable on `PATH`.
+
+## Releasing and versioning
+
+Normal feature branches do not bump versions unless they are explicitly preparing a release. For a release, use the root command only:
+
+```bash
+npm run version:patch
+# or version:minor / version:major
+```
+
+Review every generated change, replace the changelog placeholder, run `npm run check`, commit, and create the matching `vX.Y.Z` tag. See [Versioning and releases](/reference/versioning).
+
+## Handoff checklist for a new colleague
+
+- They can run `npm run setup` and `npm run dev` from the repository root.
+- They know mock web mode requires no credentials.
+- They have development—not production—Supabase and cloud credentials where needed.
+- They understand the service-role key never belongs in the browser.
+- They can identify the source/service/native/database boundary of their first task.
+- They know there is no automated test suite and have agreed on manual acceptance scenarios.
+- They have read [Architecture](/getting-started/architecture), [Repository map](/reference/file-layout), [Commands](/reference/commands), and [Versioning](/reference/versioning).
+- They understand that desktop login and backend-brokered secrets are [planned but not implemented](/desktop/authentication-plan), so current development credentials must be treated accordingly.

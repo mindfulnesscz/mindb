@@ -1,0 +1,67 @@
+# Versioning and releases
+
+DC Hub uses one semantic version for the entire monorepo. The root `package.json` is the single source of truth; component manifests are synchronized outputs.
+
+## Why one version
+
+Desktop, web, schema, and documentation evolve as one product. A shared version makes a release tag identify one compatible snapshot and prevents the previous situation where Git, npm, Cargo, Tauri, and the changelog all reported different values.
+
+## Commands
+
+Run version commands only from the repository root:
+
+```bash
+npm run version:check
+npm run version:patch
+npm run version:minor
+npm run version:major
+npm run version:set -- 3.0.0
+```
+
+The bump commands synchronize:
+
+- root, desktop, web workspace, and docs `package.json` files;
+- all three npm lockfiles and web workspace entries;
+- Tauri configuration;
+- Cargo manifest and lockfile;
+- the first changelog release heading.
+
+When the target version has no changelog section, the script inserts one with a placeholder. Replace it with a useful release summary before committing.
+
+## Choosing a bump
+
+| Bump | Use when |
+|---|---|
+| Patch | Backward-compatible bug fix, documentation correction, operational hardening |
+| Minor | Backward-compatible user-facing capability, meaningful workflow or schema addition |
+| Major | Deliberate compatibility break, migration that operators/clients must coordinate |
+
+The repository is still pre-stable operationally despite using `2.x`; choose bumps based on release impact rather than commit count.
+
+## Release routine
+
+```bash
+git switch main
+git pull --ff-only
+npm run version:minor
+# edit CHANGELOG.md and review generated files
+npm run check
+git diff --check
+git commit -am "release: vX.Y.Z"
+git tag vX.Y.Z
+git push origin main --tags
+```
+
+Version commands intentionally do not commit, tag, or push. This keeps generated changes reviewable and prevents an accidental command from publishing a release.
+
+The version workflow checks every pull request and `main` push. On `vX.Y.Z` tags it additionally requires the tag to equal `v` plus the root package version.
+
+## Troubleshooting
+
+If `npm run version:check` reports drift, do not hand-edit all manifests. First determine whether the root version is correct, then run:
+
+```bash
+npm run version:set -- <root-version>
+```
+
+Review the diff before committing. If the changelog already contains a newer release, resolve that history deliberately rather than overwriting it.

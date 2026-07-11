@@ -1,5 +1,15 @@
 # Architecture
 
+DC Hub is one Git monorepo and one coordinated product release. The root contains developer orchestration, versioning, CI, and the shared changelog; `desktop`, `web`, and `docs` retain independent dependency trees and lockfiles.
+
+```text
+root scripts / CI / version / changelog
+├── desktop: privileged publisher
+├── web: untrusted browser portal
+├── supabase: database migrations, seed, local-stack config
+└── docs: contributor and operator handbook
+```
+
 ## Components and trust boundaries
 
 | Component | Runs where | Credentials | Responsibility |
@@ -18,3 +28,7 @@ The desktop is privileged. Its Supabase **service-role key bypasses Row Level Se
 `PipelineView` builds a run context from the active client, global settings, vocabulary, selected destinations, and connection configuration. `runPipeline` scans once and executes enabled stages in a fixed order. After it returns, the UI performs Supabase and version-history synchronization. This split matters: a completed local pipeline does not by itself prove metadata sync succeeded.
 
 Continue with [Pipeline lifecycle](/desktop/pipeline-lifecycle), [Supabase synchronization](/data-model/sync), and [Portal architecture](/web-portal/overview).
+
+For local process orchestration and contribution checks, see [Daily developer routine](/getting-started/development) and [Commands](/reference/commands).
+
+> **Planned security change:** the desktop is not currently authenticated and locally holds privileged credentials. The target user-authentication and backend-broker architecture is documented in [Desktop authentication plan](/desktop/authentication-plan).

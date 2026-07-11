@@ -2,6 +2,11 @@
 
 | Path | Purpose |
 |---|---|
+| `package.json` | Root setup, dev, build, check, and version command surface |
+| `scripts/dev.mjs` | Starts/supervises desktop, web, and docs with prefixed logs |
+| `scripts/version.mjs` | Synchronizes the monorepo's canonical version |
+| `.github/workflows` | Repository consistency checks |
+| `CHANGELOG.md` / `VERSIONING.md` | Shared release history and release procedure |
 | `desktop/src/features` | Desktop screens and controls |
 | `desktop/src/services` | Pipeline, sync, providers, DAM orchestration |
 | `desktop/src/domain` | Naming, vocabulary, identity, client types |
@@ -11,5 +16,7 @@
 | `web/apps/client-hub/src/services` | Browser data access |
 | `web/apps/client-hub/src/context` | Auth and role/client state |
 | `web/packages/asset-library` | Shared types, permissions, filters |
-| `web/supabase/migrations` | Checked-in schema changes |
+| `supabase/migrations` | Checked-in schema changes (Supabase CLI, replayable from zero) |
 | `docs/pages` | This Nextra documentation |
+
+Generated/dependency directories (`node_modules`, `dist`, `.next`, and `desktop/src-tauri/target`) are ignored and should not be reviewed as source. The duplicate `.js` files beside TypeScript in `web/packages/asset-library/src` are currently checked-in artifacts; edit the `.ts` sources unless the build/release process is explicitly changed to regenerate them.

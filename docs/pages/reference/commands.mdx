@@ -1,0 +1,43 @@
+# Command reference
+
+Run these commands from the monorepo root unless a directory is explicitly shown.
+
+## Setup and development
+
+| Command | Effect |
+|---|---|
+| `npm run setup` | Runs locked installs in desktop, web, and docs |
+| `npm run dev` | Starts all three applications with prefixed logs |
+| `npm run dev:desktop` | Starts Tauri and the desktop Vite server |
+| `npm run dev:web` | Starts the client-hub Vite server |
+| `npm run dev:docs` | Starts Nextra on port 3001 |
+
+## Build and validation
+
+| Command | Effect |
+|---|---|
+| `npm run build` | Builds desktop frontend, web portal, and docs |
+| `npm run build:desktop` | Typechecks and builds the desktop React frontend |
+| `npm run build:web` | Builds the web client workspace |
+| `npm run build:docs` | Creates the static/production documentation build |
+| `npm run check:web` | Typechecks the shared asset library and client app |
+| `npm run check:rust` | Runs locked Cargo checking for the Tauri application |
+| `npm run check` | Runs version check, frontend/docs checks, and Rust check |
+
+`build:desktop` does not create platform installers. Use this from `desktop/` when a bundle is required:
+
+```bash
+npm run tauri build
+```
+
+## Versioning
+
+| Command | Effect |
+|---|---|
+| `npm run version:check` | Verifies all manifests, lockfiles, Tauri, Cargo, and changelog |
+| `npm run version:patch` | Increments `X.Y.Z` to `X.Y.(Z+1)` everywhere |
+| `npm run version:minor` | Increments `X.Y.Z` to `X.(Y+1).0` everywhere |
+| `npm run version:major` | Increments `X.Y.Z` to `(X+1).0.0` everywhere |
+| `npm run version:set -- X.Y.Z` | Synchronizes an explicit semantic version |
+
+See [Versioning and releases](/reference/versioning) before tagging.

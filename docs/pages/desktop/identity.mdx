@@ -7,3 +7,5 @@ Migrated clients instead use an eight-character stable ID on the package folder 
 The same resolved pair keys R2 and Supabase. CDN resolution writes the manifest before metadata sync, so the later sync reads the recorded mapping rather than independently guessing again.
 
 For migrated clients, missing database assets are marked `disconnected`; legacy cleanup can hard-delete stale rows. Migration is therefore a data-lifecycle boundary, not a cosmetic folder rename. Back up data, run the provided migration script deliberately, and verify manifests and portal continuity before setting `identityMigrated=true`.
+
+New packages created through the Vocabulary screen are born with a folder stable ID, `.dchub.json`, child `c1`, package readme, and Supabase draft row. Existing legacy packages use `desktop/scripts/migrate-identity.ts`; do not set the client migration flag merely because one newly created package has a manifest.

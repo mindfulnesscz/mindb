@@ -5,3 +5,17 @@ Filenames are both user-facing names and a metadata transport. `filenameTranslat
 This coupling is powerful: taxonomy can be inferred without a separate form. Its weakness is that a naming change can alter identity for legacy clients. Vocabulary order and token ambiguity can also change which metadata is inferred.
 
 The desktop vocabulary is stored per client when available and seeded from bundled JSON. Synchronization writes a hierarchical `tags` representation for the portal. Review [Taxonomy](/data-model/taxonomy) and [Stable identity](/desktop/identity) before changing conventions on a live client.
+
+## Creating a new asset package
+
+The Vocabulary screen can scaffold a migrated asset instead of relying on a manually assembled folder:
+
+1. Select the entity, angle, and format tags.
+2. Enter a short folder name, optional description, and semantic asset version.
+3. Choose the parent directory and create the asset.
+
+The desktop allocates a client-unique eight-character stable ID, creates `<folder> __<stableId>` with `IN`, `WRK`, and `OUT` subdirectories, writes `.dchub.json`, writes a package `readme.md`, reserves child `c1` with an empty filename placeholder in `OUT`, and creates an internal draft row in Supabase.
+
+The placeholder has no extension, so the normal publish scanner ignores it. Replace it with the real versioned file before publishing. Folder creation can succeed before the Supabase draft request fails; the UI reports that partial state and the operator should reconcile it rather than creating another package blindly.
+
+This flow requires an active client with a source/creation folder and working Supabase service-role configuration. It creates stable-identity packages directly and should be preferred for new migrated-client assets.

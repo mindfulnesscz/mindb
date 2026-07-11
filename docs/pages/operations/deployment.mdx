@@ -1,7 +1,26 @@
 # Configuration and deployment
 
+## Local development
+
+Use the root launcher rather than opening three terminals manually:
+
+```bash
+npm run setup
+npm run dev
+```
+
+The desktop uses fixed port 1420, docs uses 3001, and the web portal normally uses Vite's default 5173. See [Daily developer routine](/getting-started/development).
+
+## Web and Supabase
+
 The web app reads Supabase URL/anon key from environment or portable localStorage settings. The desktop holds privileged per-client credentials locally. Configure Supabase Auth Site URL and allowed redirect patterns for every production/dev origin.
 
 Desktop workstations need filesystem permissions plus native dependencies for requested thumbnail formats. Port 7623 must be available for Dropbox/Google callbacks. OneDrive device flow needs outbound HTTPS but no callback listener.
 
 R2 requires endpoint, bucket, access key, secret, and public domain. Ensure CORS/caching and public access match the portal design. Deploy database migrations/RLS/RPC changes before UI features that depend on them, and regenerate database types when schema changes.
+
+## Release artifacts
+
+`npm run build` validates/builds the three JavaScript parts but does not produce signed desktop installers or deploy a hosted environment. Build Tauri bundles from `desktop` with `npm run tauri build`; hosting and signing credentials remain environment-specific and are not automated in this repository today.
+
+All deployed parts should come from the same `vX.Y.Z` commit. Follow [Versioning and releases](/reference/versioning) rather than changing component manifests independently.
