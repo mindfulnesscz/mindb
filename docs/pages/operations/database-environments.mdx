@@ -72,7 +72,7 @@ Note that `db:reset` wipes users along with everything else — manually created
 
   Without these the portal falls back to mock data. Swap in the staging project's URL/anon key to point at staging.
 
-- **Desktop app** — Settings → client profile: the environment is just connection values. Create a separate profile per environment (e.g. `Acme (local)`, `ESS (staging)`) with that environment's Supabase URL + `service_role` key, R2 credentials/bucket, and source folder. Never mix tiers inside one profile.
+- **Desktop app** — environments are first-class: the login screen's *Configure server* (or Settings → Environment once signed in) holds each environment's URL, anon key, and — until the Control API phase — service key. After sign-in the app fetches that environment's **client list from the database** (assigned clients for editors, all for admins); folder paths and R2 credentials attach per `(environment, client)` on this machine. Switching environment in the client picker re-authenticates against the other backend, so mixing tiers is structurally impossible.
 
 ### Troubleshooting
 

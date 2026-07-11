@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useClientStore } from '../../store/clientStore';
-import { saveClients } from '../../services/clientService';
+import { useEnvironmentStore } from '../../store/environmentStore';
+import { saveEnvironments } from '../../services/environmentService';
 import { checkSupabaseConnection } from '../../services/supabaseService';
 import { CloudDestinations } from '../cloud/CloudDestinations';
 import css from './SettingsView.module.css';
@@ -106,9 +107,9 @@ export function SettingsView() {
             <CloudDestinations />
           </div>
 
-          {/* Supabase DAM sync — full width, per active client */}
+          {/* Environment — connection shared by every client on this backend */}
           <div className={css.card} style={{ gridColumn: '1 / -1' }}>
-            <SupabaseClientSettings />
+            <EnvironmentSettings />
           </div>
 
           {/* CDN — Cloudflare R2 per active client */}
@@ -121,37 +122,37 @@ export function SettingsView() {
   );
 }
 
-/* ── Supabase per-client settings ────────────────────────────────────────── */
+/* ── Environment settings — the connection every client on this backend shares ── */
 
 type CheckStatus = 'idle' | 'checking' | 'ok' | 'error';
 
-function SupabaseClientSettings() {
-  const store        = useClientStore();
-  const activeClient = store.clients.find(c => c.id === store.activeClientId) ?? null;
+function EnvironmentSettings() {
+  const { environments, activeEnvId, setEnvironments } = useEnvironmentStore();
+  const activeEnv = environments.find(e => e.id === activeEnvId) ?? null;
 
-  const [url,        setUrl]        = useState(activeClient?.supabaseUrl        ?? '');
-  const [serviceKey, setServiceKey] = useState(activeClient?.supabaseServiceKey ?? '');
-  const [anonKey,    setAnonKey]    = useState(activeClient?.supabaseAnonKey    ?? '');
+  const [name,       setName]       = useState(activeEnv?.name        ?? '');
+  const [url,        setUrl]        = useState(activeEnv?.supabaseUrl ?? '');
+  const [serviceKey, setServiceKey] = useState(activeEnv?.serviceKey  ?? '');
+  const [anonKey,    setAnonKey]    = useState(activeEnv?.anonKey     ?? '');
   const [status,     setStatus]     = useState<CheckStatus>('idle');
   const [msg,        setMsg]        = useState('');
 
   useEffect(() => {
-    setUrl       (activeClient?.supabaseUrl        ?? '');
-    setServiceKey(activeClient?.supabaseServiceKey ?? '');
-    setAnonKey   (activeClient?.supabaseAnonKey    ?? '');
+    setName      (activeEnv?.name        ?? '');
+    setUrl       (activeEnv?.supabaseUrl ?? '');
+    setServiceKey(activeEnv?.serviceKey  ?? '');
+    setAnonKey   (activeEnv?.anonKey     ?? '');
     setStatus('idle');
     setMsg('');
-  }, [activeClient?.id]);
+  }, [activeEnv?.id]);
 
-  async function persist(patch: { supabaseUrl: string; supabaseServiceKey: string; supabaseAnonKey: string }) {
-    if (!activeClient) return;
-    store.updateClient(activeClient.id, patch);
-    const { clients, activeClientId } = useClientStore.getState();
-    await saveClients({ clients, activeClientId }).catch(console.error);
-  }
-
-  function handleBlur() {
-    persist({ supabaseUrl: url.trim(), supabaseServiceKey: serviceKey.trim(), supabaseAnonKey: anonKey.trim() });
+  async function handleBlur() {
+    if (!activeEnv) return;
+    const updated = environments.map(e => e.id === activeEnv.id
+      ? { ...e, name: name.trim(), supabaseUrl: url.trim().replace(/\/+$/, ''), serviceKey: serviceKey.trim(), anonKey: anonKey.trim() }
+      : e);
+    setEnvironments(updated);
+    await saveEnvironments({ activeId: activeEnvId, list: updated }).catch(console.error);
   }
 
   async function checkConnection() {
@@ -170,15 +171,28 @@ function SupabaseClientSettings() {
 
   return (
     <>
-      <div className={css.cardTitle}>Supabase DAM Sync</div>
-      {!activeClient ? (
+      <div className={css.cardTitle}>Environment — Supabase connection</div>
+      {!activeEnv ? (
         <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-subtle)', margin: 0 }}>
-          Select a client to configure Supabase.
+          No environment configured — sign out and use “Configure server” on the login screen.
         </p>
       ) : (
         <div className={css.fields}>
           <div className={css.field}>
-            <span className={css.fieldLabel}>Project URL — {activeClient.name}</span>
+            <span className={css.fieldLabel}>Environment name</span>
+            <input
+              className={css.input}
+              value={name}
+              onChange={e => setName(e.target.value)}
+              onBlur={handleBlur}
+              placeholder="Production / Staging / Local"
+            />
+            <span className={css.fieldHint}>
+              Shared by every client on this backend. Changing the URL or anon key takes effect after a sign-out.
+            </span>
+          </div>
+          <div className={css.field}>
+            <span className={css.fieldLabel}>Project URL</span>
             <input
               className={`${css.input} ${css.inputMono}`}
               value={url}
@@ -274,9 +288,12 @@ function R2ClientSettings() {
   async function persist(patch: Partial<typeof activeClient>) {
     if (!activeClient) return;
     store.updateClient(activeClient.id, patch as Parameters<typeof store.updateClient>[1]);
-    const { clients, activeClientId } = useClientStore.getState();
-    const { saveClients } = await import('../../services/clientService');
-    await saveClients({ clients, activeClientId }).catch(console.error);
+    const envId = useEnvironmentStore.getState().activeEnvId;
+    const updated = useClientStore.getState().clients.find(c => c.id === activeClient.id);
+    if (envId && updated) {
+      const { saveLocalClient } = await import('../../services/clientService');
+      await saveLocalClient(envId, updated).catch(console.error);
+    }
   }
 
   async function checkConnection() {

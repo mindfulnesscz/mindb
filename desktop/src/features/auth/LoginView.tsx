@@ -1,7 +1,9 @@
 import { useState, type FormEvent } from 'react';
 import { useAuthStore } from '../../store/authStore';
+import { useEnvironmentStore } from '../../store/environmentStore';
+import { makeEnvironment, saveEnvironments } from '../../services/environmentService';
 import {
-  initAuthClient, saveAuthServer, checkEmail, sendMagicLink,
+  initAuthClient, checkEmail, sendMagicLink,
   waitForMagicLink, loadProfile, signOut, DESKTOP_ROLES,
 } from '../../services/authService';
 import css from './LoginView.module.css';
@@ -25,8 +27,29 @@ export function LoginView() {
     const url = serverUrl.trim().replace(/\/+$/, '');
     const anonKey = serverKey.trim();
     if (!url || !anonKey) return;
+
+    // The server config IS an environment: update the active one, or create
+    // the first. Multiple environments are managed in Settings once signed in.
+    const { environments, activeEnvId, setEnvironments, setActiveEnvId } = useEnvironmentStore.getState();
+    let list = environments;
+    let envId = activeEnvId;
+    const active = environments.find(e2 => e2.id === activeEnvId);
+    if (active) {
+      list = environments.map(e2 => e2.id === active.id ? { ...e2, supabaseUrl: url, anonKey } : e2);
+    } else {
+      const env = makeEnvironment({
+        name: url.includes('localhost') || url.includes('127.0.0.1') ? 'Local' : 'Production',
+        supabaseUrl: url,
+        anonKey,
+      });
+      list = [...environments, env];
+      envId = env.id;
+    }
+    await saveEnvironments({ activeId: envId, list });
+    setEnvironments(list);
+    setActiveEnvId(envId);
+
     const config = { url, anonKey };
-    await saveAuthServer(config);
     initAuthClient(config);
     setServer(config);
     setStatus('signedOut');

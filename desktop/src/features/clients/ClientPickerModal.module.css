@@ -285,3 +285,30 @@
   color: var(--clear-white);
   flex-shrink: 0;
 }
+
+/* ── Environment switcher ── */
+.envRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.envLabel {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--gray-500);
+}
+
+.envSelect {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  background: var(--paper);
+  color: var(--ink-900);
+}

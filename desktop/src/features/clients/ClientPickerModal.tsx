@@ -1,23 +1,38 @@
 import { useState } from 'react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
-import { Pencil, Trash2, Plus, ChevronLeft, X, Check, Download, Upload } from 'lucide-react';
+import { Pencil, Plus, ChevronLeft, X, Check, Download, Upload, RefreshCw } from 'lucide-react';
 import { useClientStore } from '../../store/clientStore';
 import { useSettingsStore } from '../../store/settingsStore';
-import { saveClients, exportClientBundle, importClientBundle } from '../../services/clientService';
+import { useAuthStore } from '../../store/authStore';
+import { useEnvironmentStore } from '../../store/environmentStore';
+import { saveEnvironments } from '../../services/environmentService';
+import {
+  saveActiveClient, saveLocalClient, createDbClient, updateDbClient,
+  loadClientsForEnvironment, exportClientBundle, importClientBundle,
+} from '../../services/clientService';
 import { loadVocabulary, saveVocabulary } from '../../services/vocabService';
-import { makeClient, clientInitials, type Client } from '../../domain/client';
+import { clientInitials, type Client } from '../../domain/client';
 import css from './ClientPickerModal.module.css';
 
 interface Props { onClose: () => void; }
 
 type View = 'list' | 'form';
 
+/** Clients are DB-first: this picker lists what the database says exists for
+ * the active environment (membership-filtered; admins see all). Editing a
+ * client writes name/colour to the DB; logo and folders stay machine-local. */
 export function ClientPickerModal({ onClose }: Props) {
   const store = useClientStore();
   const { setField } = useSettingsStore();
+  const { profile, setStatus } = useAuthStore();
+  const { environments, activeEnvId, setActiveEnvId } = useEnvironmentStore();
   const [view, setView] = useState<View>('list');
   const [editing, setEditing] = useState<Client | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const isAdmin = profile?.role === 'admin';
+  const env = environments.find(e => e.id === activeEnvId) ?? null;
 
   function applyClient(client: Client) {
     store.setActiveClientId(client.id);
@@ -25,8 +40,34 @@ export function ClientPickerModal({ onClose }: Props) {
     setField('targetFolder', client.targetFolder);
     setField('vaultFolder',  client.vaultFolder);
     document.documentElement.style.setProperty('--client-accent', client.brandColor);
-    saveClients({ clients: store.clients, activeClientId: client.id }).catch(console.error);
+    if (activeEnvId) saveActiveClient(activeEnvId, client.id).catch(console.error);
     onClose();
+  }
+
+  async function switchEnvironment(envId: string) {
+    if (envId === activeEnvId) return;
+    setActiveEnvId(envId);
+    store.setClients([]);
+    store.setActiveClientId(null);
+    await saveEnvironments({ activeId: envId, list: environments });
+    // App.tsx reacts to the env change: re-auths (cached session or the gate)
+    // and reloads this environment's clients.
+    setStatus('booting');
+    onClose();
+  }
+
+  async function refresh() {
+    if (!env || !profile) return;
+    setBusy(true);
+    try {
+      const { clients, activeClientId } = await loadClientsForEnvironment(env, profile.role, environments);
+      store.setClients(clients);
+      store.setActiveClientId(activeClientId);
+    } catch (e) {
+      alert(`Could not refresh clients: ${e}`);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function handleExport(client: Client) {
@@ -39,165 +80,151 @@ export function ClientPickerModal({ onClose }: Props) {
   }
 
   async function handleImport() {
+    if (!activeEnvId) return;
     try {
-      const result = await importClientBundle();
+      const result = await importClientBundle(activeEnvId, store.clients);
       if (!result) return;
-      const { client, vocabulary } = result;
-      const updated = [...store.clients, client];
-      store.addClient(client);
-      await saveClients({ clients: updated, activeClientId: store.activeClientId });
-      await saveVocabulary(vocabulary, client.id);
+      await saveVocabulary(result.vocabulary, result.clientId);
+      await refresh();
     } catch (e) {
       alert(`Import failed: ${e}`);
     }
   }
 
   function startAdd() {
-    setEditing(makeClient());
+    if (!isAdmin) return;
+    setEditing(null);
     setView('form');
   }
 
   function startEdit(client: Client) {
+    if (!isAdmin) return;
     setEditing({ ...client });
     setView('form');
   }
 
-  function handleDelete(id: string) {
-    const updated      = store.clients.filter(c => c.id !== id);
-    const newActiveId  = store.activeClientId === id ? null : store.activeClientId;
-    store.deleteClient(id);
-    if (newActiveId === null && store.activeClientId === id) {
-      document.documentElement.style.removeProperty('--client-accent');
+  async function handleSave(name: string, accent: string, logoDataUrl: string | null) {
+    if (!activeEnvId) return;
+    setBusy(true);
+    try {
+      if (editing) {
+        await updateDbClient(editing.id, { name, accent });
+        store.updateClient(editing.id, { name, brandColor: accent, logoDataUrl });
+        const updated = useClientStore.getState().clients.find(c => c.id === editing.id);
+        if (updated) await saveLocalClient(activeEnvId, updated);
+      } else {
+        await createDbClient(name, accent);
+        await refresh();
+      }
+      setView('list');
+    } catch (e) {
+      alert(`Save failed: ${e}`);
+    } finally {
+      setBusy(false);
     }
-    saveClients({ clients: updated, activeClientId: newActiveId }).catch(console.error);
-  }
-
-  async function handleSave(client: Client) {
-    const isNew = !store.clients.find(c => c.id === client.id);
-    let updated: Client[];
-    if (isNew) {
-      updated = [...store.clients, client];
-      store.addClient(client);
-    } else {
-      updated = store.clients.map(c => c.id === client.id ? client : c);
-      store.updateClient(client.id, client);
-    }
-    await saveClients({ clients: updated, activeClientId: store.activeClientId });
-    setView('list');
   }
 
   return (
     <div className={css.overlay} onClick={onClose}>
       <div className={css.modal} onClick={e => e.stopPropagation()}>
-        {view === 'list'
-          ? <ListView
-              clients={store.clients}
-              activeClientId={store.activeClientId}
-              onSelect={applyClient}
-              onEdit={startEdit}
-              onDelete={handleDelete}
-              onExport={handleExport}
-              onAdd={startAdd}
-              onImport={handleImport}
-              onClose={onClose}
-            />
-          : <FormView
-              initial={editing!}
-              onSave={handleSave}
-              onBack={() => setView('list')}
-              onClose={onClose}
-            />
-        }
+        {view === 'list' ? (
+          <>
+            <div className={css.header}>
+              <span className={css.title}>Clients</span>
+              <button className={css.iconBtn} onClick={refresh} title="Refresh from database" disabled={busy}>
+                <RefreshCw size={14} />
+              </button>
+              <button className={css.iconBtn} onClick={onClose}><X size={16} /></button>
+            </div>
+
+            {environments.length > 1 && (
+              <div className={css.envRow}>
+                <span className={css.envLabel}>Environment</span>
+                <select
+                  className={css.envSelect}
+                  value={activeEnvId ?? ''}
+                  onChange={e => switchEnvironment(e.target.value)}
+                >
+                  {environments.map(e => (
+                    <option key={e.id} value={e.id}>{e.name || e.supabaseUrl}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div className={css.list}>
+              {store.clients.length === 0 && (
+                <p className={css.empty}>
+                  No clients in this environment{isAdmin ? ' — add one below.' : ' are assigned to you. Ask an admin for access.'}
+                </p>
+              )}
+              {store.clients.map(client => (
+                <div
+                  key={client.id}
+                  className={`${css.row}${client.id === store.activeClientId ? ` ${css.rowActive}` : ''}`}
+                >
+                  <button className={css.rowMain} onClick={() => applyClient(client)}>
+                    <ClientAvatar client={client} size={32} />
+                    <span className={css.rowName}>{client.name || 'Unnamed client'}</span>
+                    {client.id === store.activeClientId && (
+                      <Check size={14} className={css.activeCheck} />
+                    )}
+                  </button>
+                  <div className={css.rowActions}>
+                    <button className={css.iconBtn} onClick={() => handleExport(client)} title="Export local config + vocabulary">
+                      <Download size={14} />
+                    </button>
+                    {isAdmin && (
+                      <button className={css.iconBtn} onClick={() => startEdit(client)} title="Edit (writes to database)">
+                        <Pencil size={14} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className={css.footer}>
+              <button className={css.addBtn} onClick={handleImport} title="Import local config + vocabulary for an existing client">
+                <Upload size={14} />
+                Import…
+              </button>
+              {isAdmin && (
+                <button className={css.addBtn} onClick={startAdd}>
+                  <Plus size={14} />
+                  Add client
+                </button>
+              )}
+            </div>
+          </>
+        ) : (
+          <ClientForm
+            initial={editing}
+            busy={busy}
+            onSave={handleSave}
+            onBack={() => setView('list')}
+            onClose={onClose}
+          />
+        )}
       </div>
     </div>
   );
 }
 
-/* ── List view ────────────────────────────────────────────────────────────── */
-
-interface ListProps {
-  clients:        Client[];
-  activeClientId: string | null;
-  onSelect:  (c: Client) => void;
-  onEdit:    (c: Client) => void;
-  onDelete:  (id: string) => void;
-  onExport:  (c: Client) => void;
-  onAdd:     () => void;
-  onImport:  () => void;
-  onClose:   () => void;
-}
-
-function ListView({ clients, activeClientId, onSelect, onEdit, onDelete, onExport, onAdd, onImport, onClose }: ListProps) {
-  return (
-    <>
-      <div className={css.header}>
-        <span className={css.title}>Clients</span>
-        <button className={css.iconBtn} onClick={onClose}><X size={16} /></button>
-      </div>
-
-      <div className={css.list}>
-        {clients.length === 0 && (
-          <p className={css.empty}>No clients yet. Add one to get started.</p>
-        )}
-        {clients.map(client => (
-          <div
-            key={client.id}
-            className={`${css.row}${client.id === activeClientId ? ` ${css.rowActive}` : ''}`}
-          >
-            <button className={css.rowMain} onClick={() => onSelect(client)}>
-              <ClientAvatar client={client} size={32} />
-              <span className={css.rowName}>{client.name || 'Unnamed client'}</span>
-              {client.id === activeClientId && (
-                <Check size={14} className={css.activeCheck} />
-              )}
-            </button>
-            <div className={css.rowActions}>
-              <button className={css.iconBtn} onClick={() => onExport(client)} title="Export client">
-                <Download size={14} />
-              </button>
-              <button className={css.iconBtn} onClick={() => onEdit(client)} title="Edit">
-                <Pencil size={14} />
-              </button>
-              <button className={css.iconBtn} onClick={() => onDelete(client.id)} title="Delete">
-                <Trash2 size={14} />
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className={css.footer}>
-        <button className={css.addBtn} onClick={onImport} title="Import a client from a .json export file">
-          <Upload size={14} />
-          Import…
-        </button>
-        <button className={css.addBtn} onClick={onAdd}>
-          <Plus size={14} />
-          Add client
-        </button>
-      </div>
-    </>
-  );
-}
-
-/* ── Form view ────────────────────────────────────────────────────────────── */
+/* ── Form (admin): name + colour go to the DB; logo stays machine-local ──── */
 
 interface FormProps {
-  initial: Client;
-  onSave:  (c: Client) => Promise<void>;
+  initial: Client | null;
+  busy:    boolean;
+  onSave:  (name: string, accent: string, logoDataUrl: string | null) => Promise<void>;
   onBack:  () => void;
   onClose: () => void;
 }
 
-function FormView({ initial, onSave, onBack, onClose }: FormProps) {
-  const [form, setForm]     = useState<Client>(initial);
-  const [saving, setSaving] = useState(false);
-
-  const isNew = !useClientStore.getState().clients.find(c => c.id === initial.id);
-
-  function patch<K extends keyof Client>(key: K, value: Client[K]) {
-    setForm(f => ({ ...f, [key]: value }));
-  }
+function ClientForm({ initial, busy, onSave, onBack, onClose }: FormProps) {
+  const [name, setName]     = useState(initial?.name ?? '');
+  const [accent, setAccent] = useState(initial?.brandColor ?? '#161616');
+  const [logo, setLogo]     = useState<string | null>(initial?.logoDataUrl ?? null);
 
   async function pickLogo() {
     const selected = await openDialog({
@@ -210,59 +237,36 @@ function FormView({ initial, onSave, onBack, onClose }: FormProps) {
     const mime  = ext === 'jpg' ? 'image/jpeg' : `image/${ext}`;
     let binary  = '';
     for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-    patch('logoDataUrl', `data:${mime};base64,${btoa(binary)}`);
+    setLogo(`data:${mime};base64,${btoa(binary)}`);
   }
 
-  async function pickFolder(key: 'sourceFolder' | 'targetFolder' | 'vaultFolder') {
-    const selected = await openDialog({ directory: true, multiple: false });
-    if (selected) patch(key, selected as string);
-  }
-
-  async function submit() {
-    if (!form.name.trim()) return;
-    setSaving(true);
-    await onSave(form).catch(console.error);
-    setSaving(false);
-  }
+  const preview: Client = {
+    ...(initial ?? ({} as Client)),
+    name, brandColor: accent, logoDataUrl: logo,
+  } as Client;
 
   return (
     <>
       <div className={css.header}>
         <button className={css.iconBtn} onClick={onBack}><ChevronLeft size={16} /></button>
-        <span className={css.title}>{isNew ? 'New client' : 'Edit client'}</span>
+        <span className={css.title}>{initial ? 'Edit client' : 'New client'}</span>
         <button className={css.iconBtn} onClick={onClose}><X size={16} /></button>
       </div>
 
       <div className={css.formBody}>
-        {/* Identity */}
         <div className={css.section}>
-          <div className={css.sectionTitle}>Identity</div>
+          <div className={css.sectionTitle}>Identity (stored in the database)</div>
 
           <label className={css.field}>
             <span className={css.fieldLabel}>Name</span>
             <input
               className={css.input}
-              value={form.name}
-              onChange={e => patch('name', e.target.value)}
+              value={name}
+              onChange={e => setName(e.target.value)}
               placeholder="e.g. ESS Marketing"
               autoFocus
             />
           </label>
-
-          <div className={css.field}>
-            <span className={css.fieldLabel}>Logo</span>
-            <div className={css.logoRow}>
-              <ClientAvatar client={form} size={48} />
-              <button className={css.outlineBtn} onClick={pickLogo}>
-                {form.logoDataUrl ? 'Change image…' : 'Choose image…'}
-              </button>
-              {form.logoDataUrl && (
-                <button className={css.iconBtn} onClick={() => patch('logoDataUrl', null)} title="Remove">
-                  <X size={14} />
-                </button>
-              )}
-            </div>
-          </div>
 
           <div className={css.field}>
             <span className={css.fieldLabel}>Brand colour</span>
@@ -270,15 +274,15 @@ function FormView({ initial, onSave, onBack, onClose }: FormProps) {
               <input
                 type="color"
                 className={css.colorSwatch}
-                value={form.brandColor}
-                onChange={e => patch('brandColor', e.target.value)}
+                value={accent}
+                onChange={e => setAccent(e.target.value)}
               />
               <input
                 className={`${css.input} ${css.inputMono} ${css.inputColor}`}
-                value={form.brandColor}
+                value={accent}
                 onChange={e => {
                   const v = e.target.value;
-                  if (/^#[0-9A-Fa-f]{0,6}$/.test(v)) patch('brandColor', v);
+                  if (/^#[0-9A-Fa-f]{0,6}$/.test(v)) setAccent(v);
                 }}
                 maxLength={7}
               />
@@ -286,38 +290,32 @@ function FormView({ initial, onSave, onBack, onClose }: FormProps) {
           </div>
         </div>
 
-        {/* Folders */}
-        <div className={css.section}>
-          <div className={css.sectionTitle}>Folders</div>
-
-          {(['sourceFolder', 'targetFolder', 'vaultFolder'] as const).map(key => (
-            <div className={css.field} key={key}>
-              <span className={css.fieldLabel}>
-                {key === 'sourceFolder' ? 'Source' : key === 'targetFolder' ? 'Target' : 'Vault (DAM)'}
-              </span>
-              <div className={css.folderRow}>
-                <input
-                  className={`${css.input} ${css.inputMono} ${css.inputFlex}`}
-                  value={form[key]}
-                  onChange={e => patch(key, e.target.value)}
-                  placeholder="Not set"
-                />
-                <button className={css.outlineBtn} onClick={() => pickFolder(key)}>Browse…</button>
-              </div>
+        {initial && (
+          <div className={css.section}>
+            <div className={css.sectionTitle}>Logo (this machine only)</div>
+            <div className={css.logoRow}>
+              <ClientAvatar client={preview} size={48} />
+              <button className={css.outlineBtn} onClick={pickLogo}>
+                {logo ? 'Change image…' : 'Choose image…'}
+              </button>
+              {logo && (
+                <button className={css.iconBtn} onClick={() => setLogo(null)} title="Remove">
+                  <X size={14} />
+                </button>
+              )}
             </div>
-          ))}
-        </div>
-
+          </div>
+        )}
       </div>
 
       <div className={css.footer}>
         <button className={css.outlineBtn} onClick={onBack}>Cancel</button>
         <button
           className={css.saveBtn}
-          onClick={submit}
-          disabled={!form.name.trim() || saving}
+          onClick={() => onSave(name.trim(), accent, logo)}
+          disabled={!name.trim() || busy}
         >
-          {saving ? 'Saving…' : 'Save client'}
+          {busy ? 'Saving…' : initial ? 'Save changes' : 'Create client'}
         </button>
       </div>
     </>

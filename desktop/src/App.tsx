@@ -11,10 +11,10 @@ import { useClientStore } from './store/clientStore';
 import { useAuthStore } from './store/authStore';
 import { loadVocabulary, saveVocabulary } from './services/vocabService';
 import { loadSettings, saveSettings } from './services/settingsService';
-import { loadClients, saveClients, pullCloudDestinations } from './services/clientService';
-import {
-  loadAuthServer, initAuthClient, getSession, loadProfile, DESKTOP_ROLES,
-} from './services/authService';
+import { loadClientsForEnvironment, saveLocalClient, pullCloudDestinations } from './services/clientService';
+import { loadEnvironments } from './services/environmentService';
+import { useEnvironmentStore } from './store/environmentStore';
+import { initAuthClient, getSession, loadProfile, DESKTOP_ROLES } from './services/authService';
 import './styles/tokens.css';
 import './styles/global.css';
 import css from './App.module.css';
@@ -24,16 +24,30 @@ export default function App() {
   const { setData: setVocab }     = useVocabularyStore();
   const { setSettings, markClean, setField } = useSettingsStore();
   const { setClients, setActiveClientId, updateClient, clients, activeClientId } = useClientStore();
-  const { status: authStatus, setStatus: setAuthStatus, setServer, setProfile } = useAuthStore();
+  const { status: authStatus, setStatus: setAuthStatus, setServer, setProfile, profile } = useAuthStore();
+  const { environments, activeEnvId, setEnvironments, setActiveEnvId } = useEnvironmentStore();
 
-  /* Boot: resolve auth first — the gate. A cached session (auto-refreshed by
-     supabase-js) signs straight in; anything else lands on the login screen. */
+  /* Boot: load environments once. */
+  const envsLoaded = useRef(false);
   useEffect(() => {
+    loadEnvironments().then(envs => {
+      setEnvironments(envs.list);
+      setActiveEnvId(envs.activeId);
+      envsLoaded.current = true;
+      if (!envs.activeId) setAuthStatus('unconfigured');
+    }).catch(() => setAuthStatus('unconfigured'));
+  }, []);
+
+  /* The gate: authenticate against the ACTIVE environment. Re-runs on
+     environment switch; a cached session for that environment (supabase-js
+     keys storage by project) signs straight in without a new magic link. */
+  useEffect(() => {
+    if (!envsLoaded.current || !activeEnvId) return;
+    const env = environments.find(e => e.id === activeEnvId) ?? null;
+    if (!env || !env.supabaseUrl || !env.anonKey) { setAuthStatus('unconfigured'); return; }
     (async () => {
-      const server = await loadAuthServer();
-      if (!server) { setAuthStatus('unconfigured'); return; }
-      setServer(server);
-      initAuthClient(server);
+      setServer({ url: env.supabaseUrl, anonKey: env.anonKey });
+      initAuthClient({ url: env.supabaseUrl, anonKey: env.anonKey });
       try {
         const session = await getSession();
         if (!session) { setAuthStatus('signedOut'); return; }
@@ -45,16 +59,26 @@ export default function App() {
         setAuthStatus('signedOut');
       }
     })().catch(() => setAuthStatus('signedOut'));
-  }, []);
+  }, [activeEnvId, environments]);
 
-  /* Boot: load settings and clients (vocab loads below once clientId is known) */
+  /* Boot: settings are auth-independent */
   useEffect(() => {
     loadSettings().then(s => { setSettings(s); markClean(); }).catch(console.error);
-    loadClients().then(({ clients, activeClientId }) => {
-      setClients(clients);
-      setActiveClientId(activeClientId);
-    }).catch(console.error);
   }, []);
+
+  /* Clients are DB-first: fetched per environment once signed in, filtered by
+     membership (admins see all), merged with this machine's local config. */
+  useEffect(() => {
+    if (authStatus !== 'signedIn' || !profile) return;
+    const env = environments.find(e => e.id === activeEnvId) ?? null;
+    if (!env) return;
+    loadClientsForEnvironment(env, profile.role, environments)
+      .then(({ clients, activeClientId }) => {
+        setClients(clients);
+        setActiveClientId(activeClientId);
+      })
+      .catch(console.error);
+  }, [authStatus, activeEnvId]);
 
   /* Track whether this is the first client load so we don't double-save on boot */
   const vocabClientRef = useRef<string | null | undefined>(undefined);
@@ -90,7 +114,8 @@ export default function App() {
     pullCloudDestinations(client).then(merged => {
       if (!merged || JSON.stringify(merged) === JSON.stringify(client.cloudDestinations)) return;
       updateClient(client.id, { cloudDestinations: merged });
-      return saveClients({ clients: useClientStore.getState().clients, activeClientId: client.id });
+      const updated = useClientStore.getState().clients.find(c => c.id === client.id);
+      if (updated && activeEnvId) return saveLocalClient(activeEnvId, updated);
     }).catch(console.error);
   }, [activeClientId]);
 
