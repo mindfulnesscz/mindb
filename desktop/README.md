@@ -31,8 +31,6 @@ desktop/                      ← this directory (Tauri 2 desktop app), part of 
   packages/asset-library/    ← shared types, filters, permissions
 
 ../docs/                      ← Nextra documentation site (same repo)
-
-../python/                    ← legacy Python utilities (not under git)
 ```
 
 ---

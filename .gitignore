@@ -8,9 +8,5 @@ target
 *.local
 *.log
 *.tsbuildinfo
-
-# legacy, untracked on purpose
-python/
-dc-hub-desktop/
 .claude/
 .vite/

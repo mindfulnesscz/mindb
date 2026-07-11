@@ -8,8 +8,6 @@ DC Hub is a local-to-cloud digital asset publishing system: the **desktop app** 
 | [`web/`](web/) | Client portal workspace (Vite + React, Supabase) | `npm run dev:web` |
 | [`docs/`](docs/) | Nextra documentation site | `npm run dev:docs` (port 3001) |
 
-`python/` (legacy v1 pipeline) and `dc-hub-desktop/` (stray cache) are intentionally untracked.
-
 ## Versioning
 
 One version for the whole repo — see [VERSIONING.md](VERSIONING.md) and [CHANGELOG.md](CHANGELOG.md). Current release notes live in the changelog; `npm run version:check` verifies every manifest agrees.

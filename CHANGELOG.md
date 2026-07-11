@@ -5,6 +5,19 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [2.3.0] — 2026-07-11
+
+Repository cleanup ahead of the refactoring phase.
+
+### Removed
+
+- `python/` — the legacy v1 CustomTkinter pipeline (superseded by the Tauri app since 2.0.0), including `vocab-manager.py` and migration utilities
+- `dc-hub-desktop/` — stray build-cache directory
+- `desktop/src/services/airtableService.ts` — Airtable predecessor kept "for reference" since 2.1.0; unreferenced, preserved in git history
+- Stray `.DS_Store` files and stale ignore rules
+
+---
+
 ## [2.2.0] — 2026-07-11
 
 Folder-based stable identity, CDN originals, and a major R2 sync correctness/performance pass.
