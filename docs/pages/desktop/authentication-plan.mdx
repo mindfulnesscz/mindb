@@ -1,6 +1,8 @@
 # Desktop authentication and secret-management plan
 
-> **Status: planned feature — not implemented.** The desktop application does not currently require a user login and still stores privileged credentials in its local client configuration. This page describes the intended security architecture; it must not be read as a description of current protection.
+> **Status: Phase 2 (desktop identity) shipped 2026-07-12; Phases 1, 3, and 4 outstanding.** The desktop now requires a staff (editor/admin) magic-link sign-in before any operational UI renders: email → `check_email_auth` → Supabase OTP with PKCE → system browser → loopback callback on `:7623` → code exchange in the app. The auth server (URL + anon key) is configured once on the sign-in screen and stored in `auth-server.json`; sessions persist and auto-refresh; sign-out lives in the nav rail. Groundwork shipped alongside it: `clients.identity_migrated` and the `client_members` assignment table (migration `20260712000000`).
+>
+> **The gate is identity, not yet security**: privileged credentials (service-role key, R2 keys, provider tokens) still live in local client configuration until Phases 1 and 3 remove them. Hosted environments must allowlist `http://localhost:7623/auth-callback` under Auth → URL Configuration for desktop sign-in to work.
 
 ## Objective
 

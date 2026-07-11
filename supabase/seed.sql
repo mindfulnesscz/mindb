@@ -81,3 +81,6 @@ insert into auth.identities (
 
 update public.profiles set role = 'admin', name = 'Local Admin', initials = 'LA'
   where id = '00000000-0000-0000-0000-0000000000ad';
+
+insert into public.client_members (user_id, client_id) values
+  ('00000000-0000-0000-0000-0000000000ad', '00000000-0000-0000-0000-000000000001');

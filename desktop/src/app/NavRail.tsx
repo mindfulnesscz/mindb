@@ -1,7 +1,9 @@
 import { useState } from 'react';
-import { Layers, BookOpen, Settings } from 'lucide-react';
+import { Layers, BookOpen, Settings, LogOut } from 'lucide-react';
 import { useAppStore, type NavDest } from '../store/appStore';
 import { useClientStore } from '../store/clientStore';
+import { useAuthStore } from '../store/authStore';
+import { signOut } from '../services/authService';
 import { ClientPickerModal, ClientAvatar } from '../features/clients/ClientPickerModal';
 import css from './NavRail.module.css';
 
@@ -14,9 +16,16 @@ const ITEMS: { dest: NavDest; icon: React.FC<{ size?: number }>; label: string }
 export function NavRail() {
   const { active, navigate }    = useAppStore();
   const { clients, activeClientId } = useClientStore();
+  const { profile, setStatus, setProfile } = useAuthStore();
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const activeClient = clients.find(c => c.id === activeClientId) ?? null;
+
+  async function handleSignOut() {
+    await signOut().catch(console.error);
+    setProfile(null);
+    setStatus('signedOut');
+  }
 
   return (
     <>
@@ -56,6 +65,16 @@ export function NavRail() {
             </button>
           ))}
         </nav>
+
+        {/* ── Signed-in user ── */}
+        <button
+          className={css.navItem}
+          onClick={handleSignOut}
+          title={profile ? `Sign out (${profile.name} — ${profile.role})` : 'Sign out'}
+        >
+          <LogOut size={20} />
+          <span className={css.navLabel}>Sign out</span>
+        </button>
 
         {/* ── DC mark ── */}
         <div className={css.dcMark} title="Disrupt Collective">

@@ -3,13 +3,18 @@ import { NavRail } from './app/NavRail';
 import { PipelineView } from './features/pipeline/PipelineView';
 import { VocabularyView } from './features/vocabulary/VocabularyView';
 import { SettingsView } from './features/settings/SettingsView';
+import { LoginView } from './features/auth/LoginView';
 import { useAppStore } from './store/appStore';
 import { useVocabularyStore } from './store/vocabularyStore';
 import { useSettingsStore } from './store/settingsStore';
 import { useClientStore } from './store/clientStore';
+import { useAuthStore } from './store/authStore';
 import { loadVocabulary, saveVocabulary } from './services/vocabService';
 import { loadSettings, saveSettings } from './services/settingsService';
 import { loadClients, saveClients, pullCloudDestinations } from './services/clientService';
+import {
+  loadAuthServer, initAuthClient, getSession, loadProfile, DESKTOP_ROLES,
+} from './services/authService';
 import './styles/tokens.css';
 import './styles/global.css';
 import css from './App.module.css';
@@ -19,6 +24,28 @@ export default function App() {
   const { setData: setVocab }     = useVocabularyStore();
   const { setSettings, markClean, setField } = useSettingsStore();
   const { setClients, setActiveClientId, updateClient, clients, activeClientId } = useClientStore();
+  const { status: authStatus, setStatus: setAuthStatus, setServer, setProfile } = useAuthStore();
+
+  /* Boot: resolve auth first — the gate. A cached session (auto-refreshed by
+     supabase-js) signs straight in; anything else lands on the login screen. */
+  useEffect(() => {
+    (async () => {
+      const server = await loadAuthServer();
+      if (!server) { setAuthStatus('unconfigured'); return; }
+      setServer(server);
+      initAuthClient(server);
+      try {
+        const session = await getSession();
+        if (!session) { setAuthStatus('signedOut'); return; }
+        const profile = await loadProfile();
+        if (!DESKTOP_ROLES.includes(profile.role)) { setAuthStatus('denied'); return; }
+        setProfile(profile);
+        setAuthStatus('signedIn');
+      } catch {
+        setAuthStatus('signedOut');
+      }
+    })().catch(() => setAuthStatus('signedOut'));
+  }, []);
 
   /* Boot: load settings and clients (vocab loads below once clientId is known) */
   useEffect(() => {
@@ -83,6 +110,10 @@ export default function App() {
   useEffect(() => {
     if (dirty) saveSettings(settings).then(markClean).catch(console.error);
   }, [settings, dirty]);
+
+  /* The gate: nothing operational renders without a staff session. */
+  if (authStatus === 'booting') return null;
+  if (authStatus !== 'signedIn') return <LoginView />;
 
   return (
     <div className={css.shell}>
