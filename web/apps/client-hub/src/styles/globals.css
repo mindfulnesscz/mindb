@@ -1,0 +1,128 @@
+@import "tailwindcss";
+
+@theme {
+  /* ── DC Color System ──────────────────────────────────── */
+  --color-cosmos-black: #161616;
+  --color-clear-white: #FFFFFF;
+  --color-pure-black: #000000;
+
+  --color-ink-900: #161616;
+  --color-ink-800: #242424;
+  --color-ink-700: #343434;
+  --color-ink-600: #494949;
+  --color-gray-500: #6B6B6B;
+  --color-gray-400: #969696;
+  --color-gray-300: #C4C4C4;
+  --color-gray-200: #E2E2E2;
+  --color-gray-150: #ECECEC;
+  --color-gray-100: #F4F4F2;
+
+  /* Semantic */
+  --color-bg: #FFFFFF;
+  --color-surface: #FAFAF9;
+  --color-surface-sunken: #F4F4F2;
+  --color-text: #161616;
+  --color-text-muted: #6B6B6B;
+  --color-text-subtle: #969696;
+  --color-border: #E2E2E2;
+  --color-border-strong: #161616;
+  --color-hairline: #ECECEC;
+
+  /* Per-client accents */
+  --color-accent-meridian: #2E6E4E;
+  --color-accent-northwind: #2B5BD7;
+  --color-accent-volta: #B8472D;
+
+  /* Signal */
+  --color-signal-error: #C23B3B;
+  --color-signal-success: #2E7D55;
+  --color-signal-warn: #B5871A;
+  --color-signal-info: #2B5BD7;
+
+  /* ── Typography ───────────────────────────────────────── */
+  --font-family-serif: "Minion Pro", Georgia, "Times New Roman", serif;
+  --font-family-sans: "Commissioner", system-ui, -apple-system, sans-serif;
+
+  --font-weight-display: 500;
+
+  --letter-spacing-display: -0.02em;
+  --letter-spacing-tight: -0.01em;
+  --letter-spacing-label: 0.12em;
+  --letter-spacing-eyebrow: 0.08em;
+
+  --line-height-display: 0.965;
+  --line-height-tight: 1.02;
+  --line-height-snug: 1.12;
+
+  /* ── Shadows ──────────────────────────────────────────── */
+  --shadow-stamp: 5px 5px 0 #161616;
+  --shadow-stamp-sm: 3px 3px 0 #161616;
+  --shadow-stamp-card: 4px 4px 0 #161616;
+
+  /* ── Radii ────────────────────────────────────────────── */
+  --radius-none: 0;
+  --radius-chip: 2px;
+  --radius-sm: 3px;
+  --radius-md: 6px;
+  --radius-pill: 999px;
+
+  /* ── Motion ───────────────────────────────────────────── */
+  --duration-fast: 120ms;
+  --duration-base: 220ms;
+  --duration-slow: 420ms;
+
+  --ease-dc: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-dc-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+/* ── Fonts ──────────────────────────────────────────────── */
+@font-face {
+  font-family: "Commissioner";
+  src: url("/fonts/Commissioner-VariableFont_FLAR,VOLM,slnt,wght.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Minion Pro";
+  src: url("/fonts/Minion Pro Medium.ttf") format("truetype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ── Base ───────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-family-sans);
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Keyframes ──────────────────────────────────────────── */
+@keyframes dc-drawer-in {
+  from { transform: translateX(100%); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+@keyframes dc-rise {
+  from { transform: translateY(8px); opacity: 0; }
+  to   { transform: translateY(0);   opacity: 1; }
+}
+
+@keyframes dc-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
