@@ -1,8 +1,8 @@
-# DC Hub
+# DC Hub Desktop
 
-Desktop app + web portal for the DC digital asset management pipeline. Processes, versions, distributes, and syncs marketing assets across cloud storage and a Supabase DAM backend.
+Tauri 2 desktop app for the DC Hub asset pipeline (see the [monorepo README](../README.md) for the product overview). Processes, versions, distributes, and syncs marketing assets across cloud storage and a Supabase DAM backend.
 
-See [CHANGELOG.md](../CHANGELOG.md) at the monorepo root for full version history, and [VERSIONING.md](../VERSIONING.md) for the unified version workflow.
+Version history lives in the root [CHANGELOG.md](../CHANGELOG.md); the version workflow in [VERSIONING.md](../VERSIONING.md).
 
 ---
 

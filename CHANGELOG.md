@@ -34,10 +34,13 @@ Folder-based stable identity, CDN originals, and a major R2 sync correctness/per
 - **Old versions uploading to CDN**: version files left in OUT all mapped to the asset's single version-stable key and overwrote each other every run. Both CDN steps now upload only the highest version per base+ext (per directory), logged as `⊘ N older version file(s) excluded from CDN`
 - **Version bumps splitting identity**: `resolveChildId` gained a version-lineage tier (filename → content-hash → version-stripped base+ext → new), so a version bump keeps its asset's child id, DB row, feedback, and CDN key
 - CDN upload logs now show the destination object key (`✓ file.pdf → originals/…/c2.pdf`)
+- **Web portal download button did nothing**: the handler silently returned when `downloadUrl` was empty (see the URL-wipe fix above). It now fetches the file to a blob so the browser's save dialog works for cross-origin CDN URLs, falls back to opening the URL directly, and reports when an asset has no published file (`web/apps/client-hub/src/lib/assetActions.ts`). R2 bucket CORS (`GET`/`HEAD` from `*`) configured in Cloudflare to enable the blob path
 
 ### Changed
 
-- Version unified at **2.2.0** across `package.json`, `tauri.conf.json`, and `Cargo.toml` (previously 0.1.0 / 2.0.0 / 0.1.0)
+- Repos merged into the **mindb monorepo** (`desktop/` + `web/` + `docs/`, histories preserved) with one canonical version at the root — `scripts/version.mjs` propagates it to every manifest, CI enforces consistency (previously desktop alone disagreed with itself: 0.1.0 / 2.0.0 / 0.1.0 / 2.1.0)
+- `docs/pages/pipeline.mdx` — CDN upload section rewritten for the new behavior: highest-version-only eligibility, manifest/cache skip mechanics, per-file stable-identity keys, guarded stale-sibling cleanup
+- This file is the **single changelog** for all parts (desktop, web, docs); the short-lived per-part changelogs were folded in here
 
 ---
 

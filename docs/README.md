@@ -1,8 +1,6 @@
 # DC Hub Documentation
 
-Documentation site for **DC Hub** — a local-to-cloud digital asset publishing system. The desktop application ([dc-hub](https://github.com/mindfulnesscz/dc-hub)) discovers and transforms creative files, publishes binaries to Cloudflare R2 and optional cloud drives, and synchronizes metadata to Supabase. The web portal ([dc-hub-front](https://github.com/mindfulnesscz/dc-hub-front)) reads that metadata and presents role-aware client galleries, feedback, downloads, and administration.
-
-These pages describe what the current source code actually does — including ordering, skip rules, failure boundaries, security implications, and known limitations.
+Documentation site for DC Hub (see the [monorepo README](../README.md) for the product overview). These pages describe what the current source code actually does — including ordering, skip rules, failure boundaries, security implications, and known limitations.
 
 Built with [Nextra](https://nextra.site/) (Next.js).
 
@@ -32,5 +30,5 @@ Start at `pages/index.mdx` for the reading paths per role (operator, developer, 
 
 ## Conventions
 
-- Docs track **actual code behavior**, not intent — when the pipeline changes, the relevant page changes in the same breath (see `CHANGELOG.md`).
-- Version references follow the desktop app's version (currently 2.2.0).
+- Docs track **actual code behavior**, not intent — when the pipeline changes, the relevant page changes in the same breath (logged in the root [CHANGELOG.md](../CHANGELOG.md)).
+- Version references follow the repo's single canonical version (see [VERSIONING.md](../VERSIONING.md)).
