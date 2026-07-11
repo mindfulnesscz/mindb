@@ -1,0 +1,23 @@
+# Pipeline lifecycle
+
+## Actual execution order
+
+`runPipeline` performs one scan, optionally resolves stable CDN identities, then runs:
+
+1. Local thumbnail generation
+2. R2 thumbnail upload (only when thumbnails and R2 are enabled)
+3. R2 original upload (independent `doCdnOriginals` toggle)
+4. Package distribution/collection
+5. Local target publishing
+6. Cloud export (`doFlatExport` in settings)
+7. Obsidian note generation
+
+The calling UI subsequently runs Supabase asset/tag synchronization and version-history synchronization when configured. Consequently, the numbered labels visible in the interface are conceptual tasks, not a complete statement of every automatic phase.
+
+## Failure behavior
+
+Most file jobs catch their own error, increment `stats.errors`, and continue. A stage-level exception reaches the outer catch and prevents later stages inside `runPipeline`; metadata sync behavior then depends on the caller. There is no cross-provider rollback. If R2 succeeds and Google Drive fails, the R2 object remains.
+
+Progress is stage-local and can jump or reset in ways that do not represent whole-run elapsed time. Completion with `skipped > 0` is labelled “completed with issues,” although many skips are expected and harmless.
+
+See [Scanning](/desktop/scanning), [Safe reruns](/operations/safe-reruns), and [Logs](/desktop/logs).

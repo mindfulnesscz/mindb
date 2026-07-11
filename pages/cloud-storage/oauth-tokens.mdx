@@ -1,0 +1,13 @@
+# OAuth and token lifecycle
+
+Access tokens authorize provider API calls; refresh tokens obtain new access tokens without repeating consent. DC Hub stores tokens with the local client record. Cloud destination definitions can be synchronized without tokens—the service strips tokens before saving definitions to Supabase—so credentials remain workstation-local in the intended design.
+
+Status is purely time-based: no token, fresh, expiring within one hour, or expired. Google access tokens typically have a one-hour lifetime, so “Expires soon” can appear immediately. The pipeline filters for the presence of an access-token string, not current expiry, and does **not** automatically refresh before upload. Use Refresh token in settings before a run.
+
+Refresh behavior:
+
+- Dropbox: refresh-token POST with app key.
+- OneDrive: native refresh call with client ID and tenant authority; Microsoft may rotate the refresh token.
+- Google: token POST with client ID, client secret, and refresh token.
+
+Revocation, password/policy changes, consent removal, Testing-mode expiry, or missing offline consent can invalidate refresh tokens. A failed refresh requires reconnecting. Protect client configuration backups because they may contain live provider, R2, and service-role secrets.

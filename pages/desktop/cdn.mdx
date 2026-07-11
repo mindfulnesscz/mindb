@@ -1,0 +1,154 @@
+# Cloudflare R2 setup and publishing
+
+DC Hub uses Cloudflare R2 as the public CDN for thumbnails and, when enabled, original files. Configure one bucket and one restricted S3 credential for each client.
+
+> R2 links are public bearer links. Anyone who knows a URL can download its object. Do not use this setup for confidential assets without adding a private delivery layer. See [Cloud security](/cloud-storage/security).
+
+## Before you start
+
+You need:
+
+- a Cloudflare account with R2 enabled;
+- a domain managed in the same Cloudflare account, such as `example.com`;
+- a production CDN hostname, such as `cdn.example.com`;
+- the production web portal origin, such as `https://hub.example.com`.
+
+The bucket name, hostname, and credentials are configured per active client in **DC Hub → Settings → CDN — Cloudflare R2**.
+
+## 1. Create the bucket
+
+1. Open **Cloudflare Dashboard → R2 object storage**.
+2. Select **Create bucket**.
+3. Give it a client-specific name, for example `dc-hub-ess`.
+4. Select the appropriate location or jurisdiction and create the bucket.
+
+Bucket names must be 3–63 characters and use only lowercase letters, numbers, and hyphens. Keep the exact bucket name for the DC Hub settings.
+
+## 2. Connect a public custom domain
+
+1. Open the new bucket and select **Settings**.
+2. Under **Custom Domains**, select **Add**.
+3. Enter the CDN hostname, for example `cdn.example.com`.
+4. Review the DNS record and select **Connect Domain**.
+5. Wait until its status changes from **Initializing** to **Active**.
+6. Leave the `r2.dev` development URL disabled in production.
+
+The domain must belong to a zone in the same Cloudflare account. A custom domain is preferred over `r2.dev`, which is intended for development and is rate-limited.
+
+Your **Public domain** setting is the origin only, without a path or trailing slash:
+
+```text
+https://cdn.example.com
+```
+
+Do not enter the S3 endpoint here. The public domain is used to construct browser-facing asset URLs such as `https://cdn.example.com/thumbnails/...`.
+
+## 3. Configure browser CORS
+
+The portal downloads files by fetching the public CDN URL and converting the response to a browser download. The R2 bucket must therefore allow cross-origin `GET` and `HEAD` requests.
+
+1. In the bucket, select **Settings**.
+2. Find **CORS Policy** and select **Add CORS policy** or **Edit**.
+3. Open the JSON editor and enter this policy:
+
+```json
+[
+  {
+    "AllowedOrigins": ["*"],
+    "AllowedMethods": ["GET", "HEAD"]
+  }
+]
+```
+
+4. Save the policy. Propagation can take approximately 30 seconds.
+
+The result should show `*` under **Allowed Origins** and `GET` and `HEAD` under **Allowed Methods**. The bucket is already fully public through its custom domain, so allowing all browser origins does not expose objects that were otherwise private. CORS controls which browser scripts may read the public responses; it is not an authentication or bucket-privacy mechanism.
+
+The current bucket-scoped R2 token has object-level permissions, so DC Hub cannot change the bucket CORS policy through the S3 API. An administrator must perform this step in the Cloudflare dashboard.
+
+Until CORS is configured, the portal's cross-origin `fetch` fails. The download action then falls back to opening the public asset URL in a new browser tab instead of presenting a Save dialog.
+
+If CORS was changed after objects were already cached on the custom domain, purge that hostname from **Caching → Configuration → Purge Cache** so cached responses receive the new headers.
+
+## 4. Create restricted S3 credentials
+
+1. Return to **R2 object storage → Overview**.
+2. Under **Account Details**, select **Manage** next to **API Tokens**.
+3. Create an account or user R2 API token.
+4. Choose **Object Read & Write**.
+5. Restrict the token to the bucket created above.
+6. Create the token.
+7. Immediately copy both **Access Key ID** and **Secret Access Key**. Cloudflare shows the secret only once.
+8. Copy the S3 endpoint shown by Cloudflare.
+
+DC Hub needs read, write, list, and delete object operations for hash checks, uploads, inventory, and stale-object cleanup. It does not need an account-wide Admin token. The general Cloudflare API token beginning with `cfat_` is not used by the application.
+
+The normal endpoint is:
+
+```text
+https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+```
+
+Use the jurisdiction-specific endpoint for a jurisdictional bucket:
+
+```text
+EU:      https://<ACCOUNT_ID>.eu.r2.cloudflarestorage.com
+FedRAMP: https://<ACCOUNT_ID>.fedramp.r2.cloudflarestorage.com
+```
+
+Do not add the bucket name or a trailing slash to the endpoint.
+
+## 5. Fill in DC Hub Settings
+
+Select the intended client first, then open **Settings → CDN — Cloudflare R2** and enter:
+
+| DC Hub field | Value | Example |
+|---|---|---|
+| **R2 Endpoint** | S3 API endpoint for the bucket jurisdiction | `https://abc123.r2.cloudflarestorage.com` |
+| **Bucket name** | Exact R2 bucket name | `dc-hub-ess` |
+| **Public domain** | Active custom-domain origin, with no trailing slash | `https://cdn.example.com` |
+| **Access Key ID** | S3 Access Key ID from the R2 token result | `0123…` |
+| **Secret Access Key** | S3 Secret Access Key shown once | `abcd…` |
+
+Move out of each field to persist its value, then select **Test connection**. A successful test proves that the endpoint, credential, and bucket support the required authenticated R2 operations. It does not verify the custom domain or CORS policy.
+
+Credentials are stored on the local machine for the active client. Never put them in web environment variables, screenshots, support tickets, or source control.
+
+## 6. Verify public delivery
+
+1. Enable **Generate thumbnails** or **Upload originals to CDN** in Settings.
+2. Run the pipeline against a small test asset.
+3. Confirm that R2 contains a key beneath `thumbnails/` or `originals/`.
+4. Open its `https://cdn.example.com/...` URL in a private browser window.
+5. Download the asset from the portal and confirm that the browser presents a file download instead of opening the asset in a new tab.
+
+If the R2 connection test passes but the public URL returns an error, check the custom-domain status and the **Public domain** value. If the URL opens directly but the download opens a new tab, confirm that the bucket policy allows `GET` and `HEAD` from `*`, then check for stale cached CORS headers.
+
+## How publishing works
+
+Thumbnail upload runs only when thumbnail generation is enabled and R2 configuration is complete. Original upload has its own toggle and can run without thumbnail generation. Both call native Rust code, which reads the file, calculates SHA-256, performs a signed HEAD request, and compares `x-amz-meta-sha256`.
+
+If hashes match, R2 returns a skip without PUT. If the object is absent, lacks legacy metadata, or has different bytes, it is uploaded and the hash metadata is stored. This correctly handles a new version reusing a version-stable key.
+
+## Object keys
+
+| Identity mode | Thumbnail | Original |
+|---|---|---|
+| Migrated package | `thumbnails/<stableId>/<childId>.webp` | `originals/<stableId>/<childId><ext>` |
+| Legacy/fallback | `thumbnails/<full-stem>-thumb.webp` | `originals/<version-stripped-shortcode><ext>` |
+
+After an original upload, a best-effort listing removes sibling objects with the same key prefix but a stale extension. A full `reconcileCdn` implementation exists but is not wired to a current UI action; do not assume whole-bucket orphan cleanup occurs automatically.
+
+Thumbnail upload also has a database-inventory shortcut: if an existing URL is already mapped by stem/shortcode, it can skip contacting R2. That shortcut is separate from Rust’s content-hash verification and means thumbnails and originals do not have identical revalidation behavior.
+
+## Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| **Test connection fails** | Exact bucket name, correct jurisdiction endpoint, S3 keys rather than a `cfat_…` token, and bucket-scoped Object Read & Write permission |
+| **Public URL is 404/403** | Custom domain is Active, the object key exists, and Public domain has no path |
+| **Download opens in a new tab** | CORS allows `GET` and `HEAD` from `*`, propagation has completed, and the custom-domain cache was purged after a policy change |
+| **Uploads work but cleanup fails** | Token has Object Read & Write permission, including list and delete access |
+| **Unexpected URL such as `//thumbnails`** | Remove the trailing slash from Public domain |
+
+For Cloudflare’s current dashboard instructions, see [Create an R2 bucket](https://developers.cloudflare.com/r2/buckets/create-buckets/), [R2 authentication](https://developers.cloudflare.com/r2/api/tokens/), [Public buckets and custom domains](https://developers.cloudflare.com/r2/buckets/public-buckets/), and [Configure CORS](https://developers.cloudflare.com/r2/buckets/cors/).

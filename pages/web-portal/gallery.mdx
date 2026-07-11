@@ -1,0 +1,9 @@
+# Gallery and filtering
+
+Top-level asset queries constrain `client_id`, hide children (`parent_id`) and stable variants (`variant_of`), and order by `updated_at` descending. Archived assets are hidden by default. Disconnected assets are hidden from non-staff but can remain visible to editors/admins. An explicit status filter overrides those defaults.
+
+Search splits text into words and applies one `ilike(name)` condition per word. Status, permission, and latest filters run in Postgres. Entity, angle, and format filters run client-side after coercing array values from native arrays, JSON strings, or Postgres array literals.
+
+Stats are fetched separately from `asset_stats`, then child and variant counts require two additional queries. This is simple and tolerant of schema variations, but large result sets transfer more rows than fully server-side filtering would.
+
+Permission helpers should filter or disable UI according to role, while RLS protects direct requests. See [Authorization](/web-portal/permissions).

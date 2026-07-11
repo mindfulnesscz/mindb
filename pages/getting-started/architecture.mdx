@@ -1,0 +1,20 @@
+# Architecture
+
+## Components and trust boundaries
+
+| Component | Runs where | Credentials | Responsibility |
+|---|---|---|---|
+| Desktop React UI | Tauri webview | Local client configuration | Settings, destination management, run controls, logs |
+| Desktop Rust backend | Native process | Receives secrets per command | Filesystem-heavy thumbnail work, R2 signing, Dropbox binary upload, Microsoft device-code calls |
+| Supabase | Hosted Postgres/Auth/PostgREST | Desktop service key; browser anon/session token | Metadata, profiles, roles, feedback, events |
+| Cloudflare R2 | Object storage/CDN | Desktop S3-compatible keys | Public thumbnails and current originals |
+| Dropbox/OneDrive/Drive | Provider APIs | OAuth access/refresh tokens | Optional external delivery copies and share links |
+| Web portal | Browser | Supabase anon key + user session | Galleries, downloads, feedback, client/admin UI |
+
+The desktop is privileged. Its Supabase **service-role key bypasses Row Level Security** and its provider/R2 credentials can write client assets. The web app must only receive the anon key; the signed-in session and database policies are its security boundary.
+
+## Control flow
+
+`PipelineView` builds a run context from the active client, global settings, vocabulary, selected destinations, and connection configuration. `runPipeline` scans once and executes enabled stages in a fixed order. After it returns, the UI performs Supabase and version-history synchronization. This split matters: a completed local pipeline does not by itself prove metadata sync succeeded.
+
+Continue with [Pipeline lifecycle](/desktop/pipeline-lifecycle), [Supabase synchronization](/data-model/sync), and [Portal architecture](/web-portal/overview).

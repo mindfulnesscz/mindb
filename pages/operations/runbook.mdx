@@ -1,0 +1,16 @@
+# Publishing runbook
+
+## Before the run
+
+1. Confirm active client and source path; check `OUT`, package prefix, and exclusion mode.
+2. Refresh cloud tokens showing expiring/expired. Verify R2 and Supabase configuration.
+3. Review stage toggles and selected destinations. Use dry run for local copy behavior when appropriate; do not assume every network stage honors dry run.
+4. Spot-check filenames, versions, and stable manifests. Ensure no one is simultaneously renaming packages.
+
+## During the run
+
+Read each section independently. A local green thumbnail is not a network result. Let per-file errors finish so the final list is complete; avoid concurrent runs against the same source/client because manifests, callback ports, and destinations can race.
+
+## Verification
+
+Sample at least one unchanged asset, changed asset, new asset, and removed asset. Verify local sidecar/target, R2 object/hash and public URL, provider copy/link, Supabase identity/status/URLs, portal visibility/download, and version history. Record failures by phase and rerun only after understanding provider overwrite/skip behavior.

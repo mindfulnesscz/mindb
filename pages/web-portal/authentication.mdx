@@ -1,0 +1,9 @@
+# Web authentication
+
+DC Hub uses Supabase email OTP/magic links. Before sending a link, `check_email_auth` categorizes an address as staff, returning, whitelisted, or unknown. Root staff sign-in and client-portal sign-in use this result differently; unknown portal users can submit profile metadata and portal client ID in auth user metadata.
+
+On first authentication, the database trigger creates the profile, checks the email domain against client whitelists, and otherwise uses the portal client ID fallback. Subsequent logins do not rerun first-user assignment automatically.
+
+The browser asks Supabase to redirect to the current origin or supplied portal URL. Production Site URL and allowed redirects must include every deployed origin/path. Magic links are short-lived and browser/session handling can affect whether they open in the expected context.
+
+Security note: domain whitelisting is automatic membership, not proof of a particular person’s authorization beyond control of that domain mailbox. Use narrow client domains and manual review for agencies, free-mail domains, or shared domains.

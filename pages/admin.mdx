@@ -1,0 +1,52 @@
+# Admin Dashboard
+
+Accessible at `/` for users with `editor` or `admin` role.
+
+## Access rules
+
+| Role | What they see |
+|---|---|
+| `admin` | Clients tab + Users tab |
+| `editor` | Clients tab only (no role management) |
+| `editor` with 1 client | Redirected directly to that client's portal |
+| `member` / `public` | "Staff access only" screen |
+
+## Clients tab
+
+Shows all clients as cards. Each card displays the client's badge, name, slug, website, and domain whitelist preview.
+
+- **Click a card** → navigates to that client's portal (`/:slug`)
+- **Edit button** (appears on hover) → opens the client drawer
+
+### Client drawer fields
+
+| Field | Notes |
+|---|---|
+| Name | Required |
+| Initials | Auto-derived from name, max 3 chars |
+| Brand colour | Hex colour picker |
+| Logo URL | Optional image |
+| Website | Optional |
+| Portal URL slug | Used in the portal URL — auto-derived from name, editor-adjustable |
+| Portal background | Colour, gradient string, or image URL |
+| Domain whitelist | Tag input — press Enter or comma to add a domain |
+
+### Domain whitelist behaviour
+
+Domains added here are used by the auth system at sign-in time. Anyone with a matching email domain gets `role = 'member'` and `client_id` pointing to this client automatically on first sign-in.
+
+## Users tab (admin only)
+
+Shows a table of all registered users with:
+- Avatar initials + name
+- Email address
+- Assigned client
+- Role (dropdown for all users except yourself)
+
+Changing the role dropdown saves immediately via the `update_user_role` RPC. An admin cannot change their own role.
+
+Editors can see the Users tab list (read-only) but cannot change roles.
+
+## Settings
+
+Available at `/settings` to any authenticated user. Stores the Supabase URL and anon key in `localStorage` — used when the app is running without environment variables (i.e. as a portable build).

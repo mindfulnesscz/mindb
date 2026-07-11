@@ -1,0 +1,21 @@
+# Connect OneDrive
+
+## Microsoft Entra setup
+
+1. Register an application in Microsoft Entra ID.
+2. Choose account type deliberately. For a single-tenant organization, copy its Directory (tenant) ID. For multi-tenant/personal access, `common` is supported.
+3. Under Authentication enable **Allow public client flows**; DC Hub uses device authorization and has no client secret.
+4. Add delegated Graph permissions `Files.ReadWrite`, `offline_access`, and `User.Read`; grant administrator consent if policy requires it.
+5. Enter Application client ID and tenant ID in DC Hub, set a remote folder, then Connect.
+
+## Background flow
+
+The native Rust backend posts to `/<tenant>/oauth2/v2.0/devicecode`, because Microsoft’s endpoint does not allow the Tauri webview origin through CORS. DC Hub shows the returned code/verification URL and repeatedly invokes a single native token poll. `authorization_pending` and `slow_down` return no token; success stores access/refresh tokens and expiry. Refresh also runs natively.
+
+For each export, TypeScript reads the whole local file into memory and PUTs it to `me/drive/root:/<encoded path>:/content`. That simple-upload endpoint replaces an existing path. Optional `createLink` asks for an anonymous view link; link failure currently returns no URL without failing the already-successful upload.
+
+## Tradeoffs
+
+Device code works well across browsers and lets authorization happen on another device. Overwrite semantics avoid duplicate names. Weaknesses include tenant Conditional Access, dependence on the authorizing user’s `me/drive`, anonymous-link policy restrictions, whole-file memory usage, and the Graph simple-upload size/robustness limits. The code does not implement upload sessions/chunking.
+
+`AADSTS50059` normally means a single-tenant app was called through `common`; enter the tenant GUID. Error 53003 generally indicates Conditional Access/device compliance and requires an Entra administrator.

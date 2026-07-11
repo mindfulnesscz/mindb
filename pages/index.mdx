@@ -1,0 +1,23 @@
+# DC Hub documentation
+
+DC Hub is a local-to-cloud digital asset publishing system. The **desktop application** discovers and transforms files, publishes binaries to R2 and optional cloud drives, and synchronizes metadata to Supabase. The **web portal** reads that metadata and presents role-aware client galleries, feedback, downloads, and administration.
+
+These pages describe what the current source code actually does, including ordering, skip rules, failure boundaries, security implications, and known limitations.
+
+## Start here
+
+- New operator: [First run](/getting-started/first-run) → [Publishing runbook](/operations/runbook)
+- Developer: [Architecture](/getting-started/architecture) → [Repository map](/reference/file-layout) → [Code map](/reference/code-map)
+- Cloud administrator: [Provider comparison](/cloud-storage/overview), then [Dropbox](/cloud-storage/dropbox), [OneDrive](/cloud-storage/onedrive), or [Google Drive](/cloud-storage/google-drive)
+- Pipeline diagnosis: [Pipeline lifecycle](/desktop/pipeline-lifecycle), [Logs](/desktop/logs), and [Troubleshooting](/operations/troubleshooting)
+- Portal administration: [Authentication](/web-portal/authentication), [Permissions](/web-portal/permissions), and [Administration](/web-portal/admin)
+
+## End-to-end data flow
+
+1. One scan finds publishable files under configured `OUT` folders.
+2. Optional local transformations create thumbnails, collect package files, mirror local targets, export to cloud providers, and generate Obsidian notes.
+3. R2 stores browser-facing thumbnails and originals. SHA-256 metadata prevents uploading unchanged bytes.
+4. Supabase receives asset rows, taxonomy, version history, CDN URLs, and client-role cloud links.
+5. The web app queries Supabase, filters records by client/status/role, and records comments, ratings, views, and downloads.
+
+The critical distinction is that **local generation, R2 upload, provider upload, and database synchronization are independent phases**. A green thumbnail line does not mean R2, Dropbox, OneDrive, Google Drive, or Supabase succeeded. See [How to read pipeline logs](/desktop/logs).

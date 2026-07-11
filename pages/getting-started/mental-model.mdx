@@ -1,0 +1,14 @@
+# Mental model
+
+Think of an asset as four related representations:
+
+| Representation | Example | Authority |
+|---|---|---|
+| Source file | `Pitch Deck v3.pdf` in an `OUT` tree | Creative filesystem |
+| Derived file | `Pitch Deck v3-thumb.webp` beside the source | Rebuildable local cache |
+| Published binary | `originals/<identity>.pdf` and thumbnail in R2; optional drive copies | Delivery storage |
+| Metadata row | name, tags, version, status, permissions, URLs | Supabase |
+
+They can temporarily disagree. Deleting a local thumbnail does not delete its R2 object. Uploading to Dropbox does not guarantee a Supabase row. Renaming a legacy asset can create a new identity, while a migrated stable-identity package is designed to retain its row.
+
+Use the stage-specific log section and the database/storage destination—not a generic green check—to decide what succeeded. See [Logs](/desktop/logs), [Stable identity](/desktop/identity), and [Safe reruns](/operations/safe-reruns).

@@ -1,0 +1,13 @@
+# System troubleshooting
+
+Start by locating the failing boundary: scan, local conversion, local copy, R2, provider OAuth/upload, Supabase sync, or browser/RLS.
+
+- No assets: verify exact `OUT` name, filters, `[99]`, hidden/temp names, and traversal placement.
+- Thumbnail errors: install LibreOffice, Poppler, and WebP tools; test the source directly; remove stale sidecar only when regeneration is intended.
+- Portal shows old preview: distinguish local sidecar staleness, R2 inventory shortcut, browser/CDN cache, and stale Supabase URL.
+- Asset vanished after rename: determine whether the client was truly migrated and inspect folder suffix/manifest.
+- Portal query fails: inspect browser network response, Supabase configuration, generated types, column types, and RLS.
+- Downloads fail despite visible card: check status/role helper, singular `download_url`, object existence, URL encoding, and public-domain policy.
+- Cloud failures: use [provider troubleshooting](/cloud-storage/troubleshooting).
+
+Preserve the exact section, filename, HTTP status, and response body; generic final counters lose important context.

@@ -1,0 +1,25 @@
+# Thumbnail generation
+
+## What green ✓ means
+
+A green line in the `THUMBNAILS` section means the specific local `<source-stem>-thumb.webp` did not exist when checked and the native generator returned `true` after creating it. It says nothing about R2 upload or database synchronization.
+
+Before generation, TypeScript checks candidate destination files in batches of 16. Existing files count as `exist` in the pre-filter and are not sent to Rust. Remaining jobs run eight at a time. Rust performs a second existence check, so a race or file appearing between checks produces `↷ skipped (exists)`.
+
+Therefore a wall of green lines means local sidecar thumbnails were absent—not that content changed. Common causes are a new source location, removed sidecars, renamed/versioned source stems, or a first run.
+
+## Rendering path
+
+| Source | Native conversion |
+|---|---|
+| PDF | First page via `pdftoppm`, then `cwebp` |
+| PPT/PPTX/PPTM | Headless LibreOffice to temporary PDF, first page via Poppler, then `cwebp` |
+| Raster image | Direct `cwebp` resize/encode |
+
+Width and quality are parsed from settings, with fallbacks of 320 and 70 in service code. Height preserves aspect ratio. Temporary directories are removed after conversion. Required executables are `cwebp`, `pdftoppm`, and LibreOffice for presentations.
+
+## Cache semantics and limitations
+
+Existence—not mtime or content hash—governs local regeneration. Editing `Deck v3.pdf` without changing its stem leaves an old sidecar in place. Delete the sidecar to force regeneration. Conversely, R2 uses content hashes; these are intentionally different cache layers.
+
+Next: [R2 publishing](/desktop/cdn) and [Logs](/desktop/logs).

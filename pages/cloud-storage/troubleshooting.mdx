@@ -1,0 +1,18 @@
+# Cloud connection troubleshooting
+
+| Symptom | Likely cause | Action |
+|---|---|---|
+| Cannot bind port 7623 | Another flow/process owns callback port | Close other connection flow/app and retry |
+| Callback timeout | Redirect URI mismatch, consent not completed in 3 minutes, firewall/browser issue | Verify exact URI and reconnect |
+| OAuth state mismatch | Stale/wrong callback or concurrent flow | Cancel all flows and restart one connection |
+| Destination selected but “no valid tokens” | No access-token string stored | Connect or refresh in Settings |
+| 401 during export | Expired/revoked token; pipeline did not auto-refresh | Refresh, then reconnect if refresh fails |
+| Dropbox reports skipped but bytes are old | Existence check is path-only | Remove/rename remote file, rerun |
+| OneDrive AADSTS50059 | Wrong `common` authority for single tenant | Set Directory tenant GUID |
+| OneDrive 53003 | Conditional Access/device compliance | Ask Entra admin; app code cannot bypass policy |
+| OneDrive large upload fails | Whole-file simple PUT, no upload session | Use smaller file or implement chunked upload |
+| Drive creates repeated same-name files | POST-create behavior | Clean duplicates; implement ID lookup/update for overwrite semantics |
+| Drive folder/link forbidden | Shared Drive role or Workspace sharing policy | Grant correct membership; review admin policy |
+| Google refresh token absent | Consent did not issue offline token | Revoke old grant if needed, reconnect with consent prompt |
+
+Use the provider’s own UI to verify destination ownership and permissions, then correlate the specific `CLOUD EXPORT` error. A successful R2 section is unrelated to provider authorization.

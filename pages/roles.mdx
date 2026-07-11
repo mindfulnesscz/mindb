@@ -1,0 +1,76 @@
+# Roles & Permissions
+
+## Role hierarchy
+
+```
+admin
+  └── editor
+        └── member
+              └── public (unauthenticated)
+```
+
+| Role | Who | Description |
+|---|---|---|
+| `admin` | DC Collective — owners | Full access. Can manage clients, users, assets, and promote/demote any role. |
+| `editor` | DC Collective — creatives | Can manage clients and assets. Can navigate any client portal as staff. Cannot manage admin accounts. |
+| `member` | Approved client contacts | Can browse all approved/published assets for their client portal. Can rate and comment. |
+| `public` | Unauthenticated visitors | Can view only assets marked `perm: 'public'`. No rating, no comments, no download. |
+
+## Role type (code)
+
+Defined in `web/packages/asset-library/src/types.ts`:
+
+```ts
+type Role = 'public' | 'member' | 'editor' | 'admin'
+```
+
+## Asset permission levels (separate from role)
+
+Each asset has a `perm` field controlling visibility. This is a separate concept from user role:
+
+| `perm` | Visible to |
+|---|---|
+| `public` | Everyone including unauthenticated visitors |
+| `client` | `member` and above |
+| `internal` | `editor` and `admin` only |
+
+Note: the `perm` field uses the string `'client'` (not `'member'`) — this is intentional, it is an asset visibility level not a user role name.
+
+## Permission matrix
+
+| Action | public | member | editor | admin |
+|---|---|---|---|---|
+| View public assets | ✓ | ✓ | ✓ | ✓ |
+| View client assets | — | ✓ | ✓ | ✓ |
+| View internal assets | — | — | ✓ | ✓ |
+| Download approved assets | — | ✓ | ✓ | ✓ |
+| Rate assets | — | ✓ | ✓ | ✓ |
+| Comment | — | ✓ | ✓ | ✓ |
+| See view/download counts | — | — | ✓ | ✓ |
+| Manage clients | — | — | ✓ | ✓ |
+| Manage domain whitelist | — | — | ✓ | ✓ |
+| View all users | — | — | ✓ | ✓ |
+| Change user roles | — | — | — | ✓ |
+
+## Where roles are stored
+
+Roles are stored in `profiles.role` — a `text` column in Supabase (Postgres).
+
+To manually promote a user:
+```sql
+UPDATE profiles SET role = 'editor' WHERE id = '<user-uuid>';
+```
+
+## Creating staff accounts
+
+There is no self-service sign-up for `editor` or `admin`. The flow is:
+
+1. The person signs in via the root `/` admin page
+2. A profile is auto-created with `role = 'public'`
+3. An admin promotes them via the **Users** tab in the admin dashboard (or via SQL above)
+
+## Editor portal access
+
+Editors sign in at the root `/`. If the system has only **one client**, they are automatically redirected to that client's portal. If there are multiple clients, they see the admin dashboard and choose which portal to open.
+
+Once inside a portal, editors see an admin navigation bar (not the member-facing header) and have access to all assets regardless of permission level.

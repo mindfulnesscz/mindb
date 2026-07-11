@@ -1,0 +1,16 @@
+{
+  "index": "Overview",
+  "getting-started": "Getting started",
+  "desktop": "Desktop pipeline",
+  "cloud-storage": "Cloud storage",
+  "web-portal": "Web portal",
+  "data-model": "Data and identity",
+  "operations": "Operations",
+  "reference": "Reference",
+  "roles": "Roles & permissions",
+  "auth": "Authentication",
+  "portals": "Client portals",
+  "admin": "Admin dashboard",
+  "database": "Database (legacy overview)",
+  "pipeline": "Pipeline (legacy overview)"
+}

@@ -1,0 +1,7 @@
+# Web portal architecture
+
+The web application is React/Vite with React Router and a shared asset-library package. Routes are `/` for staff landing, `/settings`, `/share/:id`, and `/:slug` for client portals. Supabase provides authentication and all persistent data.
+
+When no Supabase configuration exists, the application uses mock clients and a switchable demo role. In configured mode, `AuthProvider` restores the Supabase session and loads `profiles`; `RoleProvider` derives role/user and optionally loads the profile’s assigned client. A portal slug can explicitly set the active client for staff navigation.
+
+Service modules isolate PostgREST calls for assets, clients, comments, ratings, tags, users, and events. Client-side permission helpers control UI behavior, but database RLS must remain the authoritative security layer because browser code can be bypassed.

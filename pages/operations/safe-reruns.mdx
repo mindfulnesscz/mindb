@@ -1,0 +1,15 @@
+# Retries and idempotency
+
+| Phase | Repeat behavior |
+|---|---|
+| Local thumbnails | Existence skip; changed source with same stem may stay stale |
+| Local copy/publish | Destination-newer mtime skip, size fallback |
+| R2 originals | SHA-256 metadata skip; changed bytes overwrite stable key |
+| R2 thumbnails | May shortcut from DB inventory before hash check |
+| Dropbox | Remote path existence skip; may retain stale content |
+| OneDrive | Same path overwritten |
+| Google Drive | New file created; duplicates possible |
+| Supabase stable identity | Upsert/reconnect by stable IDs |
+| Supabase legacy identity | Rename may look like delete plus insert |
+
+There is no global exactly-once guarantee. “Safe to rerun” means each phase’s consequence is understood, not that every provider is idempotent. For a changed local thumbnail, delete the sidecar. For stale Dropbox, remove its remote path. For Drive, clean duplicate IDs/names. Never run full R2 reconciliation without first resolving the correct identity scheme.
