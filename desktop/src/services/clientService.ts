@@ -193,6 +193,10 @@ export interface LoadedClients {
 /** The main entry: DB clients for this environment + user, merged with this
  * machine's local config (adopting legacy name-keyed configs on first sight,
  * including the vocab-file re-key). */
+function normalizeName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 export async function loadClientsForEnvironment(
   env: Environment,
   role: string,
@@ -208,9 +212,15 @@ export async function loadClientsForEnvironment(
     const key = `${env.id}:${row.id}`;
     let cfg = local.entries[key];
     if (!cfg) {
-      const pendingKey = `${env.id}:${row.name.trim().toLowerCase()}`;
-      const pending = local.pendingByName[pendingKey];
-      if (pending) {
+      // Normalized match: legacy local names and DB names can differ in
+      // spacing/punctuation ("FyzioBalance" vs "Fyzio Balance").
+      const want = normalizeName(row.name);
+      const pendingKey = Object.keys(local.pendingByName).find(k => {
+        const [envPart, ...nameParts] = k.split(':');
+        return envPart === env.id && normalizeName(nameParts.join(':')) === want;
+      });
+      const pending = pendingKey ? local.pendingByName[pendingKey] : undefined;
+      if (pending && pendingKey) {
         const { legacyClientId, ...fields } = pending;
         cfg = fields;
         local.entries[key] = cfg;
