@@ -1,0 +1,22 @@
+# Connect Google Drive
+
+## Google Cloud setup
+
+1. Select a Google Cloud project and enable Drive API v3.
+2. Configure the OAuth consent screen. Use Internal for one Workspace organization; otherwise use External and add test users while the app remains in Testing.
+3. Create a **Web application** OAuth client and add `http://localhost:7623/callback` exactly.
+4. Copy client ID and client secret into DC Hub.
+5. Prefer a Shared Drive for team ownership. Copy the ID from its folder URL and grant each connecting user sufficient content permissions. Leave it blank only when personal My Drive is intended.
+6. Set a slash-separated remote folder without relying on a leading slash, then Connect.
+
+## Background flow
+
+Google authorization uses browser PKCE plus the configured client secret and a random state. Scope is the broad `drive` scope. `access_type=offline` and `prompt=consent` request a refresh token. The same three-minute localhost callback listener used by Dropbox captures the code; token exchange currently runs from the webview.
+
+On each file, DC Hub walks every remote-path segment. It searches for a matching folder beneath the current parent and creates missing folders. Shared Drive queries include `corpora=drive`, `driveId`, `includeItemsFromAllDrives`, and `supportsAllDrives`.
+
+The file is uploaded as one multipart request containing metadata and full bytes. Importantly, the current implementation always POSTs a new Drive file; it does not search for and update an existing same-name file. Repeated runs can therefore create duplicates. With link generation enabled, it adds an `anyone/reader` permission and returns `webViewLink`; the permission response is not checked before returning.
+
+## Tradeoffs
+
+Shared Drives give organization ownership and consistent destination regardless of who connects. Folder creation is convenient. Costs are broad OAuth scope, a client secret stored locally, full-file memory assembly, duplicate-name accumulation, API quota usage from repeated folder searches, and potentially public sharing. Google-native anonymous sharing may be blocked by Workspace policy.

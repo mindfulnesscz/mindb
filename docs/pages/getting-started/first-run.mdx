@@ -1,0 +1,10 @@
+# First run
+
+1. Create or select a desktop client and set its source folder. Confirm the configured `OUT` folder name matches the real tree.
+2. Configure Supabase URL, service-role key, and anon key. Never place the service-role key in the web build.
+3. Configure R2 if browser thumbnails/downloads are required. Test the connection before publishing.
+4. Optionally connect [Dropbox](/cloud-storage/dropbox), [OneDrive](/cloud-storage/onedrive), or [Google Drive](/cloud-storage/google-drive). Select destinations in the pipeline as well as enabling the cloud-export task.
+5. Review [Settings reference](/reference/settings), particularly dry run, filtering marks, version selection, thumbnail size, and enabled stages.
+6. Run a small representative package first. Verify the local thumbnail, R2 object, Supabase row, portal visibility, and provider copy independently.
+
+For production use, follow the [publishing runbook](/operations/runbook).

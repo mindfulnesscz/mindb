@@ -1,0 +1,7 @@
+# Version history
+
+The scanner treats normal files beneath `OUT` as current candidates and files under a direct `versions` subtree as historical candidates. Versions are parsed from filename suffixes such as `v3`, `v3-8`, or `v3.8`; numeric components are compared component-by-component.
+
+For duplicate current candidates, the numerically higher version becomes current and the other is moved into history in memory. Supabase synchronization marks current records `Active`, historical records `History`, missing historical files `Disconnected`, and entirely removed assets `Removed`.
+
+R2 is not the version archive: original keys intentionally omit the version, so new bytes overwrite the current delivery object. Provider drives may retain older differently named versions, but the pipeline does not guarantee archival retention. Treat the source `versions` tree and `version_history` table as the explicit history model.

@@ -1,0 +1,15 @@
+# Authorization model
+
+| Capability | public | member | editor | admin |
+|---|---:|---:|---:|---:|
+| View public permission | ✓ | ✓ | ✓ | ✓ |
+| View client permission | — | ✓ | ✓ | ✓ |
+| View internal permission | — | — | ✓ | ✓ |
+| Rate/comment/approve helper | — | ✓ | ✓ | ✓ |
+| Download | — | Approved/published | Any visible | Any visible |
+| Set status | — | — | ✓ | ✓ |
+| Control asset permission | — | — | — | ✓ |
+
+For members, `canViewAsset` additionally checks that the asset belongs to the client currently being viewed. Editors/admins can switch clients. `public` is also the fallback role while a configured user profile is missing/loading.
+
+These TypeScript checks express product behavior, not a security perimeter. Every table, view, storage URL strategy, and RPC must enforce equivalent or stricter rules in Supabase. Public R2/provider bearer URLs cannot be revoked merely by changing a database role.

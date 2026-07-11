@@ -1,0 +1,16 @@
+# Logs and diagnostics
+
+Always read the section header before interpreting a symbol.
+
+| Log | Meaning |
+|---|---|
+| `THUMBNAILS` green `✓` | A local sidecar was freshly created |
+| `THUMBNAILS` dim `↷ skipped (exists)` | Rust found the sidecar already present |
+| `CDN UPLOAD` green `✓` | R2 command returned successfully; current code logs green even when Rust content-hash-skipped the PUT |
+| `CDN ORIGINALS` green `✓` | Original URL was populated; may likewise represent a hash skip |
+| `CLOUD EXPORT` green `✓` | Provider call succeeded; Dropbox separately logs existing paths as dim skips |
+| red `✕` | That file/operation failed; sibling jobs usually continue |
+
+Counters are shared across stages. `published` can include multiple destinations, so it is not a unique-asset count. `skipped` includes benign unchanged work and contributes to “completed with issues.” CDN thumbnail summary’s “no thumb” bucket also includes inventory shortcuts, not only missing local files.
+
+For proof, inspect the target appropriate to the phase: local filesystem for generation, R2 metadata/object URL for CDN, provider UI/API for cloud export, and Supabase row for portal state.

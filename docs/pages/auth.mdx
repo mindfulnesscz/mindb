@@ -1,0 +1,73 @@
+# Authentication
+
+DC Hub uses **Supabase magic links** — no passwords anywhere in the system. Users receive a one-time email link that signs them in automatically.
+
+## Sign-in flow
+
+```
+User enters email
+      │
+      ▼
+check_email_auth RPC (anonymous call)
+      │
+      ├── 'staff'       → send link immediately  (existing admin/editor profile)
+      ├── 'returning'   → send link immediately  (existing member profile)
+      ├── 'whitelisted' → send link immediately  (email domain in client's domain_whitelist)
+      └── 'unknown'     → show profile form → send link
+                              (name, company, country, industry, GDPR consent)
+```
+
+The sign-in form is different depending on where the user accesses the app:
+- **Root `/`** — DC Hub admin sign-in. Only accepts `staff` emails; shows an error for anyone else.
+- **Portal `/:slug`** — Client portal sign-in. Accepts anyone; unknown users fill in a profile form to request access.
+
+## Portal context at sign-in
+
+When a user signs in from a client portal (`/:slug`), the portal's `client_id` is embedded in the magic link metadata. If the user is new and their email domain isn't in any domain whitelist, the trigger still assigns the correct `client_id` to their profile based on which portal they signed in from.
+
+## Profile auto-creation
+
+A Postgres trigger (`handle_new_auth_user`) fires on `auth.users` INSERT — i.e., the very first time a user signs in:
+
+1. Reads `name`, `company`, `country`, `industry` from magic link metadata (filled in by unknown users)
+2. Checks `clients.domain_whitelist` for the email domain → sets `role = 'member'` and `client_id`
+3. Falls back to `client_id` passed in the link metadata (from the portal)
+4. If neither matches → `role = 'public'`, `client_id = NULL`
+
+For returning users (subsequent sign-ins), the trigger does **not** fire — their existing profile is unchanged.
+
+## `check_email_auth` RPC
+
+Called anonymously by the sign-in modal to determine which flow to show.
+
+| Result | Meaning |
+|---|---|
+| `'staff'` | Profile exists with `role = 'editor'` or `'admin'` |
+| `'returning'` | Profile exists with `role = 'member'` or `'public'` |
+| `'whitelisted'` | No profile yet, but email domain is in a `clients.domain_whitelist` |
+| `'unknown'` | No profile, domain not whitelisted — will see the profile form |
+
+## Domain whitelist (automatic member access)
+
+Managed per-client in **Admin → Clients → Edit → Domain whitelist**.
+
+Add a domain like `essteyr.com` to the ESS client → anyone signing in with an `@essteyr.com` address automatically gets:
+- `role = 'member'`
+- `client_id` pointing to ESS
+
+No admin approval needed — access is instant on first click of the magic link.
+
+## Manual access (no domain match)
+
+For users whose email domain isn't whitelisted:
+1. They sign in via the portal and fill in the profile form
+2. Profile is created with `role = 'public'`
+3. An admin promotes them in the **Users** tab of the admin dashboard
+
+## Supabase configuration
+
+In **Authentication → URL Configuration**:
+- **Site URL**: `http://localhost:5173` (dev) / production domain
+- **Allowed Redirect URLs**: `http://localhost:5173/**` (dev) / `https://yourdomain.com/**` (prod)
+
+Without the redirect URLs, clicking the magic link shows "Email link is invalid or has expired".

@@ -1,0 +1,5 @@
+# Data model overview
+
+Core records are `clients`, `profiles`, `assets`, `tags`, `ratings`, `comments`, `asset_events`, approvals, and version history. The repository’s generated web database types and live Supabase schema/migrations are the final reference; older standalone docs may lag newer fields such as `stable_id`, `child_id`, `variant_of`, `download_urls`, and stats views.
+
+`clients` define portal identity and domain assignment. `profiles` map auth users to roles and optional clients. `assets` are delivery records containing taxonomy, lifecycle status, visibility, identity relationships, and URLs. Feedback/events reference asset IDs, which is why stable identity matters.

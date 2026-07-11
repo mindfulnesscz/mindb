@@ -1,0 +1,9 @@
+# Scanning and file selection
+
+The pipeline recursively searches the source tree for directories whose name case-insensitively equals the configured `outFolder` (default `[03] OUT`). Once an `OUT` exists at a level, traversal focuses on that publishing branch. Files inside nested folders below `OUT` are included, except the `versions` subtree, hidden entries, thumbnail names, excluded entries, and temporary Office files.
+
+A publishable item must be a non-hidden file with a dot in its name and must not begin with `~$`. Names containing `[99]` are always skipped. In blacklist mode, names containing `excludeMark` are skipped; in whitelist mode, names lacking `includeMark` are skipped.
+
+The resulting absolute-path list is created once and reused by thumbnails, R2, cloud export, and later synchronization. A file created or moved into `OUT` after that scan is not discovered during the same run.
+
+Thumbnail eligibility is narrower than publishability: PPT/PPTX/PPTM, PDF, PNG, JPEG, WebP, GIF, TIFF. Other assets can still be uploaded as originals and synchronized.

@@ -1,0 +1,7 @@
+# Configuration and deployment
+
+The web app reads Supabase URL/anon key from environment or portable localStorage settings. The desktop holds privileged per-client credentials locally. Configure Supabase Auth Site URL and allowed redirect patterns for every production/dev origin.
+
+Desktop workstations need filesystem permissions plus native dependencies for requested thumbnail formats. Port 7623 must be available for Dropbox/Google callbacks. OneDrive device flow needs outbound HTTPS but no callback listener.
+
+R2 requires endpoint, bucket, access key, secret, and public domain. Ensure CORS/caching and public access match the portal design. Deploy database migrations/RLS/RPC changes before UI features that depend on them, and regenerate database types when schema changes.

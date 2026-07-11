@@ -1,0 +1,7 @@
+# Asset details and feedback
+
+Asset detail loads a single asset, then legacy children and stable-identity variants for grouped presentation. Stored CDN URLs may contain spaces; the adapter applies `encodeURI` before browser use.
+
+Members can download only `approved` or `published` assets; staff can download any visible status. The current primary Download action uses singular R2 `download_url`. Provider `download_urls` are synchronized for future/multi-source use but are not the primary download picker today.
+
+Ratings are per user/asset and are upserted. Comments load author profile data, support creation, and enforce deletion rules through UI/database policies. View/download events are separate records and summary counts are staff-oriented. None of these feedback records lives in the source filesystem; stable asset identity is essential to preserve them across renames.

@@ -1,0 +1,15 @@
+# Code map
+
+| Question | Primary implementation |
+|---|---|
+| Which files are scanned and in what order? | `desktop/src/services/pipelineService.ts` (`scanAllAssets`, `runPipeline`) |
+| Why was a thumbnail created/skipped? | `runThumbnails`; Rust `generate_thumbnail` in `src-tauri/src/lib.rs` |
+| How does R2 deduplicate? | `src-tauri/src/r2.rs` (`upload_to_r2`) |
+| How do cloud OAuth/uploads work? | `desktop/src/services/cloudService.ts`, `src-tauri/src/cloud.rs` |
+| How are stable IDs/manifests resolved? | `desktop/src/services/supabaseService.ts` (`resolveChildId`, `resolveCdnIdentity`) |
+| How are assets synchronized? | `exportAssetsToSupabase`, `syncTagsFromVocabulary`, `syncVersionHistory` |
+| What can each web role do? | `web/packages/asset-library/src/permissions.ts` plus Supabase RLS/RPCs |
+| How are gallery rows adapted? | `web/apps/client-hub/src/services/assetService.ts` |
+| How does magic-link state load? | `web/apps/client-hub/src/context/AuthContext.tsx` |
+
+Line numbers change; search by symbol. Comments are useful but executable branches and database policy remain authoritative.

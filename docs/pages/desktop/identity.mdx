@@ -1,0 +1,9 @@
+# Stable asset identity
+
+Legacy matching uses a version-stripped filename shortcode. Rename the logical asset and the pipeline may interpret the old row as removed and the new name as a new asset, breaking continuity for comments, ratings, and history.
+
+Migrated clients instead use an eight-character stable ID on the package folder and a `.dchub.json` manifest that maps filenames to stable child IDs. Resolution first uses a filename match and can use SHA-256 content matching when a file was renamed. New child IDs are allocated without reusing an existing manifest identity.
+
+The same resolved pair keys R2 and Supabase. CDN resolution writes the manifest before metadata sync, so the later sync reads the recorded mapping rather than independently guessing again.
+
+For migrated clients, missing database assets are marked `disconnected`; legacy cleanup can hard-delete stale rows. Migration is therefore a data-lifecycle boundary, not a cosmetic folder rename. Back up data, run the provided migration script deliberately, and verify manifests and portal continuity before setting `identityMigrated=true`.

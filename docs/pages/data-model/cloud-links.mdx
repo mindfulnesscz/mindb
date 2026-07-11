@@ -1,0 +1,12 @@
+# CDN and cloud URLs
+
+| Field | Produced by | Current consumer |
+|---|---|---|
+| `thumbnail_url` | R2 thumbnail stage | Gallery/detail preview |
+| `download_url` | R2 original stage | Primary web Download action |
+| `download_key` | Pipeline/R2 sync | Stale-object tracking and cleanup |
+| `download_urls` | Client-role provider destinations with link generation | Stored for alternate delivery/future UI |
+
+Provider links are indexed by destination name per asset during a run. An internal destination’s link is deliberately omitted. Literal spaces may be stored in CDN URLs and encoded at web adaptation time.
+
+Database fields control discoverability but not public-object access. Rotate/remove the underlying R2 object or provider permission when a bearer link must stop working.

@@ -1,0 +1,21 @@
+# Connect Dropbox
+
+## Provider setup
+
+1. In Dropbox App Console create a scoped-access app. Choose App Folder for least privilege or Full Dropbox only if the configured remote location requires it.
+2. Grant `account_info.read`, `files.content.write`, `files.metadata.read`, `sharing.read`, and `sharing.write`.
+3. Add redirect URI `http://localhost:7623/callback` exactly.
+4. Copy the App key into the destination’s Client/App key field. No client secret is used.
+5. Set a remote path such as `/DC Hub/Client/Exports`, enable the destination, and click Connect.
+
+## Background flow
+
+The app generates a random PKCE verifier/challenge and CSRF `state`, starts a native listener on `127.0.0.1:7623`, then opens Dropbox authorization in the system browser. After consent, the listener returns the callback query. The app verifies `state`, exchanges the code with the verifier, and stores access token, refresh token, and expiry in local client configuration. The listener times out after three minutes and only one process can bind the port.
+
+During export, Rust first calls `files/get_metadata`. HTTP 409 is treated as “missing”; an existing path is skipped without comparing bytes, mtime, size, or hash. If link generation is enabled, an existing link is reused or a public one is created. New content uses `files/upload` with overwrite mode, but that branch is only reached when metadata says the path is absent.
+
+## Strengths and weaknesses
+
+PKCE avoids distributing a secret and native upload handles large binary bodies better than the webview. Offline refresh tokens support later refresh. However, path-existence skipping can preserve stale bytes after an in-place source edit or version that translates to the same remote name. Delete/rename the remote item when a forced replacement is required. Public links can outlive portal permissions.
+
+See [OAuth tokens](/cloud-storage/oauth-tokens) and [Troubleshooting](/cloud-storage/troubleshooting).

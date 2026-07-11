@@ -1,0 +1,7 @@
+# Taxonomy
+
+Vocabulary dimensions include entities, formats, angles, and additional tags, with hierarchy and ordering. The desktop parses filename tokens, can inherit/aggregate metadata across grouped assets, and synchronizes tags so the portal can render nested filters.
+
+The web tag service loads global tags plus client-scoped tags and builds trees by `parent_id`. Filtering uses asset arrays, not tag joins. A taxonomy rename therefore requires considering vocabulary parsing, existing asset arrays, synchronized tag rows, filter URLs/state, and stable identity.
+
+Avoid ambiguous tokens and deleting live parent tags without a migration plan. Test representative filenames before rolling out vocabulary changes.

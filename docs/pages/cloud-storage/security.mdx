@@ -1,0 +1,9 @@
+# Cloud security and sharing
+
+Use least-privilege provider apps and dedicated organizational destinations. A destination marked `internal` prevents its collected link from being written to client-facing metadata, but it does not change provider ACLs. Conversely, a `client` label does not itself grant provider access; link generation requests public/anonymous sharing.
+
+R2 public URLs and anonymous provider links are bearer links: anyone who obtains one may retain access independently of later portal role changes. For confidential assets, use a private bucket with signed delivery or provider organization-scoped links; those mechanisms are not implemented by the current portal.
+
+Secrets stored locally include Supabase service-role key, R2 keys, Google client secret, and OAuth tokens. Restrict OS account access, disk backups, logs/screenshots, and exported client bundles. Rotate secrets after suspected exposure. Never copy the service-role key into web environment variables or browser storage.
+
+OAuth’s `state` and PKCE defend callback substitution/code interception. The localhost listener accepts one callback and times out, but users should not run simultaneous Dropbox/Google connection flows because they compete for port 7623.

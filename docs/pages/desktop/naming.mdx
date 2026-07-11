@@ -1,0 +1,7 @@
+# Naming and vocabulary
+
+Filenames are both user-facing names and a metadata transport. `filenameTranslator` builds lookup context from vocabulary, parses recognized tokens and versions, and produces export-safe names. `parseAssetForSupabase` derives shortcode, display name, entity/format/angle/tag arrays, and version information.
+
+This coupling is powerful: taxonomy can be inferred without a separate form. Its weakness is that a naming change can alter identity for legacy clients. Vocabulary order and token ambiguity can also change which metadata is inferred.
+
+The desktop vocabulary is stored per client when available and seeded from bundled JSON. Synchronization writes a hierarchical `tags` representation for the portal. Review [Taxonomy](/data-model/taxonomy) and [Stable identity](/desktop/identity) before changing conventions on a live client.

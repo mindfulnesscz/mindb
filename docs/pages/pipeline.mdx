@@ -1,0 +1,83 @@
+# Asset Pipeline
+
+The asset pipeline is a **desktop application** (`desktop`) built with [Tauri 2](https://tauri.app/) — a Rust backend with a React/TypeScript frontend. It runs locally on a DC Collective machine and is responsible for processing creative files and publishing them to the platform.
+
+The desktop app uses Supabase's **service role key**, which bypasses Row Level Security. This key is stored in the local app config and is never exposed to browsers or clients.
+
+## Steps, in run order
+
+Steps 1–5 are numbered checkboxes in the app's **Tasks** panel and can each be switched on/off per run. **Scan**, **Supabase sync**, and **Version history sync** aren't checkboxes — they run automatically whenever a source folder / Supabase config is present.
+
+| Step | What it does | |
+|---|---|---|
+| Scan | Walks the source folder for every file sitting in an `OUT` folder. | [→](#scan) |
+| 1 — Generate thumbnails | Renders a WebP thumbnail per asset via the Rust backend. | [→](#1--generate-thumbnails) |
+| CDN upload | Uploads thumbnails + originals to Cloudflare R2. Runs only if thumbnails are on and R2 is configured. | [→](#cdn-upload) |
+| 2 — Distribute packages | Pulls loose, non-package sibling files into their package folder, applying the naming convention. | [→](#2--distribute-packages) |
+| 3 — Export to destinations | Mirrors the `OUT` tree into a local folder (e.g. a SharePoint-synced directory), flags removed files. | [→](#3--export-to-destinations) |
+| 4 — Cloud export | Flat-uploads files to Dropbox / OneDrive / Google Drive via OAuth, generates sharing links. | [→](#4--cloud-export) |
+| 5 — Publish to DAM | Generates the Obsidian vault's markdown notes. | [→](#5--publish-to-dam) |
+| Supabase sync | Upserts `assets` rows, marks stale ones, syncs the tag hierarchy. | [→](#supabase-sync) |
+| Version history sync | Syncs the `version_history` table from files found under `versions/`. | [→](#version-history-sync) |
+
+---
+
+### Scan
+
+`scanAllAssets` walks the configured source folder looking for folders named `OUT` (configurable — the naming convention settings default to `[03] OUT`) and collects every publishable file inside them (skipping `-thumb` files and `versions/`, which is handled separately by Version history sync). This file list feeds every step below — nothing after this point re-scans the disk.
+
+### 1 — Generate thumbnails
+
+For each collected asset, the Rust backend renders a WebP thumbnail (PPTX/PDF via LibreOffice + `pdftoppm`, images directly) at the configured width/quality. Skipped for file types that don't support thumbnailing.
+
+### CDN upload
+
+Runs only when thumbnails are enabled **and** the active destination has R2 credentials configured. Uploads each thumbnail and original file to Cloudflare R2, keyed by a `thumbnails/` or `originals/` prefix. At the start of a run, the pipeline pre-populates a `stem → CDN URL` map from existing DB records so already-uploaded assets are skipped — gallery children (shortcodes containing `|`) are deliberately excluded from that pre-population so the first child image is always re-verified.
+
+**Only the highest version uploads.** When several version files of one asset sit in the same folder (`v0-3-7` next to `v0-3-8`), only the highest per base+extension is eligible — they all share one version-stable object key, so uploading more than one would make them overwrite each other every run. The log reports `⊘ N older version file(s) excluded from CDN`.
+
+**Skip mechanics (fast path first):**
+1. One `ListObjectsV2` sweep per prefix at phase start builds an existence manifest — no per-file HEAD/LIST requests.
+2. A local upload cache (mtime + size + sha256, per machine) skips unchanged files with zero network calls; the cached public URL is still recorded so the Supabase sync never sees a gap.
+3. On a cache miss, the Rust backend hashes the file and compares against the caller's cached hash or the object's `x-amz-meta-sha256` — content must differ for an actual upload to happen.
+
+Stable-identity clients key uploads per **file** (`originals/{stableId}/{childId}.ext` from the `.dchub.json` manifest), so files differing only by extension get distinct keys. A stale-sibling cleanup removes an old object when a version bump changes the file extension — but never a key claimed by another file in the same run.
+
+### 2 — Distribute packages
+
+Finds folders matching the configured package prefix (e.g. `[📦]`), then for each one looks at its sibling folders for loose files or an `OUT` folder, and copies those files *into* the package, translating filenames through the naming convention as it copies. Effectively: "pull raw/loose assets into their package structure." Its own log section is labeled "COLLECTING."
+
+Copy decisions use an mtime check (`isUnchanged`): if the destination file already exists and is the same age or newer than the source, it's skipped; if it's missing or older, it's (re)copied. This is deliberately tolerant of interruptions — re-running is always safe and only touches files that actually need it.
+
+**Known limitation:** package discovery here is purely a folder-name-prefix match. A folder migrated to [folder-based stable identity](#supabase-sync) (renamed to `Name __hash`, prefix stripped) is no longer recognized as a package by this step, since the prefix is gone. Files inside it need one of the other export steps.
+
+### 3 — Export to destinations
+
+Mirrors the source tree into a local target folder (`settings.targetFolder`) — commonly a SharePoint- or OneDrive-synced directory. Walks folders looking for `OUT`, publishes their contents (filenames translated), and recurses through everything else. Folder names are carried over as-is, **except** a folder-based stable-identity hash suffix (` __a1b2c3d4`), which is stripped before creating the destination folder — that suffix is a source-side identity anchor and must never appear in a shared/published copy.
+
+Uses the same mtime-based `isUnchanged` check as Distribute. After a run, any previously-published file/folder no longer present in the source is renamed with a `🚫` prefix at the destination rather than deleted — a visible, reversible flag rather than a silent removal.
+
+### 4 — Cloud export
+
+For each cloud destination (Dropbox / OneDrive / Google Drive) with a valid OAuth token, flat-uploads every collected asset (no folder mirroring — see [Export to destinations](#3--export-to-destinations) for the folder-preserving path) and records the resulting sharing link, later written to Supabase so the web portal can surface it.
+
+### 5 — Publish to DAM
+
+Despite the name, this step doesn't touch Supabase or the CDN — it generates the human-readable Obsidian vault: one markdown note per asset with inherited taxonomy tags, regenerable on every run.
+
+### Supabase sync
+
+Always runs after the steps above, if a Supabase config is present for the active client. Two identity systems currently coexist, gated per client:
+
+- **Legacy (default)** — assets are matched by `shortcode`, a string derived from the filename with the version suffix stripped. A taxonomy or filename rename changes the shortcode, which the pipeline reads as "this asset disappeared" — the old row is deleted and a new one created, orphaning its ratings/comments/history. Stale rows here are **hard-deleted**.
+- **Folder-based stable identity** (`client.identityMigrated`) — assets are matched by an 8-hex-char hash suffix on their package folder (` __a1b2c3d4`), immune to filename/taxonomy renames. A per-folder `.dchub.json` manifest maps individual files to a stable child ID, with SHA-256 content-hash matching as a fallback for renamed files. Stale rows here are **soft-marked `disconnected`**, never deleted — see `CLAUDE_CODE_PROMPT_identity-migration.md` at the repo root for the full design and migration procedure (`desktop/scripts/migrate-identity.ts`).
+
+Either way, this step also cleans up R2 objects for assets no longer present on disk — except any object key still referenced by an active record (protects a gallery parent's shared thumbnail) — and syncs the vocabulary's tag hierarchy so the web portal can render collapsible tag groups.
+
+### Version history sync
+
+Scans each asset's `versions/` subfolder and upserts the `version_history` table: the current version is marked `Active`, older ones `History`; versions removed from disk are marked `Disconnected`; assets removed entirely are marked `Removed`.
+
+## CDN URLs and spaces
+
+Asset filenames often contain spaces (e.g. `Sealing Pitch Deck v3.pdf`). CDN URLs are stored with literal spaces in the database. The web app applies `encodeURI()` when using these URLs in the browser to produce valid percent-encoded URLs.

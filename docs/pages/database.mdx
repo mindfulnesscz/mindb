@@ -1,0 +1,151 @@
+# Database
+
+DC Hub uses Supabase (Postgres). All tables are in the `public` schema with Row Level Security enabled.
+
+## Tables
+
+### `clients`
+One row per client company.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid | PK |
+| `name` | text | Display name |
+| `slug` | text | URL identifier, e.g. `ess` |
+| `accent` | text | Hex colour |
+| `initials` | text | 2–3 letter badge |
+| `logo_url` | text | Optional |
+| `portal_bg` | text | Colour, gradient string, or image URL |
+| `domain_whitelist` | text[] | Email domains for auto-member assignment |
+| `created_at` | timestamptz | |
+
+### `profiles`
+One row per authenticated user. `id` matches `auth.users.id`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid | FK → auth.users |
+| `name` | text | |
+| `initials` | text | Auto-derived |
+| `role` | text | `public` \| `member` \| `editor` \| `admin` |
+| `client_id` | uuid | FK → clients, nullable |
+| `company` | text | |
+| `country` | text | |
+| `industry` | text | |
+| `created_at` | timestamptz | |
+
+### `assets`
+One row per asset version.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid | PK |
+| `client_id` | uuid | FK → clients |
+| `shortcode` | text | Unique key derived from filename by the pipeline |
+| `name` | text | Display name |
+| `entities` | text[] | e.g. `['Sealing']` |
+| `formats` | text[] | e.g. `['Presentation', 'PDF']` |
+| `angles` | text[] | e.g. `['brand', 'campaign']` |
+| `tags` | text[] | Additional tags |
+| `status` | text | `draft` \| `review` \| `approved` \| `published` \| `archived` \| `disconnected` |
+| `perm` | text | `public` \| `client` \| `internal` |
+| `version` | text | e.g. `v3-8-0` |
+| `latest` | bool | Whether this is the current version |
+| `thumbnail_url` | text | CDN URL (Cloudflare R2) |
+| `download_url` | text | CDN URL |
+| `download_key` | text | R2 object key (used by pipeline for stale detection) |
+| `parent_id` | uuid | Set for gallery child assets |
+| `created_at` | timestamptz | |
+| `updated_at` | timestamptz | |
+
+Gallery children use shortcodes with a `|` separator: `ParentShortcode|childStem`.
+
+### `ratings`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid | PK |
+| `asset_id` | uuid | FK → assets |
+| `user_id` | uuid | FK → auth.users |
+| `value` | int | 1–5 |
+| `created_at` | timestamptz | |
+
+### `comments`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid | PK |
+| `asset_id` | uuid | FK → assets |
+| `user_id` | uuid | FK → auth.users |
+| `body` | text | |
+| `created_at` | timestamptz | |
+
+### `asset_events`
+Tracks views and downloads per asset.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid | PK |
+| `asset_id` | uuid | FK → assets |
+| `user_id` | uuid | Nullable (anonymous views not currently tracked) |
+| `event_type` | text | `view` \| `download` |
+| `created_at` | timestamptz | |
+
+Create this table if it doesn't exist:
+```sql
+CREATE TABLE IF NOT EXISTS asset_events (
+  id         uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  asset_id   uuid NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+  user_id    uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  event_type text NOT NULL CHECK (event_type IN ('view', 'download')),
+  created_at timestamptz DEFAULT now()
+);
+ALTER TABLE asset_events ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "authenticated can insert events" ON asset_events
+  FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+CREATE POLICY "staff can view events" ON asset_events
+  FOR SELECT USING (
+    EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role IN ('editor','admin'))
+  );
+```
+
+### `approvals`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid | PK |
+| `asset_id` | uuid | FK → assets |
+| `user_id` | uuid | FK → auth.users |
+| `state` | text | `approved` \| `pending` \| `changes` \| `none` |
+| `note` | text | Optional |
+
+### `tags`
+Taxonomy used for filtering in the gallery.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid | PK |
+| `client_id` | uuid | Nullable — null means global tag |
+| `name` | text | |
+| `dimension` | text | `entity` \| `format` \| `angle` |
+| `parent_id` | uuid | Nullable — for hierarchical tags |
+| `sort_order` | int | |
+
+## Database functions
+
+| Function | Accessible by | Purpose |
+|---|---|---|
+| `check_email_auth(p_email)` | anon | Returns auth type for sign-in flow |
+| `get_client_portal(p_slug)` | anon | Returns client data for portal welcome screen |
+| `get_all_profiles()` | editor, admin | Returns all profiles joined with auth.users email |
+| `update_user_role(p_user_id, p_role)` | admin | Changes a user's role |
+| `handle_new_auth_user()` | trigger | Auto-creates profile on first sign-in |
+
+## Pending migrations
+
+Run in Supabase SQL editor if not done:
+
+```sql
+-- Rename role 'client' → 'member' in existing rows
+UPDATE profiles SET role = 'member' WHERE role = 'client';
+```

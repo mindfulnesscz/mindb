@@ -1,0 +1,60 @@
+# Client Portals
+
+## URL structure
+
+| URL | Who | What |
+|---|---|---|
+| `/` | admin, editor | Admin dashboard — clients, users, settings |
+| `/:slug` | member, public, staff | Branded client portal with asset gallery |
+| `/share/:id` | anyone | Public share link for a single asset |
+| `/settings` | authenticated | Supabase connection configuration |
+
+## How portals work
+
+Each client has a `slug` (e.g. `ess`, `northwind`). The portal at `/:slug`:
+
+1. Fetches the client record via the `get_client_portal` RPC (no auth required, so the branded welcome screen shows for unauthenticated visitors)
+2. Shows a branded sign-in screen if the user is not authenticated
+3. Shows the asset gallery filtered to that client once authenticated
+
+The portal page sets `activeClient` from the slug, so the gallery always shows the right client's assets regardless of what `profile.client_id` contains.
+
+## Staff view inside a portal
+
+When an editor or admin visits `/:slug`, they see the same gallery but with an admin navigation bar at the top instead of the client-facing header. They can access all assets regardless of permission level.
+
+## Portal branding
+
+Each client supports:
+
+| Field | Description |
+|---|---|
+| `accent` | Hex colour — used for the logo badge and UI accents |
+| `initials` | 2–3 letters shown in the badge when no logo is set |
+| `logo_url` | Optional image URL |
+| `portal_bg` | Welcome screen background — a CSS colour (`#f5f0eb`), gradient, or image URL |
+
+## Domain whitelist
+
+Each client can have a list of email domains. Any user signing in with a matching domain is automatically granted `member` role and assigned to that client on first sign-in. Managed in **Admin → Clients → Edit**.
+
+## Asset gallery
+
+The gallery (`GalleryView`) shows assets filtered to `activeClient`. It supports:
+
+- **Filtering** by entity, format, angle, and free-text search
+- **Sorting** by date
+- **Grouped view** — assets are grouped by entity/format
+- **Gallery assets** — parent assets display a horizontal image strip of their children
+- **Asset detail** — clicking an asset opens a detail view with thumbnail, comments, ratings, and download
+
+## Asset detail features
+
+| Feature | Available to |
+|---|---|
+| View thumbnail / preview | member and above |
+| Download | member and above (approved/published assets) |
+| Rate (1–5 stars) | member and above |
+| Comment | member and above |
+| View count & download count | editor and admin only |
+| Edit permission / status | editor and admin only |

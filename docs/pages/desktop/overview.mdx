@@ -1,0 +1,9 @@
+# Desktop application
+
+The desktop app is a Tauri 2 application: React/TypeScript owns orchestration and UI state; Rust performs operations that need native processes, unrestricted binary I/O, a local OAuth listener, or AWS Signature V4 signing.
+
+Client-specific configuration includes source/target/vault folders, Supabase and R2 credentials, cloud destinations, and the stable-identity migration flag. Global pipeline settings define stage toggles, folder markers, filters, thumbnail parameters, and run options.
+
+Native commands include thumbnail generation, the three-minute OAuth callback listener, R2 upload/list/delete/check, Dropbox upload, OneDrive device-code/token operations, and a native Supabase request bridge. See [Code map](/reference/code-map).
+
+The app does not provide a distributed job queue or transaction spanning providers. A run is an ordered collection of best-effort operations; errors are logged and most per-file loops continue. This makes partial success normal and makes the [publishing runbook](/operations/runbook) important.
