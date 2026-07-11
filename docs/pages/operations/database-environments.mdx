@@ -33,15 +33,56 @@ npm run db:types    # regenerate database.types.ts from the local schema
 
 `db:start` prints the local URLs and keys when ready — API `http://127.0.0.1:54321`, Studio `http://localhost:54323`, plus the `anon` and `service_role` keys (fixed, well-known local dev values; safe to commit to `.env.local`).
 
+### Seed data and your first user
+
+`npm run db:reset` loads `supabase/seed.sql`: the **Acme Studio** demo client (slug `acme`, whitelisted domain `acme.test`), a small taxonomy, four assets covering the interesting shapes (public/client/internal perms, a variant pair, version history, view/download events).
+
+To sign in to the portal against local data:
+
+1. Open Studio at `http://localhost:54323` → **Authentication** → **Add user** → *Create new user*. Use any `@acme.test` address (e.g. `me@acme.test`) and a password; tick *Auto Confirm User*.
+2. That's it for a client-role user — the `handle_new_user` trigger sees the whitelisted domain and creates a `profiles` row with `role = 'client'`, attached to Acme Studio.
+3. For staff/admin views, promote yourself — Studio → **SQL Editor**:
+
+   ```sql
+   update public.profiles set role = 'admin'
+   where id = (select id from auth.users where email = 'me@acme.test');
+   ```
+
+4. Password sign-in vs. the portal's OTP flow: local auth emails (magic links/OTPs) are **not sent anywhere** — they land in Mailpit at `http://localhost:54324`, where you can open them.
+
+### Wiring the apps to an environment
+
+- **Web portal** — `web/apps/client-hub/.env.local` (copy from `.env.local.example`):
+
+  ```bash
+  VITE_SUPABASE_URL=http://127.0.0.1:54321
+  VITE_SUPABASE_ANON_KEY=<anon key printed by db:start>
+  ```
+
+  Without these the portal falls back to mock data. Swap in the staging project's URL/anon key to point at staging.
+
+- **Desktop app** — Settings → client profile: the environment is just connection values. Create a separate profile per environment (e.g. `Acme (local)`, `ESS (staging)`) with that environment's Supabase URL + `service_role` key, R2 credentials/bucket, and source folder. Never mix tiers inside one profile.
+
 ### Troubleshooting
 
 - `Cannot connect to the Docker daemon` — Docker Desktop isn't running; `open -a Docker` and wait for the whale icon to settle.
 - Port conflict on 54321–54324 — another Supabase project is running; `supabase stop --project-id <other>` or change ports in `supabase/config.toml`.
 - Stack in a weird state — `supabase stop --no-backup` then `npm run db:start` gives a clean slate; migrations + seed make the data fully reproducible.
+- Sign-in emails never arrive — they're in Mailpit (`http://localhost:54324`), not your inbox.
 
-Studio runs at `http://localhost:54323`. The seed creates the `Acme Studio` demo client — create a user with an `@acme.test` address in Studio and it auto-joins as `client`; promote to `admin` in the `profiles` table for staff views.
+## Setting up the staging project (one-time)
 
-Point the desktop app at local/staging by adding a client profile with that environment's URL and service key in Settings — environment is just connection values.
+1. [supabase.com/dashboard](https://supabase.com/dashboard) → **New project** (e.g. `dc-hub-staging`, region near you). Generate and save the database password.
+2. Collect from Settings: the **project ref** (General) and **anon / service_role keys** (API).
+3. First schema apply — staging is fresh, so unlike production it receives *everything*:
+
+   ```bash
+   supabase login
+   supabase link --project-ref <staging-ref>
+   supabase db push
+   ```
+
+4. Hand future pushes to CI (see [CI secrets](#ci-secrets)); after setup, avoid bare `supabase db push` from a workstation — `link` remembers only one project, and CI always links explicitly.
 
 ## Making a schema change
 
