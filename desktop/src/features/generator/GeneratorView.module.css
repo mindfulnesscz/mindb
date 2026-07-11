@@ -1,0 +1,278 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--surface);
+}
+
+.header {
+  padding: var(--sp-5) var(--sp-8) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.headerLeft {}
+
+.title {
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-display);
+  letter-spacing: var(--tracking-display);
+  color: var(--text);
+  line-height: 1;
+}
+
+.subtitle {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  margin-top: var(--sp-1);
+}
+
+.btnClear {
+  padding: var(--sp-3) var(--sp-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+  flex-shrink: 0;
+}
+.btnClear:hover { border-color: var(--gray-300); color: var(--text); }
+
+.body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* ── Dimension panels ───────────────────────────────────────────────────── */
+.dimPanels {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+}
+
+.dimPanel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+.dimPanel:last-child { border-right: none; }
+
+.dimPanelHead {
+  padding: var(--sp-3) var(--sp-5);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--surface-sunken);
+}
+
+.dimPanelLabel {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.dimPanelScroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-2) 0;
+}
+
+.dimSubgroup {
+  padding: var(--sp-2) var(--sp-5) var(--sp-1);
+  font-size: 9px;
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--gray-300);
+}
+
+.dimTag {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-5);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+  user-select: none;
+}
+.dimTag:hover { background: var(--surface-sunken); }
+
+.dimCheck {
+  width: 15px;
+  height: 15px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.dimTagSelected .dimCheck {
+  background: var(--cosmos-black);
+  border-color: var(--cosmos-black);
+}
+
+.dimTagLabel {
+  flex: 1;
+  font-size: var(--text-sm);
+  color: var(--text);
+  font-weight: var(--weight-regular);
+}
+.dimTagCode {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+/* ── Result rail ────────────────────────────────────────────────────────── */
+.resultRail {
+  width: 380px;
+  min-width: 380px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp-6);
+  gap: var(--sp-5);
+  overflow-y: auto;
+  background: var(--surface-raised);
+}
+
+.resultBlock {
+  border: 2px solid var(--cosmos-black);
+  border-radius: var(--radius-none);
+  padding: var(--sp-5);
+  background: var(--surface);
+  box-shadow: var(--shadow-stamp-sm);
+}
+
+.resultLabel {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: var(--sp-3);
+}
+
+.resultCode {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  word-break: break-all;
+  min-height: 28px;
+  margin-bottom: var(--sp-4);
+  line-height: 1.5;
+}
+
+.resultEmpty {
+  color: var(--gray-300);
+  font-style: italic;
+}
+
+.btnCopy {
+  width: 100%;
+  padding: var(--sp-3) var(--sp-5);
+  background: var(--cosmos-black);
+  color: var(--clear-white);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+  margin-bottom: var(--sp-4);
+}
+.btnCopy:hover { background: var(--pure-black); }
+
+.sectionLabel {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: var(--sp-2);
+}
+
+.descInput {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--text);
+  background: var(--surface);
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+.descInput:focus { border-color: var(--gray-400); }
+
+.versionRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.verLabel {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.verInput {
+  width: 54px;
+  padding: 6px 8px;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text);
+  background: var(--surface);
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+.verInput:focus { border-color: var(--gray-400); }
+
+.obsDivider {
+  height: 1px;
+  background: var(--border);
+  margin: 0;
+}
+
+.obsTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+.obsTag {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 2px 8px;
+}
+
+.obsEmpty {
+  font-size: var(--text-xs);
+  color: var(--gray-300);
+  font-style: italic;
+}

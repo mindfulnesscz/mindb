@@ -1,0 +1,157 @@
+/* DC Hub — Design Tokens (Disrupt Collective Design System) */
+
+/* ── Fonts ─────────────────────────────────────────────────────────────────── */
+@font-face {
+  font-family: "Commissioner";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../assets/typography/Commissioner/Commissioner-VariableFont_FLAR,VOLM,slnt,wght.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Minion Pro";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("../assets/typography/Minion Pro Medium/Minion Pro Medium.ttf") format("truetype");
+}
+
+/* ── Color tokens ───────────────────────────────────────────────────────────── */
+:root {
+  --clear-white:   #FFFFFF;
+  --cosmos-black:  #161616;
+  --pure-black:    #000000;
+
+  --ink-900: #161616;
+  --ink-800: #242424;
+  --ink-700: #343434;
+  --ink-600: #494949;
+  --gray-500: #6B6B6B;
+  --gray-400: #969696;
+  --gray-300: #C4C4C4;
+  --gray-200: #E2E2E2;
+  --gray-150: #ECECEC;
+  --gray-100: #F4F4F2;
+
+  --paper:       #FFFFFF;
+  --paper-cream: #F5F6F7;
+  --paper-soft:  var(--paper-cream);
+
+  --signal-error:   #C23B3B;
+  --signal-success: #2E7D55;
+  --signal-warn:    #B5871A;
+  --signal-info:    #2B5BD7;
+
+  /* Surfaces */
+  --bg:              var(--clear-white);
+  --bg-canvas:       #E4E3DF;
+  --bg-soft:         var(--paper-soft);
+  --surface:         var(--clear-white);
+  --surface-raised:  #FAFAF9;
+  --surface-sunken:  var(--gray-100);
+  --surface-inverse: var(--cosmos-black);
+
+  /* Text */
+  --text:         var(--cosmos-black);
+  --text-muted:   var(--gray-500);
+  --text-subtle:  var(--gray-400);
+  --text-inverse: var(--clear-white);
+  --text-on-fill: var(--clear-white);
+
+  /* Borders */
+  --border:        var(--gray-200);
+  --border-strong: var(--cosmos-black);
+  --border-muted:  var(--gray-150);
+  --hairline:      rgba(22, 22, 22, 0.12);
+
+  /* Accent = ink */
+  --accent:         var(--cosmos-black);
+  --accent-hover:   var(--pure-black);
+  --accent-press:   var(--ink-700);
+  --accent-inverse: var(--clear-white);
+  --focus-ring:     rgba(22, 22, 22, 0.45);
+
+  /* Client brand colour — overridden at runtime when a client is active */
+  --client-accent: var(--cosmos-black);
+}
+
+/* ── Typography ─────────────────────────────────────────────────────────────── */
+:root {
+  --font-serif:   "Minion Pro", Georgia, "Times New Roman", serif;
+  --font-sans:    "Commissioner", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono:    "JetBrains Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace;
+  --font-display: var(--font-serif);
+  --font-body:    var(--font-sans);
+  --font-label:   var(--font-sans);
+
+  --weight-thin:      100;
+  --weight-light:     300;
+  --weight-regular:   400;
+  --weight-medium:    500;
+  --weight-semibold:  600;
+  --weight-bold:      700;
+  --weight-extrabold: 800;
+  --weight-black:     900;
+  --weight-display:   500;
+
+  --text-2xs: 11px;
+  --text-xs:  12px;
+  --text-sm:  13px;
+  --text-base:16px;
+  --text-md:  18px;
+  --text-lg:  22px;
+  --text-xl:  28px;
+  --text-2xl: 34px;
+  --text-3xl: 48px;
+
+  --leading-display: 0.965;
+  --leading-tight:   1.02;
+  --leading-snug:    1.12;
+  --leading-normal:  1.5;
+
+  --tracking-display: -0.02em;
+  --tracking-tight:   -0.01em;
+  --tracking-normal:  0em;
+  --tracking-wide:    0.04em;
+  --tracking-label:   0.10em;
+}
+
+/* ── Spacing ────────────────────────────────────────────────────────────────── */
+:root {
+  --sp-1:  2px;
+  --sp-2:  4px;
+  --sp-3:  8px;
+  --sp-4:  12px;
+  --sp-5:  16px;
+  --sp-6:  20px;
+  --sp-7:  24px;
+  --sp-8:  32px;
+  --sp-9:  40px;
+  --sp-10: 48px;
+
+  --radius-none: 0;
+  --radius-sm:   2px;
+  --radius-md:   6px;
+  --radius-lg:   12px;
+  --radius-pill: 999px;
+  --radius-squircle: 28% / 38%;
+
+  --border-width:       1px;
+  --border-width-thick: 2px;
+
+  --shadow-stamp:    5px 5px 0 var(--ink-900);
+  --shadow-stamp-sm: 3px 3px 0 var(--ink-900);
+
+  --dur-fast: 120ms;
+  --dur-base: 220ms;
+  --dur-slow: 420ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* Nav rail */
+  --nav-rail-width: 84px;
+  /* Pipeline config sidebar */
+  --config-sidebar-width: 316px;
+  /* Issues panel */
+  --issues-panel-width:   362px;
+}
