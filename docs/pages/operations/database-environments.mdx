@@ -33,22 +33,33 @@ npm run db:types    # regenerate database.types.ts from the local schema
 
 `db:start` prints the local URLs and keys when ready — API `http://127.0.0.1:54321`, Studio `http://localhost:54323`, plus the `anon` and `service_role` keys (fixed, well-known local dev values; safe to commit to `.env.local`).
 
-### Seed data and your first user
+### Seed data and sign-ins
 
-`npm run db:reset` loads `supabase/seed.sql`: the **Acme Studio** demo client (slug `acme`, whitelisted domain `acme.test`), a small taxonomy, four assets covering the interesting shapes (public/client/internal perms, a variant pair, version history, view/download events).
+`npm run db:reset` loads `supabase/seed.sql`: the **Acme Studio** demo client (slug `acme`, whitelisted domain `acme.test`), a small taxonomy, four assets covering the interesting shapes (public/client/internal perms, a variant pair, version history, view/download events) — **and a ready-made admin**:
 
-To sign in to the portal against local data:
+| | |
+|---|---|
+| Email | `admin@acme.test` |
+| Password | `dchub-local` |
+| Role | `admin` — full portal plus the admin area |
 
-1. Open Studio at `http://localhost:54323` → **Authentication** → **Add user** → *Create new user*. Use any `@acme.test` address (e.g. `me@acme.test`) and a password; tick *Auto Confirm User*.
-2. That's it for a client-role user — the `handle_new_user` trigger sees the whitelisted domain and creates a `profiles` row with `role = 'client'`, attached to Acme Studio.
-3. For staff/admin views, promote yourself — Studio → **SQL Editor**:
+It's recreated by every `db:reset`, so it always exists on a fresh local stack. (Seeding a user by inserting into `auth.users` is a local-only pattern — never replicate it on staging or production.)
+
+**Two sign-in flows, one inbox rule:** the portal's email/OTP flow sends real emails — locally those are **not delivered anywhere**; they land in **Mailpit at `http://localhost:54324`**. Open Mailpit, click the latest message, use the link/code. Password sign-in (where offered) works directly with the credentials above.
+
+**Creating additional test users** (e.g. to see the client-role experience):
+
+1. Studio (`http://localhost:54323`) → **Authentication** → **Add user** → *Create new user*.
+2. Use any `@acme.test` address and a password; tick *Auto Confirm User*.
+3. Done — the `handle_new_user` trigger sees the whitelisted domain and creates a `profiles` row with `role = 'client'` attached to Acme Studio. Client-role users get the client portal; the **admin area will refuse them** ("restricted to DC Hub administrators") by design.
+4. To promote one to staff, Studio → **SQL Editor**:
 
    ```sql
-   update public.profiles set role = 'admin'
+   update public.profiles set role = 'editor'   -- or 'admin'
    where id = (select id from auth.users where email = 'me@acme.test');
    ```
 
-4. Password sign-in vs. the portal's OTP flow: local auth emails (magic links/OTPs) are **not sent anywhere** — they land in Mailpit at `http://localhost:54324`, where you can open them.
+Note that `db:reset` wipes users along with everything else — manually created users are gone after a reset (the seeded admin comes back automatically).
 
 ### Wiring the apps to an environment
 

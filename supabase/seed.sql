@@ -2,10 +2,10 @@
 -- Fresh staging/production environments get real data from the desktop
 -- pipeline instead; this file exists so a local portal has something to show.
 --
--- Sign-in for local testing: create a user in Studio (http://localhost:54323 →
--- Authentication). An @acme.test address is auto-assigned to the demo client
--- with role 'client' via handle_new_user(); promote yourself to admin with:
---   update public.profiles set role = 'admin' where id = '<your-user-uuid>';
+-- Seeded sign-ins (LOCAL ONLY — never reuse this pattern on a hosted tier):
+--   admin@acme.test  / password: dchub-local   (role: admin — full portal + admin area)
+--   Additional users: create in Studio (http://localhost:54323 → Authentication);
+--   any @acme.test address auto-joins Acme Studio as role 'client'.
 
 insert into public.clients (id, name, slug, accent, initials, domain_whitelist) values
   ('00000000-0000-0000-0000-000000000001', 'Acme Studio', 'acme', '#1d4ed8', 'AS', '{acme.test}');
@@ -48,3 +48,36 @@ insert into public.asset_events (asset_id, event_type, role) values
   ('00000000-0000-0000-0000-00000000a001', 'view', 'public'),
   ('00000000-0000-0000-0000-00000000a001', 'view', 'public'),
   ('00000000-0000-0000-0000-00000000a001', 'download', 'client');
+
+-- ── Seeded local admin: admin@acme.test / dchub-local ────────────────────
+-- Direct auth.users insert works on the local stack only, which is the point.
+-- The handle_new_user trigger creates the profile (as 'client', via the
+-- domain whitelist); the update below promotes it to admin.
+insert into auth.users (
+  instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
+  raw_app_meta_data, raw_user_meta_data, created_at, updated_at,
+  confirmation_token, recovery_token, email_change, email_change_token_new
+) values (
+  '00000000-0000-0000-0000-000000000000',
+  '00000000-0000-0000-0000-0000000000ad',
+  'authenticated', 'authenticated', 'admin@acme.test',
+  extensions.crypt('dchub-local', extensions.gen_salt('bf')),
+  now(),
+  '{"provider":"email","providers":["email"]}',
+  '{"name":"Local Admin"}',
+  now(), now(), '', '', '', ''
+);
+
+insert into auth.identities (
+  id, user_id, provider_id, identity_data, provider,
+  last_sign_in_at, created_at, updated_at
+) values (
+  gen_random_uuid(),
+  '00000000-0000-0000-0000-0000000000ad',
+  '00000000-0000-0000-0000-0000000000ad',
+  '{"sub":"00000000-0000-0000-0000-0000000000ad","email":"admin@acme.test","email_verified":true}',
+  'email', now(), now(), now()
+);
+
+update public.profiles set role = 'admin', name = 'Local Admin', initials = 'LA'
+  where id = '00000000-0000-0000-0000-0000000000ad';
