@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useClientStore } from '../../store/clientStore';
 import { useEnvironmentStore } from '../../store/environmentStore';
-import { saveEnvironments } from '../../services/environmentService';
+import { useAuthStore } from '../../store/authStore';
+import { saveEnvironments, makeEnvironment } from '../../services/environmentService';
 import { checkSupabaseConnection } from '../../services/supabaseService';
 import { CloudDestinations } from '../cloud/CloudDestinations';
 import css from './SettingsView.module.css';
@@ -127,8 +128,33 @@ export function SettingsView() {
 type CheckStatus = 'idle' | 'checking' | 'ok' | 'error';
 
 function EnvironmentSettings() {
-  const { environments, activeEnvId, setEnvironments } = useEnvironmentStore();
+  const { environments, activeEnvId, setEnvironments, setActiveEnvId } = useEnvironmentStore();
   const activeEnv = environments.find(e => e.id === activeEnvId) ?? null;
+
+  async function activate(envId: string) {
+    if (envId === activeEnvId) return;
+    setActiveEnvId(envId);
+    await saveEnvironments({ activeId: envId, list: environments }).catch(console.error);
+    // App.tsx re-authenticates against the new environment; with no cached
+    // session for it, the login gate appears — that's expected.
+    useAuthStore.getState().setStatus('booting');
+  }
+
+  async function addEnvironment() {
+    const env = makeEnvironment({ name: 'New environment' });
+    const list = [...environments, env];
+    setEnvironments(list);
+    await saveEnvironments({ activeId: activeEnvId, list }).catch(console.error);
+  }
+
+  async function removeEnvironment(envId: string) {
+    if (envId === activeEnvId) return; // the active one can't be removed
+    const env = environments.find(e => e.id === envId);
+    if (!confirm(`Remove environment "${env?.name || env?.supabaseUrl}"? Its machine-local client config stays on disk.`)) return;
+    const list = environments.filter(e => e.id !== envId);
+    setEnvironments(list);
+    await saveEnvironments({ activeId: activeEnvId, list }).catch(console.error);
+  }
 
   const [name,       setName]       = useState(activeEnv?.name        ?? '');
   const [url,        setUrl]        = useState(activeEnv?.supabaseUrl ?? '');
@@ -171,7 +197,39 @@ function EnvironmentSettings() {
 
   return (
     <>
-      <div className={css.cardTitle}>Environment — Supabase connection</div>
+      <div className={css.cardTitle}>Environments</div>
+
+      {environments.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
+          {environments.map(e => (
+            <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, cursor: 'pointer', fontSize: 'var(--text-sm)' }}>
+                <input
+                  type="radio"
+                  name="active-environment"
+                  checked={e.id === activeEnvId}
+                  onChange={() => activate(e.id)}
+                />
+                <strong>{e.name || 'Unnamed'}</strong>
+                <span style={{ color: 'var(--gray-500)', fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                  {e.supabaseUrl || 'no URL'}
+                </span>
+              </label>
+              {e.id !== activeEnvId && (
+                <button className={css.btnSave} style={{ padding: '4px 10px' }} onClick={() => removeEnvironment(e.id)}>
+                  Remove
+                </button>
+              )}
+            </div>
+          ))}
+          <div>
+            <button className={css.btnSave} style={{ padding: '6px 12px' }} onClick={addEnvironment}>
+              + Add environment
+            </button>
+          </div>
+        </div>
+      )}
+
       {!activeEnv ? (
         <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-subtle)', margin: 0 }}>
           No environment configured — sign out and use “Configure server” on the login screen.

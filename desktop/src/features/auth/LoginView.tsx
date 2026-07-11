@@ -15,12 +15,41 @@ type Step = 'email' | 'checking' | 'waiting' | 'server';
  * link in their browser → loopback callback completes the PKCE exchange. */
 export function LoginView() {
   const { status, server, setServer, setStatus, setProfile } = useAuthStore();
+  const { environments, activeEnvId, setEnvironments, setActiveEnvId } = useEnvironmentStore();
   const [step, setStep]   = useState<Step>(server ? 'email' : 'server');
   const [email, setEmail] = useState('');
   const [error, setError] = useState('');
 
   const [serverUrl, setServerUrl]   = useState(server?.url ?? '');
   const [serverKey, setServerKey]   = useState(server?.anonKey ?? '');
+  const [serverName, setServerName] = useState(
+    environments.find(e => e.id === activeEnvId)?.name ?? '',
+  );
+
+  /** Sign into a different environment — or create a new one via the
+   * sentinel option. App.tsx reacts to the active-env change and re-auths
+   * (a cached session for that environment skips the magic link entirely). */
+  async function handleEnvChange(value: string) {
+    if (value === '__new__') {
+      const env = makeEnvironment({ name: 'New environment' });
+      const list = [...environments, env];
+      await saveEnvironments({ activeId: env.id, list });
+      setEnvironments(list);
+      setActiveEnvId(env.id);
+      setServerUrl('');
+      setServerKey('');
+      setServerName('');
+      setStep('server');
+      return;
+    }
+    if (value === activeEnvId) return;
+    await saveEnvironments({ activeId: value, list: environments });
+    setActiveEnvId(value);
+    const env = environments.find(e => e.id === value);
+    setServerUrl(env?.supabaseUrl ?? '');
+    setServerKey(env?.anonKey ?? '');
+    setStatus('booting');
+  }
 
   async function handleServerSave(e: FormEvent) {
     e.preventDefault();
@@ -29,19 +58,16 @@ export function LoginView() {
     if (!url || !anonKey) return;
 
     // The server config IS an environment: update the active one, or create
-    // the first. Multiple environments are managed in Settings once signed in.
-    const { environments, activeEnvId, setEnvironments, setActiveEnvId } = useEnvironmentStore.getState();
+    // the first. Further environments come from "+ Add environment…" above.
+    const fallbackName = url.includes('localhost') || url.includes('127.0.0.1') ? 'Local' : 'Production';
+    const name = serverName.trim() || fallbackName;
     let list = environments;
     let envId = activeEnvId;
     const active = environments.find(e2 => e2.id === activeEnvId);
     if (active) {
-      list = environments.map(e2 => e2.id === active.id ? { ...e2, supabaseUrl: url, anonKey } : e2);
+      list = environments.map(e2 => e2.id === active.id ? { ...e2, name, supabaseUrl: url, anonKey } : e2);
     } else {
-      const env = makeEnvironment({
-        name: url.includes('localhost') || url.includes('127.0.0.1') ? 'Local' : 'Production',
-        supabaseUrl: url,
-        anonKey,
-      });
+      const env = makeEnvironment({ name, supabaseUrl: url, anonKey });
       list = [...environments, env];
       envId = env.id;
     }
@@ -104,6 +130,13 @@ export function LoginView() {
               Connect this app to your DC Hub server. Both values come from your
               administrator (or `supabase status` for the local stack).
             </p>
+            <label className={css.label}>Environment name</label>
+            <input
+              className={css.input}
+              placeholder="Production / Staging / Local"
+              value={serverName}
+              onChange={e => setServerName(e.target.value)}
+            />
             <label className={css.label}>Server URL</label>
             <input
               className={css.input}
@@ -143,6 +176,21 @@ export function LoginView() {
                 ? 'Your previous session was not authorized.'
                 : 'Staff access only.'}
             </p>
+            {environments.length > 0 && (
+              <>
+                <label className={css.label}>Environment</label>
+                <select
+                  className={css.input}
+                  value={activeEnvId ?? ''}
+                  onChange={e => { handleEnvChange(e.target.value).catch(err => setError(String(err))); }}
+                >
+                  {environments.map(e => (
+                    <option key={e.id} value={e.id}>{e.name || e.supabaseUrl || 'Unnamed'}</option>
+                  ))}
+                  <option value="__new__">+ Add environment…</option>
+                </select>
+              </>
+            )}
             <label className={css.label}>Email</label>
             <input
               className={css.input}
