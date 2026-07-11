@@ -80,6 +80,7 @@ Note that `db:reset` wipes users along with everything else — manually created
 - Port conflict on 54321–54324 — another Supabase project is running; `supabase stop --project-id <other>` or change ports in `supabase/config.toml`.
 - Stack in a weird state — `supabase stop --no-backup` then `npm run db:start` gives a clean slate; migrations + seed make the data fully reproducible.
 - Sign-in emails never arrive — they're in Mailpit (`http://localhost:54324`), not your inbox.
+- Magic link opens `127.0.0.1:3000` and refuses to connect — the auth `site_url` doesn't match the portal's dev port. It's set to `http://localhost:5173` (Vite) in `supabase/config.toml`; config changes need `supabase stop && npm run db:start` to apply. If Vite ever starts on a different port (5174 when 5173 is busy), add it to `additional_redirect_urls`.
 
 ## Setting up the staging project (one-time)
 
