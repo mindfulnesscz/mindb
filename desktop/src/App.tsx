@@ -67,18 +67,20 @@ export default function App() {
   }, []);
 
   /* Clients are DB-first: fetched per environment once signed in, filtered by
-     membership (admins see all), merged with this machine's local config. */
+     membership (admins see all), merged with this machine's local config.
+     The env's connection values are part of the deps: editing the service key
+     in Settings must re-merge, or the pipeline runs with the stale (empty)
+     key and silently skips the Supabase sync. */
+  const activeEnv = environments.find(e => e.id === activeEnvId) ?? null;
   useEffect(() => {
-    if (authStatus !== 'signedIn' || !profile) return;
-    const env = environments.find(e => e.id === activeEnvId) ?? null;
-    if (!env) return;
-    loadClientsForEnvironment(env, profile.role, environments)
+    if (authStatus !== 'signedIn' || !profile || !activeEnv) return;
+    loadClientsForEnvironment(activeEnv, profile.role, environments)
       .then(({ clients, activeClientId }) => {
         setClients(clients);
         setActiveClientId(activeClientId);
       })
       .catch(console.error);
-  }, [authStatus, activeEnvId]);
+  }, [authStatus, activeEnvId, activeEnv?.supabaseUrl, activeEnv?.anonKey, activeEnv?.serviceKey]);
 
   /* Track whether this is the first client load so we don't double-save on boot */
   const vocabClientRef = useRef<string | null | undefined>(undefined);
