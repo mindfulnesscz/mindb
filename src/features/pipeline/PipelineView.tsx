@@ -10,8 +10,11 @@ import { tokenStatus, cloudToken } from '../../domain/client';
 import type { CloudDestination, LocalDestConfig } from '../../domain/client';
 import { runPipeline, scanVersionMap } from '../../services/pipelineService';
 import type { CloudUrlEntry } from '../../services/pipelineService';
-import { exportAssetsToSupabase, syncVersionHistory, resolveClientId } from '../../services/supabaseService';
-import { saveClients } from '../../services/clientService';
+import { exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary, resolveClientId, fetchClientInventory } from '../../services/supabaseService';
+import { deleteCdnObjects } from '../../services/pipelineService';
+import { saveClients, pushCloudDestinations } from '../../services/clientService';
+import { notifyRunComplete } from '../../services/notifyService';
+import { groupAssets } from '../../domain/assetGrouping';
 import css from './PipelineView.module.css';
 
 /* ── Log type glyphs ──────────────────────────────────────────────────────── */
@@ -89,6 +92,77 @@ function ActivityLog() {
   );
 }
 
+/* ── Run summary ─────────────────────────────────────────────────────────── */
+/* Surfaces the per-section "DONE" totals that otherwise only exist as text
+   buried in the scrolling activity log (e.g. "CDN DONE — N uploaded · M
+   cached · ..."), so they're visible without scrolling through hundreds of
+   individual file lines to find them. */
+function RunSummarySection() {
+  const stats = usePipelineStore(s => s.stats);
+  const supabaseSync = usePipelineStore(s => s.supabaseSync);
+  const runStatus = usePipelineStore(s => s.runStatus);
+
+  const rows: Array<{ label: string; value: string }> = [];
+
+  if (stats.thumbnails > 0) {
+    rows.push({ label: 'Thumbnails', value: `${stats.thumbnails} created` });
+  }
+  if (stats.cdnThumbUploaded || stats.cdnThumbCached || stats.cdnThumbUnchanged) {
+    rows.push({
+      label: 'CDN thumbnails',
+      value: `${stats.cdnThumbUploaded} uploaded · ${stats.cdnThumbCached} cached · ${stats.cdnThumbUnchanged} unchanged`,
+    });
+  }
+  if (stats.cdnOrigUploaded || stats.cdnOrigCached || stats.cdnOrigUnchanged) {
+    rows.push({
+      label: 'CDN originals',
+      value: `${stats.cdnOrigUploaded} uploaded · ${stats.cdnOrigCached} cached · ${stats.cdnOrigUnchanged} unchanged`,
+    });
+  }
+  if (stats.copied || stats.skipped) {
+    rows.push({ label: 'Distribute', value: `${stats.copied} copied · ${stats.skipped} skipped` });
+  }
+  if (stats.published || stats.pubFolders) {
+    rows.push({ label: 'Publish', value: `${stats.published} files · ${stats.pubFolders} folders · ${stats.disconnected} disconnected` });
+  }
+  if (supabaseSync) {
+    rows.push({
+      label: 'Supabase',
+      value: `${supabaseSync.created} new · ${supabaseSync.updated} updated · ${supabaseSync.disconnected} disconnected`,
+    });
+    if (supabaseSync.deleted || supabaseSync.errors) {
+      rows.push({ label: '', value: `${supabaseSync.deleted} deleted · ${supabaseSync.errors} errors` });
+    }
+  }
+  if (stats.errors > 0) {
+    rows.push({ label: 'Errors', value: `${stats.errors} total` });
+  }
+
+  const isIdle = runStatus === 'idle' && rows.length === 0;
+
+  return (
+    <div className={css.summarySection}>
+      <div className={css.issuesPanelHeader}>
+        <span className={css.issuesPanelTitle}>Run summary</span>
+      </div>
+      <div className={css.summaryRows}>
+        {isIdle ? (
+          <div className={css.issuesEmpty}>Run the pipeline to see a summary here.</div>
+        ) : rows.length === 0 ? (
+          <div className={css.issuesEmpty}>Nothing to report for this run.</div>
+        ) : (
+          rows.map((r, i) => (
+            <div key={i} className={css.summaryRow}>
+              <span className={css.summaryLabel}>{r.label}</span>
+              <span className={css.summaryValue}>{r.value}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ── Issues panel ────────────────────────────────────────────────────────── */
 const ISSUE_CATEGORIES = [
   { key: 'skipped' as const,          label: 'Skipped' },
@@ -97,7 +171,7 @@ const ISSUE_CATEGORIES = [
   { key: 'error' as const,            label: 'Errors' },
 ];
 
-function IssuesPanel() {
+function IssuesSection() {
   const issues = usePipelineStore(s => s.issues);
   const [openGroups, setOpenGroups] = useState<Set<string>>(
     new Set(['skipped', 'disconnected', 'version-conflict', 'error'])
@@ -114,7 +188,7 @@ function IssuesPanel() {
   }
 
   return (
-    <aside className={css.issuesPanel}>
+    <>
       <div className={css.issuesPanelHeader}>
         <span className={css.issuesPanelTitle}>
           Issues{total > 0 ? ` · ${total} to review` : ''}
@@ -158,6 +232,15 @@ function IssuesPanel() {
           })
         )}
       </div>
+    </>
+  );
+}
+
+function RightColumn() {
+  return (
+    <aside className={css.issuesPanel}>
+      <RunSummarySection />
+      <IssuesSection />
     </aside>
   );
 }
@@ -165,7 +248,7 @@ function IssuesPanel() {
 /* ── Config sidebar ─────────────────────────────────────────────────────── */
 function ConfigSidebar() {
   const { settings, setField } = useSettingsStore();
-  const { runStatus, progress, startRun, stopRun, appendLog, addIssue, finishRun, setProgress } = usePipelineStore();
+  const { runStatus, progress, startRun, stopRun, appendLog, addIssue, finishRun, setProgress, setSupabaseSync } = usePipelineStore();
   const vocab        = useVocabularyStore(s => s.data);
   const { clients, activeClientId, updateClient } = useClientStore();
   const activeClient = clients.find(c => c.id === activeClientId) ?? null;
@@ -173,21 +256,32 @@ function ConfigSidebar() {
   const destinations = activeClient?.cloudDestinations ?? [];
 
   const [selectedDestIds, setSelectedDestIds] = useState<Set<string>>(
-    () => new Set(destinations.map((d: CloudDestination) => d.id))
+    () => new Set(destinations.filter((d: CloudDestination) => d.enabled !== false).map((d: CloudDestination) => d.id))
   );
 
   useEffect(() => {
     setSelectedDestIds(new Set(
-      activeClient?.cloudDestinations.map((d: CloudDestination) => d.id) ?? []
+      (activeClient?.cloudDestinations ?? [])
+        .filter((d: CloudDestination) => d.enabled !== false)
+        .map((d: CloudDestination) => d.id)
     ));
   }, [activeClient?.id]);
 
   function toggleDest(id: string) {
+    const nowEnabled = !selectedDestIds.has(id);
     setSelectedDestIds(prev => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
+    if (activeClient) {
+      const updatedDestinations = activeClient.cloudDestinations.map(d =>
+        d.id === id ? { ...d, enabled: nowEnabled } : d
+      );
+      updateClient(activeClient.id, { cloudDestinations: updatedDestinations });
+      saveClients({ clients: useClientStore.getState().clients, activeClientId: activeClient.id }).catch(console.error);
+      pushCloudDestinations({ ...activeClient, cloudDestinations: updatedDestinations }).catch(console.error);
+    }
   }
 
   const selectedDests = destinations.filter(d => selectedDestIds.has(d.id));
@@ -198,7 +292,7 @@ function ConfigSidebar() {
   const pathsSet = [settings.sourceFolder, settings.vaultFolder].filter(Boolean).length;
 
   const tasksOn = [
-    settings.doThumbnails, settings.doDistribute, settings.doPublish, settings.doFlatExport, settings.doObsidian,
+    settings.doThumbnails, settings.doCdnOriginals, settings.doDistribute, settings.doPublish, settings.doFlatExport, settings.doObsidian,
   ].filter(Boolean).length;
 
   const destSummary = destinations.length === 0
@@ -226,8 +320,9 @@ function ConfigSidebar() {
       doFlatExport: hasCloudDests ? settings.doFlatExport : false,
     };
     const collectedAssets: string[] = [];
-    const cdnUrls   = new Map<string, string>();
-    const cloudUrls = new Map<string, CloudUrlEntry[]>();
+    const cdnUrls      = new Map<string, string>();
+    const originalUrls = new Map<string, string>();
+    const cloudUrls    = new Map<string, CloudUrlEntry[]>();
     const r2Config = (
       activeClient?.r2Endpoint &&
       activeClient?.r2AccessKeyId &&
@@ -245,43 +340,100 @@ function ConfigSidebar() {
     // Cloud destinations for cloud export (selected non-local destinations)
     const cloudDests = selectedDests.filter(d => d.config.type !== 'local');
 
-    await runPipeline({
+    // ── Pre-run: resolve client + pre-populate CDN inventory from DB ──────────
+    let clientId: string | null = null;
+    const sbEnabled = !!(activeClient?.supabaseUrl && activeClient?.supabaseServiceKey);
+    const sbConfig = sbEnabled ? {
+      url:        activeClient!.supabaseUrl!,
+      serviceKey: activeClient!.supabaseServiceKey!,
+    } : null;
+    const log = appendLog as (type: string, msg: string) => void;
+
+    if (sbConfig) {
+      clientId = await resolveClientId(activeClient!.name, activeClient!.brandColor, sbConfig, log);
+      if (clientId && r2Config) {
+        // Pre-populate cdnUrls from DB so runCdnUpload skips already-uploaded assets
+        try {
+          const inventory = await fetchClientInventory(clientId, sbConfig);
+          const withUrl   = inventory.filter(r => r.thumbnail_url);
+          for (const rec of withUrl) {
+            // Gallery children use shortcodes with '|' — skip pre-populating so the CDN upload
+            // step always attempts to verify/re-upload them (guards against stale deletions).
+            if (rec.shortcode.includes('|')) continue;
+            // URL is .../thumbnails/{stem}-thumb.webp — extract stem to match runCdnUpload lookup key.
+            // Only add the stem key if the extracted stem belongs to this asset (not a gallery parent
+            // whose thumbnail_url points to a child's stem — that would wrongly skip the child upload).
+            const m = rec.thumbnail_url!.match(/thumbnails\/(.+)-thumb\.webp$/);
+            if (m) {
+              const urlStem     = decodeURIComponent(m[1]);
+              const urlShortcode = urlStem.replace(/\s+[vV]\d+(?:[-._]\d+)*\s*$/, '').trim();
+              if (urlShortcode === rec.shortcode) {
+                // Stem belongs to this asset — safe to skip CDN re-upload
+                cdnUrls.set(urlStem, rec.thumbnail_url!);
+              }
+              // If they differ (gallery parent whose thumbnail = first child's URL), don't cache the
+              // child stem — the CDN step will re-upload the child thumbnail as needed.
+            }
+            // Always key by shortcode so other versions of the same asset are also skipped
+            cdnUrls.set(rec.shortcode, rec.thumbnail_url!);
+          }
+          const noUrl = inventory.length - withUrl.length;
+          const noMatch = withUrl.filter(r => !r.thumbnail_url!.match(/thumbnails\/(.+)-thumb\.webp$/)).length;
+          appendLog('dim', `  CDN inventory: ${inventory.length} records · ${withUrl.length} with URL · ${noUrl} null · ${noMatch} regex miss`);
+          if (withUrl.length > 0) appendLog('dim', `  Sample URL: ${withUrl[0].thumbnail_url}`);
+        } catch (e) {
+          appendLog('dim', `  CDN inventory fetch skipped: ${e}`);
+        }
+      }
+    }
+
+    // ── Pipeline (thumbnails + CDN upload skips known assets) ─────────────────
+    const stats = await runPipeline({
       settings: effectiveSettings,
       vocab:    vocabData,
       appendLog, addIssue, setProgress, finishRun,
       collectedAssets,
       cdnUrls,
+      originalUrls,
       cloudUrls,
       cloudDestinations: cloudDests,
       r2: r2Config,
+      identityMigrated: !!activeClient?.identityMigrated,
     });
-    if (activeClient?.supabaseUrl && activeClient?.supabaseServiceKey) {
-      const sbConfig = {
-        url:        activeClient.supabaseUrl,
-        serviceKey: activeClient.supabaseServiceKey,
-      };
-      const log      = appendLog as (type: string, msg: string) => void;
-      const clientId = await resolveClientId(activeClient.name, activeClient.brandColor, sbConfig, log);
 
-      if (clientId) {
-        const assetStems = collectedAssets.map(f => {
-          const name = f.split('/').pop()!;
-          const dot  = name.lastIndexOf('.');
-          return dot > 0 ? name.slice(0, dot) : name;
+    // ── Post-run: Supabase sync + targeted CDN cleanup ────────────────────────
+    if (sbConfig && clientId) {
+      const { singles, galleries, packageDirs, filePaths } = groupAssets(collectedAssets, effectiveSettings.outFolder ?? 'OUT');
+
+      if (!singles.length && !galleries.length) {
+        appendLog('info', 'Supabase: no assets found in source — skipping export.');
+      } else {
+        const identity = { migrated: !!activeClient?.identityMigrated, packageDirs, filePaths };
+        const sbResult = await exportAssetsToSupabase(singles, clientId, vocabData, sbConfig, log, cdnUrls, cloudUrls, galleries, identity, originalUrls);
+        setSupabaseSync({
+          created:      sbResult.created,
+          updated:      sbResult.updated,
+          disconnected: sbResult.disconnected,
+          deleted:      sbResult.deleted,
+          errors:       sbResult.errors,
         });
 
-        if (!assetStems.length) {
-          appendLog('info', 'Supabase: no assets found in source — skipping export.');
-        } else {
-          await exportAssetsToSupabase(assetStems, clientId, vocabData, sbConfig, log, cdnUrls, cloudUrls);
+        // Delete stale CDN objects identified by Supabase diff (no R2 listing needed)
+        if (r2Config && sbResult.staleObjectKeys.length > 0) {
+          await deleteCdnObjects(r2Config, sbResult.staleObjectKeys, log);
         }
 
-        if (effectiveSettings.sourceFolder) {
-          const versionMap = await scanVersionMap(effectiveSettings.sourceFolder, vocabData, effectiveSettings);
-          await syncVersionHistory(versionMap, clientId, vocabData, sbConfig, log);
-        }
+        // Sync vocabulary tag groups so the web portal can show collapsible subcategories
+        await syncTagsFromVocabulary(vocabData, clientId, sbConfig, log);
+      }
+
+      if (effectiveSettings.sourceFolder) {
+        const versionMap = await scanVersionMap(effectiveSettings.sourceFolder, vocabData, effectiveSettings);
+        await syncVersionHistory(versionMap, clientId, vocabData, sbConfig, log);
       }
     }
+
+    notifyRunComplete(stats, stats.errors > 0 || stats.skipped > 0);
   }
 
   return (
@@ -348,22 +500,27 @@ function ConfigSidebar() {
             onChange={v => setField('doThumbnails', v)}
           />
           <TaskRow
-            label="2  Distribute packages"
+            label="2  Upload originals to CDN"
+            checked={settings.doCdnOriginals}
+            onChange={v => setField('doCdnOriginals', v)}
+          />
+          <TaskRow
+            label="3  Distribute packages"
             checked={settings.doDistribute}
             onChange={v => setField('doDistribute', v)}
           />
           <TaskRow
-            label="3  Export to destinations"
+            label="4  Export to destinations"
             checked={settings.doPublish}
             onChange={v => setField('doPublish', v)}
           />
           <TaskRow
-            label="4  Cloud export"
+            label="5  Cloud export"
             checked={settings.doFlatExport}
             onChange={v => setField('doFlatExport', v)}
           />
           <TaskRow
-            label="5  Publish to DAM"
+            label="6  Publish to DAM"
             checked={settings.doObsidian}
             onChange={v => setField('doObsidian', v)}
           />
@@ -502,7 +659,7 @@ export function PipelineView() {
         <StatsStrip />
         <ActivityLog />
       </div>
-      <IssuesPanel />
+      <RightColumn />
     </div>
   );
 }

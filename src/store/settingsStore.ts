@@ -14,6 +14,7 @@ export interface AppSettings {
   doPublish:      boolean;
   doFlatExport:   boolean;
   doObsidian:     boolean;
+  doCdnOriginals: boolean;
 
   /* Run options */
   dryRun:            boolean;
@@ -45,6 +46,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   doPublish:      true,
   doFlatExport:   false,
   doObsidian:     false,
+  doCdnOriginals: true,
 
   dryRun:            false,
   keepHighestVersion: false,

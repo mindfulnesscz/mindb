@@ -4,9 +4,10 @@
 
 import {
   readDir, readFile, copyFile, mkdir, stat, rename,
+  readTextFile, writeTextFile, exists,
   type DirEntry,
 } from '@tauri-apps/plugin-fs';
-import { join, basename, dirname } from '@tauri-apps/api/path';
+import { join, basename, dirname, appDataDir } from '@tauri-apps/api/path';
 import { invoke } from '@tauri-apps/api/core';
 import type { AppSettings } from '../store/settingsStore';
 import type { LogType } from '../store/pipelineStore';
@@ -17,6 +18,8 @@ import { buildVocabContext, translateExportName, parseFilename } from '../domain
 import { runObsidian } from './damService';
 import { uploadDropboxFile, uploadOneDriveFile, uploadGDriveFile } from './cloudService';
 import type { CloudDestination } from '../domain/client';
+import { stripStableId } from '../domain/stableId';
+import { resolveCdnIdentity } from './supabaseService';
 
 export interface CloudUrlEntry {
   provider: string;  // 'dropbox' | 'onedrive' | 'gdrive'
@@ -43,8 +46,11 @@ export interface RunContext {
   collectedAssets?:  string[]; // populated once by runPipeline, stems used for Supabase sync
   r2?:               R2Config;                             // CDN upload config; omit to skip CDN step
   cdnUrls?:          Map<string, string>;                  // stem → public CDN URL, populated by CDN step
+  originalUrls?:     Map<string, string>;                  // stem → public CDN URL of the original file (version-stable key)
   cloudUrls?:        Map<string, CloudUrlEntry[]>;         // stem → cloud sharing URLs, populated by cloud export
   cloudDestinations?: CloudDestination[];                  // active cloud destinations to export to
+  identityMigrated?: boolean;                              // client.identityMigrated — gates stable-identity CDN keying
+  cdnIdentity?:      Map<string, { stableId: string; childId: string }>; // stem → rename-proof identity, populated pre-CDN-upload
 }
 
 /* ── Naming helpers ─────────────────────────────────────────────────────── */
@@ -132,13 +138,14 @@ async function collectFiles(dir: string, s: AppSettings, directOnly = false): Pr
   return results;
 }
 
-/* ── Unchanged check (size comparison) ──────────────────────────────────── */
+/* ── Unchanged check (mtime — dest missing/older → copy, dest newer-or-same → skip) ── */
 
 async function isUnchanged(src: string, dest: string): Promise<boolean> {
   try {
     const [ss, ds] = await Promise.all([stat(src), stat(dest)]);
-    return ss.size === ds.size;
-  } catch { return false; }
+    if (ss.mtime && ds.mtime) return ds.mtime.getTime() >= ss.mtime.getTime();
+    return ss.size === ds.size; // mtime unavailable on this filesystem — fall back to size
+  } catch { return false; } // dest missing (or unreadable) — not unchanged, copy it
 }
 
 /* ── Distribute operation ───────────────────────────────────────────────── */
@@ -398,7 +405,9 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
       } else {
         const hasSiblingOut = entries.some(sib => sib.isDirectory && isOutFolder(sib.name, settings));
         if (hasSiblingOut) continue;
-        await publishFolder(childSrc, await join(target, e.name));
+        // Strip the folder-identity hash suffix — it's an internal source-side anchor
+        // (see domain/stableId.ts) and must never leak into a published/shared copy.
+        await publishFolder(childSrc, await join(target, stripStableId(e.name)));
       }
     }
   }
@@ -645,6 +654,98 @@ async function dirExists(path: string): Promise<boolean> {
 
 
 
+/* ── Local R2-upload cache — avoids hashing + a network HEAD for files that
+   haven't changed since we last uploaded them. upload_to_r2's content-hash
+   check (r2.rs) remains the correctness backstop for cache misses, first
+   runs, or another machine having touched the object — this cache is purely
+   a fast-path optimization on top of it, keyed by mtime+size (cheap local
+   stat, no file read). A false cache hit is impossible to get wrong in a
+   way that serves stale content: worst case a stale cache entry just causes
+   an unnecessary but still-correct upload_to_r2 call. ───────────────────── */
+interface R2CacheEntry { mtimeMs: number; size: number; sha256: string }
+type R2Cache = Record<string, R2CacheEntry>;
+
+let r2CacheMemo: R2Cache | null = null;
+
+async function getR2CachePath(): Promise<string> {
+  return await join(await appDataDir(), 'r2-upload-cache.json');
+}
+
+async function loadR2Cache(): Promise<R2Cache> {
+  if (r2CacheMemo) return r2CacheMemo;
+  try {
+    const path = await getR2CachePath();
+    r2CacheMemo = (await exists(path)) ? JSON.parse(await readTextFile(path)) : {};
+  } catch {
+    r2CacheMemo = {};
+  }
+  return r2CacheMemo!;
+}
+
+async function saveR2Cache(cache: R2Cache): Promise<void> {
+  try {
+    await writeTextFile(await getR2CachePath(), JSON.stringify(cache));
+  } catch { /* best-effort — worst case is a slower next run, not incorrect behavior */ }
+}
+
+function r2CacheKey(bucket: string, objectKey: string): string {
+  return `${bucket}::${objectKey}`;
+}
+
+function rememberR2Upload(
+  cache: R2Cache, bucket: string, objectKey: string, mtimeMs: number, size: number, sha256: string,
+): void {
+  cache[r2CacheKey(bucket, objectKey)] = { mtimeMs, size, sha256 };
+}
+
+function r2PublicUrl(publicDomain: string, objectKey: string): string {
+  return `${publicDomain.replace(/\/+$/, '')}/${objectKey}`;
+}
+
+/* One ListObjectsV2 sweep of a key prefix at the start of an upload phase.
+   Existence can then be decided locally — without it, every cache miss pays a
+   per-file HEAD and every upload a per-file LIST for the sibling cleanup.
+   `null` means the list failed; callers fall back to per-file checks. */
+async function fetchR2KeyManifest(
+  r2: NonNullable<RunContext['r2']>, prefix: string,
+  appendLog: RunContext['appendLog'],
+): Promise<Set<string> | null> {
+  try {
+    const keys = await invoke<string[]>('list_r2_keys', {
+      endpoint:    r2.endpoint,
+      bucket:      r2.bucket,
+      accessKeyId: r2.accessKeyId,
+      secretKey:   r2.secretKey,
+      prefix,
+    });
+    return new Set(keys);
+  } catch (e) {
+    appendLog('dim', `  R2 inventory list failed (${e}) — falling back to per-file checks`);
+    return null;
+  }
+}
+
+/* CDN uploads publish one object per logical asset under a version-stable key —
+   feeding several version files of the same asset into them makes each overwrite
+   the others under that one key, re-uploading forever. Old versions belong in
+   versions/, but when they sit in OUT keep only the highest per base+ext. Grouped
+   per directory, since base names can legitimately repeat across packages. */
+function filterCdnEligible(paths: string[]): { kept: string[]; dropped: number } {
+  const byDir = new Map<string, string[]>();
+  for (const p of paths) {
+    const dir = p.substring(0, p.lastIndexOf('/') + 1);
+    const list = byDir.get(dir) ?? [];
+    list.push(p);
+    byDir.set(dir, list);
+  }
+  const kept: string[] = [];
+  for (const ps of byDir.values()) {
+    const keep = new Set(filterHighestVersions(ps.map(p => p.split('/').pop()!)));
+    kept.push(...ps.filter(p => keep.has(p.split('/').pop()!)));
+  }
+  return { kept, dropped: paths.length - kept.length };
+}
+
 /* ── CDN thumbnail upload ───────────────────────────────────────────────── */
 
 async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<void> {
@@ -656,7 +757,9 @@ async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<void> {
 
   appendLog('section', '━━━ CDN UPLOAD ━━━');
 
-  const thumbFiles = (collectedAssets ?? []).map(srcPath => {
+  const { kept: cdnAssets, dropped: olderVersions } = filterCdnEligible(collectedAssets ?? []);
+  if (olderVersions > 0) appendLog('skip', `  ⊘  ${olderVersions} older version file(s) excluded from CDN`);
+  const thumbFiles = cdnAssets.map(srcPath => {
     const fileName = srcPath.split('/').pop()!;
     const stem     = fileName.substring(0, fileName.lastIndexOf('.'));
     const dir      = srcPath.substring(0, srcPath.lastIndexOf('/') + 1);
@@ -668,23 +771,71 @@ async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<void> {
     return;
   }
 
-  let uploaded = 0;
-  let skipped  = 0;
-  let errors   = 0;
+  appendLog('dim', `  inventory map: ${ctx.cdnUrls?.size ?? 0} entries`);
+  if (ctx.cdnUrls && ctx.cdnUrls.size > 0) {
+    const sample = [...ctx.cdnUrls.keys()].slice(0, 2);
+    appendLog('dim', `  sample stems: ${sample.map(s => `"${s}"`).join(', ')}`);
+  }
 
-  const CONCURRENCY = 4;
+  let uploaded = 0;
+  let skipped  = 0; // no local thumb file, or already known uploaded per DB inventory
+  let cached   = 0; // local mtime+size match last upload — skipped without hashing or a network call
+  let deduped  = 0; // attempted, but R2 already had this exact content (content-hash match)
+  let errors   = 0;
+  let uploadLogged = 0;
+
+  const r2Cache = await loadR2Cache();
+  let r2CacheDirty = false;
+  const remoteKeys = await fetchR2KeyManifest(r2, 'thumbnails/', appendLog);
+
+  const CONCURRENCY = 8;
   for (let i = 0; i < thumbFiles.length; i += CONCURRENCY) {
     const batch = thumbFiles.slice(i, i + CONCURRENCY);
     await Promise.all(batch.map(async ({ thumbPath, stem }) => {
-      // Check thumbnail exists before attempting upload
-      try { await stat(thumbPath); } catch {
+      // Skip if URL already known from DB inventory — no CDN request needed
+      // Also check by shortcode (version-stripped) so other versions of the same asset skip too
+      const shortcode = stem.replace(/\s+[vV]\d+(?:[-._]\d+)*\s*$/, '').trim();
+      if (ctx.cdnUrls?.has(stem) || ctx.cdnUrls?.has(shortcode)) {
         skipped += 1;
         return;
       }
-      const fileName  = thumbPath.split('/').pop()!;
-      const objectKey = `thumbnails/${fileName}`;
+      // Check thumbnail exists locally before attempting upload
+      let thumbInfo;
+      try { thumbInfo = await stat(thumbPath); } catch {
+        skipped += 1;
+        return;
+      }
+      const fileName = thumbPath.split('/').pop()!;
+      const identity = ctx.cdnIdentity?.get(stem);
+      // Stable-identity key when resolved (rename-proof) — else today's filename-based key.
+      const objectKey = identity
+        ? `thumbnails/${identity.stableId}/${identity.childId}.webp`
+        : `thumbnails/${fileName}`;
+
+      // Cheap local check (mtime+size, no file read/hash/network) before the real thing.
+      // A manifest that says the key is gone from R2 overrides the cache — re-upload.
+      const cacheKey = r2CacheKey(r2.bucket, objectKey);
+      const cacheEntry = r2Cache[cacheKey];
+      const mtimeMs = thumbInfo.mtime?.getTime() ?? -1;
+      if (cacheEntry && cacheEntry.size === thumbInfo.size && cacheEntry.mtimeMs === mtimeMs
+          && remoteKeys?.has(objectKey) !== false) {
+        // Supabase sync writes thumbnail_url from ctx.cdnUrls, and the DB
+        // pre-population regex misses stable-identity keys — leaving the map
+        // unset here would null the column on the next sync.
+        if (ctx.cdnUrls && !ctx.cdnUrls.has(stem)) {
+          ctx.cdnUrls.set(stem, r2PublicUrl(r2.publicDomain, objectKey));
+        }
+        cached += 1;
+        stats.cdnThumbCached += 1;
+        return;
+      }
+
+      if (uploadLogged < 3) {
+        appendLog('dim', `  miss: "${stem}"`);
+        uploadLogged++;
+      }
       try {
-        const result = await invoke<{ url: string; skipped: boolean }>('upload_to_r2', {
+        const result = await invoke<{ url: string; skipped: boolean; sha256: string }>('upload_to_r2', {
           filePath:     thumbPath,
           objectKey,
           endpoint:     r2.endpoint,
@@ -692,14 +843,22 @@ async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<void> {
           accessKeyId:  r2.accessKeyId,
           secretKey:    r2.secretKey,
           publicDomain: r2.publicDomain,
+          contentType:  'image/webp',
+          remoteExists: remoteKeys ? remoteKeys.has(objectKey) : null,
+          knownSha256:  cacheEntry && cacheEntry.size === thumbInfo.size ? cacheEntry.sha256 : null,
         });
         if (ctx.cdnUrls) ctx.cdnUrls.set(stem, result.url);
+        rememberR2Upload(r2Cache, r2.bucket, objectKey, mtimeMs, thumbInfo.size, result.sha256);
+        r2CacheDirty = true;
+        remoteKeys?.add(objectKey);
         if (result.skipped) {
-          appendLog('dim', `  ↷  ${fileName} (already on CDN)`);
-          skipped += 1;
+          appendLog('dim', `  ↷  unchanged, skipped: ${fileName}`);
+          deduped += 1;
+          stats.cdnThumbUnchanged += 1;
         } else {
-          appendLog('success', `  ✓  ${fileName}`);
+          appendLog('success', `  ✓  ${fileName} → ${objectKey}`);
           uploaded += 1;
+          stats.cdnThumbUploaded += 1;
         }
       } catch (e) {
         appendLog('error', `  ✕  ${fileName} — ${e}`);
@@ -709,25 +868,187 @@ async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<void> {
     }));
   }
 
+  if (r2CacheDirty) await saveR2Cache(r2Cache);
+
   appendLog('section',
-    `━━━ CDN DONE — ${uploaded} uploaded · ${skipped} no thumb · ${errors} errors ━━━`,
+    `━━━ CDN DONE — ${uploaded} uploaded · ${cached} cached · ${deduped} unchanged · ${skipped} no thumb · ${errors} errors ━━━`,
   );
+}
+
+/* ── Original-file CDN upload — content-hash deduped, version/rename-stable key ──
+   Keyed by stable identity (stableId/childId) when resolved — rename-proof, since
+   that identity survives file/folder renames (see resolveCdnIdentity). Falls back to
+   shortcode (version stripped) for legacy/unmigrated assets — not rename-proof, but
+   still version-stable, so a new version's upload overwrites the last one's key rather
+   than accumulating. Either way, upload_to_r2 only actually re-uploads when the file's
+   content hash differs from what's already stored — unchanged re-runs are skipped. A
+   small per-asset cleanup below handles the rare case where a version bump (or, for
+   stable identity, an actual content-hash mismatch under the same key) changes the
+   file extension. */
+async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promise<void> {
+  const { r2, appendLog, collectedAssets } = ctx;
+  if (!r2?.endpoint || !r2.accessKeyId || !r2.secretKey || !r2.bucket || !r2.publicDomain) {
+    appendLog('error', '  CDN config incomplete — skipping original upload.');
+    return;
+  }
+
+  appendLog('section', '━━━ CDN ORIGINALS UPLOAD ━━━');
+
+  const { kept: cdnAssets, dropped: olderVersions } = filterCdnEligible(collectedAssets ?? []);
+  if (olderVersions > 0) appendLog('skip', `  ⊘  ${olderVersions} older version file(s) excluded from CDN`);
+  const files = cdnAssets.map(srcPath => {
+    const fileName  = srcPath.split('/').pop()!;
+    const dotIdx    = fileName.lastIndexOf('.');
+    const ext       = dotIdx > 0 ? fileName.slice(dotIdx) : '';
+    const stem      = dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName;
+    const shortcode = stem.replace(/\s+[vV]\d+(?:[-._]\d+)*\s*$/, '').trim();
+    return { srcPath, stem, ext, shortcode };
+  });
+
+  if (!files.length) {
+    appendLog('dim', '  No assets to upload.');
+    return;
+  }
+
+  let uploaded = 0;
+  let cached   = 0; // local mtime+size match last upload — skipped without hashing or a network call
+  let deduped  = 0; // attempted, but R2 already had this exact content (content-hash match)
+  let errors   = 0;
+
+  const r2Cache = await loadR2Cache();
+  let r2CacheDirty = false;
+  const remoteKeys = await fetchR2KeyManifest(r2, 'originals/', appendLog);
+
+  // Identity by full filename first — extension-only variants (foo.pdf + foo.webp)
+  // share a stem but carry distinct child ids in the manifest. Falling back to the
+  // stem covers files scanned before per-file resolution existed.
+  const withKeys = files.map(f => {
+    const identity  = ctx.cdnIdentity?.get(`${f.stem}${f.ext}`) ?? ctx.cdnIdentity?.get(f.stem);
+    const keyPrefix = identity ? `originals/${identity.stableId}/${identity.childId}` : `originals/${f.shortcode}`;
+    return { ...f, keyPrefix, objectKey: `${keyPrefix}${f.ext}` };
+  });
+  // Keys claimed by any file this run — the stale-sibling cleanup must never delete
+  // these, or two files sharing a key prefix would destroy each other's upload.
+  const plannedKeys = new Set(withKeys.map(f => f.objectKey));
+
+  const CONCURRENCY = 8;
+  for (let i = 0; i < withKeys.length; i += CONCURRENCY) {
+    const batch = withKeys.slice(i, i + CONCURRENCY);
+    await Promise.all(batch.map(async ({ srcPath, stem, ext, keyPrefix, objectKey }) => {
+
+      // Cheap local check (mtime+size, no file read/hash/network) before the real thing.
+      let srcInfo;
+      try { srcInfo = await stat(srcPath); } catch (e) {
+        appendLog('error', `  ✕  ${stem}${ext} — ${e}`);
+        errors += 1;
+        stats.errors += 1;
+        return;
+      }
+      const cacheKey = r2CacheKey(r2.bucket, objectKey);
+      const cacheEntry = r2Cache[cacheKey];
+      const mtimeMs = srcInfo.mtime?.getTime() ?? -1;
+      if (cacheEntry && cacheEntry.size === srcInfo.size && cacheEntry.mtimeMs === mtimeMs
+          && remoteKeys?.has(objectKey) !== false) {
+        // Supabase sync writes download_url from ctx.originalUrls — there is no DB
+        // pre-population for originals, so skipping without setting the map would
+        // null the column on the next sync (the web portal's download button).
+        if (ctx.originalUrls && !ctx.originalUrls.has(stem)) {
+          ctx.originalUrls.set(stem, r2PublicUrl(r2.publicDomain, objectKey));
+        }
+        cached += 1;
+        stats.cdnOrigCached += 1;
+        return;
+      }
+
+      try {
+        const result = await invoke<{ url: string; skipped: boolean; sha256: string }>('upload_to_r2', {
+          filePath:     srcPath,
+          objectKey,
+          endpoint:     r2.endpoint,
+          bucket:       r2.bucket,
+          accessKeyId:  r2.accessKeyId,
+          secretKey:    r2.secretKey,
+          publicDomain: r2.publicDomain,
+          contentType:  mimeFromExt(ext),
+          remoteExists: remoteKeys ? remoteKeys.has(objectKey) : null,
+          knownSha256:  cacheEntry && cacheEntry.size === srcInfo.size ? cacheEntry.sha256 : null,
+        });
+        // First writer wins per stem — extension variants share the stem, and a
+        // deterministic pick (scan order) beats whichever batch happened to finish last.
+        if (ctx.originalUrls && !ctx.originalUrls.has(stem)) ctx.originalUrls.set(stem, result.url);
+        rememberR2Upload(r2Cache, r2.bucket, objectKey, mtimeMs, srcInfo.size, result.sha256);
+        r2CacheDirty = true;
+        remoteKeys?.add(objectKey);
+
+        // Safety net: if a version bump (or a genuine content change under stable
+        // identity) changed the extension, remove the stale sibling object so it
+        // doesn't linger under the same key prefix. With a manifest this is decided
+        // locally; without one, the LIST round-trip is only worth it after a real upload.
+        try {
+          const siblingKeys = remoteKeys
+            ? [...remoteKeys].filter(k => k.startsWith(`${keyPrefix}.`))
+            : result.skipped ? [] : await invoke<string[]>('list_r2_keys', {
+                endpoint:     r2.endpoint,
+                bucket:       r2.bucket,
+                accessKeyId:  r2.accessKeyId,
+                secretKey:    r2.secretKey,
+                prefix:       `${keyPrefix}.`,
+              });
+          for (const staleKey of siblingKeys.filter(k => k !== objectKey && !plannedKeys.has(k))) {
+            await invoke('delete_r2_object', {
+              endpoint: r2.endpoint, bucket: r2.bucket,
+              accessKeyId: r2.accessKeyId, secretKey: r2.secretKey, objectKey: staleKey,
+            });
+            remoteKeys?.delete(staleKey);
+            appendLog('dim', `  ↷  removed stale original: ${staleKey}`);
+          }
+        } catch { /* best-effort cleanup — never fails the run */ }
+
+        if (result.skipped) {
+          appendLog('dim', `  ↷  unchanged, skipped: ${stem}${ext}`);
+          deduped += 1;
+          stats.cdnOrigUnchanged += 1;
+        } else {
+          appendLog('success', `  ✓  ${stem}${ext} → ${objectKey}`);
+          uploaded += 1;
+          stats.cdnOrigUploaded += 1;
+        }
+      } catch (e) {
+        appendLog('error', `  ✕  ${stem}${ext} — ${e}`);
+        errors += 1;
+        stats.errors += 1;
+      }
+    }));
+  }
+
+  if (r2CacheDirty) await saveR2Cache(r2Cache);
+
+  appendLog('section', `━━━ CDN ORIGINALS DONE — ${uploaded} uploaded · ${cached} cached · ${deduped} unchanged · ${errors} errors ━━━`);
 }
 
 /* ── CDN cleanup — remove stale thumbnails from R2 ─────────────────────── */
 
-async function runCdnCleanup(ctx: RunContext, stats: RunStats): Promise<void> {
+/** Full R2 reconcile — lists all objects and deletes stale ones. Use manually when DB is out of sync.
+ * Not currently wired to any UI action. If `ctx.cdnIdentity` isn't already populated (e.g. by a
+ * prior `resolveCdnIdentity` call on this same ctx), expected keys fall back to filename-based —
+ * call `resolveCdnIdentity` first for accurate results on stable-identity clients. */
+export async function reconcileCdn(ctx: RunContext, stats: RunStats): Promise<void> {
   const { r2, appendLog, collectedAssets } = ctx;
   if (!r2) return;
 
   appendLog('section', '━━━ CDN CLEANUP ━━━');
 
-  // Keys that should exist — one per collected asset
+  // Keys that should exist — one per collected asset. Mirrors runCdnUpload's key logic
+  // exactly (stable-identity when resolved, filename-based fallback otherwise) so this
+  // never mistakes a current object under the new scheme for a stale one.
   const expectedKeys = new Set(
     (collectedAssets ?? []).map(srcPath => {
       const fileName = srcPath.split('/').pop()!;
       const stem     = fileName.substring(0, fileName.lastIndexOf('.'));
-      return `thumbnails/${stem}-thumb.webp`;
+      const identity = ctx.cdnIdentity?.get(stem);
+      return identity
+        ? `thumbnails/${identity.stableId}/${identity.childId}.webp`
+        : `thumbnails/${stem}-thumb.webp`;
     }),
   );
 
@@ -775,6 +1096,36 @@ async function runCdnCleanup(ctx: RunContext, stats: RunStats): Promise<void> {
   }
 
   appendLog('section', `━━━ CDN CLEANUP DONE — ${removed} removed · ${errors} errors ━━━`);
+}
+
+/* ── Targeted CDN deletion — called after Supabase sync with the stale list ─ */
+
+export async function deleteCdnObjects(
+  r2:         R2Config,
+  objectKeys: string[],
+  appendLog:  (type: string, msg: string) => void,
+): Promise<void> {
+  if (!objectKeys.length) return;
+  appendLog('section', '━━━ CDN DELETE ━━━');
+  let removed = 0;
+  let errors  = 0;
+  for (const objectKey of objectKeys) {
+    try {
+      await invoke('delete_r2_object', {
+        endpoint:    r2.endpoint,
+        bucket:      r2.bucket,
+        accessKeyId: r2.accessKeyId,
+        secretKey:   r2.secretKey,
+        objectKey,
+      });
+      appendLog('dim', `  ↷  removed: ${objectKey}`);
+      removed += 1;
+    } catch (e) {
+      appendLog('error', `  ✕  Failed to remove ${objectKey}: ${e}`);
+      errors += 1;
+    }
+  }
+  appendLog('section', `━━━ CDN DELETE DONE — ${removed} removed · ${errors} errors ━━━`);
 }
 
 /* ── Cloud export ───────────────────────────────────────────────────────── */
@@ -884,14 +1235,16 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
             } else if (cfg.type === 'gdrive') {
               url = await uploadGDriveFile(
                 cfg.token!.accessToken, bytes, mimeFromExt(ext),
-                translated, cfg.remotePath, dest.generateLink,
+                translated, cfg.remotePath, dest.generateLink, cfg.sharedDriveId,
               );
             }
             appendLog('success', `  ✓  ${fileName}`);
             uploaded += 1;
             stats.published += 1;
           }
-          if (url && cloudUrls) {
+          // Only client-role destinations feed the client-facing web portal —
+          // internal-team links should never end up there.
+          if (url && cloudUrls && dest.role === 'client') {
             const existing = cloudUrls.get(stem) ?? [];
             const idx      = existing.findIndex(e => e.name === dest.name);
             const entry    = { provider: cfg.type, name: dest.name, url };
@@ -918,12 +1271,14 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
 
 /* ── Main entry point ───────────────────────────────────────────────────── */
 
-export async function runPipeline(ctx: RunContext): Promise<void> {
+export async function runPipeline(ctx: RunContext): Promise<RunStats> {
   const { settings, appendLog, finishRun } = ctx;
 
   const stats: RunStats = {
     packages: 0, copied: 0, skipped: 0, errors: 0,
     pubFolders: 0, published: 0, thumbnails: 0, notes: 0, disconnected: 0,
+    cdnThumbUploaded: 0, cdnThumbCached: 0, cdnThumbUnchanged: 0,
+    cdnOrigUploaded: 0, cdnOrigCached: 0, cdnOrigUnchanged: 0,
   };
 
   try {
@@ -933,9 +1288,21 @@ export async function runPipeline(ctx: RunContext): Promise<void> {
       ctx.collectedAssets?.push(...scanned);
     }
 
+    // Resolve rename-proof CDN identity before any CDN step runs, so those steps can key
+    // by it instead of the current filename. Gated the same as the CDN steps themselves
+    // (r2 configured, and thumbnails/originals actually enabled) so this cost is only ever
+    // paid when its result will actually be used.
+    if (ctx.identityMigrated && ctx.r2 && (settings.doThumbnails || settings.doCdnOriginals)) {
+      try {
+        ctx.cdnIdentity = await resolveCdnIdentity(ctx.collectedAssets ?? [], settings.outFolder || 'OUT');
+      } catch (e) {
+        appendLog('error', `  ✕  CDN identity resolution failed, falling back to filename-based keys: ${e}`);
+      }
+    }
+
     if (settings.doThumbnails) await runThumbnails(ctx, stats);
     if (settings.doThumbnails && ctx.r2) await runCdnUpload(ctx, stats);
-    if (ctx.r2) await runCdnCleanup(ctx, stats); // reconcile CDN regardless of thumb step
+    if (settings.doCdnOriginals && ctx.r2) await runOriginalUpload(ctx, stats);
     if (settings.doDistribute) await runDistribute(ctx, stats);
     if (settings.doPublish)    await runPublish(ctx, stats);
     if (settings.doFlatExport) await runCloudExport(ctx, stats);
@@ -949,4 +1316,5 @@ export async function runPipeline(ctx: RunContext): Promise<void> {
 
   const hasIssues = stats.errors > 0 || stats.skipped > 0;
   finishRun(stats, hasIssues);
+  return stats;
 }

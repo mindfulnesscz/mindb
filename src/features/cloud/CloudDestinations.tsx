@@ -3,7 +3,7 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { open as openBrowser } from '@tauri-apps/plugin-shell';
 import { Pencil, Trash2, Plus, ChevronLeft, Copy, Check, RefreshCw } from 'lucide-react';
 import { useClientStore } from '../../store/clientStore';
-import { saveClients } from '../../services/clientService';
+import { saveClients, pushCloudDestinations } from '../../services/clientService';
 import {
   connectDropbox, checkDropboxConnection, refreshDropboxToken,
   startOneDriveDeviceCode, pollOneDriveToken, checkOneDriveConnection, refreshOneDriveToken,
@@ -33,10 +33,12 @@ export function CloudDestinations() {
   const dests = activeClient.cloudDestinations;
 
   function persist(updated: CloudDestination[]) {
-    updateClient(activeClientId!, { cloudDestinations: updated });
+    if (!activeClient) return;
+    updateClient(activeClient.id, { cloudDestinations: updated });
     const updatedClients = clients.map(c => c.id === activeClientId
       ? { ...c, cloudDestinations: updated } : c);
     saveClients({ clients: updatedClients, activeClientId }).catch(console.error);
+    pushCloudDestinations({ ...activeClient, cloudDestinations: updated }).catch(console.error);
   }
 
   function handleSave(dest: CloudDestination) {
@@ -170,8 +172,8 @@ function DestForm({
     let config: DestConfig;
     if (type === 'local')    config = { type, path: (form.config as LocalDestConfig).path ?? '' };
     else if (type === 'dropbox')  config = { type, clientId: base.id, remotePath: base.remotePath, token: null };
-    else if (type === 'onedrive') config = { type, clientId: base.id, remotePath: base.remotePath, token: null };
-    else                          config = { type, clientId: base.id, clientSecret: '', remotePath: base.remotePath, token: null };
+    else if (type === 'onedrive') config = { type, clientId: base.id, tenantId: form.config.type === 'onedrive' ? form.config.tenantId : 'common', remotePath: base.remotePath, token: null };
+    else                          config = { type, clientId: base.id, clientSecret: '', sharedDriveId: form.config.type === 'gdrive' ? form.config.sharedDriveId : '', remotePath: base.remotePath, token: null };
     setForm(f => ({ ...f, config }));
     setAuthPhase('idle');
     setAuthError(null);
@@ -198,7 +200,7 @@ function DestForm({
       if (cfg.type === 'dropbox') {
         token = await connectDropbox(cfg.clientId);
       } else if (cfg.type === 'onedrive') {
-        const info = await startOneDriveDeviceCode(cfg.clientId);
+        const info = await startOneDriveDeviceCode(cfg.clientId, cfg.tenantId);
         setDeviceInfo(info);
         setAuthPhase('device-code');
         // Poll until token or cancelled
@@ -208,7 +210,7 @@ function DestForm({
         while (!cancelRef.current.cancelled && !token && Date.now() < deadline) {
           await delay(intervalMs);
           if (cancelRef.current.cancelled) return;
-          const result = await pollOneDriveToken(cfg.clientId, info.deviceCode, info.interval, cancelRef.current);
+          const result = await pollOneDriveToken(cfg.clientId, cfg.tenantId, info.deviceCode, info.interval, cancelRef.current);
           if (result) token = result;
         }
         if (!token) throw new Error('Authorization timed out or was cancelled.');
@@ -246,7 +248,7 @@ function DestForm({
     try {
       let updates: Partial<CloudToken>;
       if (cfg.type === 'dropbox')  updates = await refreshDropboxToken(cfg.clientId, cfg.token.refreshToken);
-      else if (cfg.type === 'onedrive') updates = await refreshOneDriveToken(cfg.clientId, cfg.token.refreshToken);
+      else if (cfg.type === 'onedrive') updates = await refreshOneDriveToken(cfg.clientId, cfg.tenantId, cfg.token.refreshToken);
       else                              updates = await refreshGDriveToken(cfg.clientId, cfg.clientSecret, cfg.token.refreshToken);
       const newToken = { ...cfg.token, ...updates };
       setForm(f => ({ ...f, config: { ...f.config, token: newToken } as DestConfig }));
@@ -376,6 +378,21 @@ function DestForm({
                   />
                   <span className={css.fieldHint}>{credHint(cfg.type)}</span>
                 </div>
+                {cfg.type === 'onedrive' && (
+                  <div className={css.field}>
+                    <span className={css.fieldLabel}>Azure Tenant ID</span>
+                    <input
+                      className={`${css.input} ${css.inputMono}`}
+                      value={(cfg as OneDriveDestConfig).tenantId ?? ''}
+                      onChange={e => patchConfig({ tenantId: e.target.value } as Partial<OneDriveDestConfig>)}
+                      placeholder="common"
+                    />
+                    <span className={css.fieldHint}>
+                      Use "common" for personal/multi-tenant apps. If the app registration's Supported account types
+                      is "Single tenant" / "My organization only", enter the Directory (tenant) ID from the app's Overview page instead.
+                    </span>
+                  </div>
+                )}
                 {cfg.type === 'gdrive' && (
                   <div className={css.field}>
                     <span className={css.fieldLabel}>Google Client Secret</span>
@@ -386,6 +403,22 @@ function DestForm({
                       onChange={e => patchConfig({ clientSecret: e.target.value } as Partial<GDriveDestConfig>)}
                       placeholder="From Google Cloud Console → Credentials"
                     />
+                  </div>
+                )}
+                {cfg.type === 'gdrive' && (
+                  <div className={css.field}>
+                    <span className={css.fieldLabel}>Shared Drive ID</span>
+                    <input
+                      className={`${css.input} ${css.inputMono}`}
+                      value={(cfg as GDriveDestConfig).sharedDriveId ?? ''}
+                      onChange={e => patchConfig({ sharedDriveId: e.target.value } as Partial<GDriveDestConfig>)}
+                      placeholder="Leave blank to use the signed-in account's own My Drive"
+                    />
+                    <span className={css.fieldHint}>
+                      Set this so every teammate's uploads land in one shared Drive instead of whoever connected's
+                      personal My Drive. Find it in Google Drive → open the Shared Drive → copy the ID from the URL
+                      (after /folders/).
+                    </span>
                   </div>
                 )}
               </div>
@@ -579,6 +612,6 @@ function statusTitle(s: ReturnType<typeof tokenStatus>, token: CloudToken | null
 
 function credHint(type: DestType): string {
   if (type === 'dropbox')  return 'Create an app at dropbox.com/developers → App Console. Use PKCE, redirect URI: http://localhost:7623/callback';
-  if (type === 'onedrive') return 'Register an app in Azure Portal. Set Supported account types to "Personal Microsoft accounts" and add Mobile/Desktop redirect URIs.';
+  if (type === 'onedrive') return 'Register an app in Azure Portal, enable "Allow public client flows" (Authentication), and add Mobile/Desktop redirect URIs. Set the Tenant ID below to match the app\'s Supported account types.';
   return 'Create OAuth 2.0 credentials in Google Cloud Console. Add http://localhost:7623/callback as an authorised redirect URI.';
 }

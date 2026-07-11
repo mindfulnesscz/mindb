@@ -191,7 +191,7 @@ function SupabaseClientSettings() {
             </span>
           </div>
           <div className={css.field}>
-            <span className={css.fieldLabel}>Service Role Key</span>
+            <span className={css.fieldLabel}>Secret key (service role)</span>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <input
                 className={`${css.input} ${css.inputMono}`}
@@ -228,7 +228,7 @@ function SupabaseClientSettings() {
             </span>
           </div>
           <div className={css.field}>
-            <span className={css.fieldLabel}>Anon Key</span>
+            <span className={css.fieldLabel}>Public API key (anon)</span>
             <input
               className={`${css.input} ${css.inputMono}`}
               type="password"
@@ -238,7 +238,7 @@ function SupabaseClientSettings() {
               placeholder="eyJhbGci…"
             />
             <span className={css.fieldHint}>
-              Used by the web portal (dc-hub-front) for client-facing access. Safe to embed in the frontend.
+              Used by the web portal for client-facing access. Safe to embed in the frontend — this is the anon/public key, not the secret one.
             </span>
           </div>
         </div>

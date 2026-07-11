@@ -155,6 +155,7 @@ async fn wait_for_oauth_redirect() -> Result<String, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -167,6 +168,9 @@ pub fn run() {
             r2::list_r2_keys,
             r2::delete_r2_object,
             cloud::upload_to_dropbox,
+            cloud::onedrive_device_code,
+            cloud::onedrive_poll_token,
+            cloud::onedrive_refresh_token,
             supabase::supabase_request,
         ])
         .run(tauri::generate_context!())

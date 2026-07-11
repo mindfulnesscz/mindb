@@ -6,9 +6,9 @@ import { ClientPickerModal, ClientAvatar } from '../features/clients/ClientPicke
 import css from './NavRail.module.css';
 
 const ITEMS: { dest: NavDest; icon: React.FC<{ size?: number }>; label: string }[] = [
-  { dest: 'pipeline',   icon: Layers,   label: 'Pipeline' },
-  { dest: 'vocabulary', icon: BookOpen, label: 'Vocab'    },
-  { dest: 'settings',   icon: Settings, label: 'Settings' },
+  { dest: 'pipeline',   icon: Layers,    label: 'Pipeline' },
+  { dest: 'vocabulary', icon: BookOpen,  label: 'Assets'   },
+  { dest: 'settings',   icon: Settings,  label: 'Settings' },
 ];
 
 export function NavRail() {

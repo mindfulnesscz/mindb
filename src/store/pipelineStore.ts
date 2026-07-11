@@ -25,7 +25,23 @@ export interface RunStats {
   published:    number;
   thumbnails:   number;
   notes:        number;
-  disconnected: number;
+  disconnected: number; // local target-folder files no longer in source (Publish step)
+  // CDN — thumbnail uploads (runCdnUpload)
+  cdnThumbUploaded:  number;
+  cdnThumbCached:    number; // local mtime/size match — skipped without hashing or a network call
+  cdnThumbUnchanged: number; // content-hash matched what's already on R2
+  // CDN — original file uploads (runOriginalUpload)
+  cdnOrigUploaded:   number;
+  cdnOrigCached:     number;
+  cdnOrigUnchanged:  number;
+}
+
+export interface SupabaseSyncSummary {
+  created:      number;
+  updated:      number;
+  disconnected: number; // stable-identity rows soft-marked disconnected this run
+  deleted:      number; // legacy rows hard-deleted this run
+  errors:       number;
 }
 
 export type RunStatus = 'idle' | 'running' | 'stopping' | 'completed' | 'error';
@@ -35,6 +51,7 @@ interface PipelineStore {
   progress:    number; // 0–100
   lastRunLabel: string;
   stats:       RunStats;
+  supabaseSync: SupabaseSyncSummary | null; // last Supabase sync result, set once per run
   log:         LogLine[];
   issues:      Issue[];
 
@@ -46,12 +63,15 @@ interface PipelineStore {
   addIssue:    (issue: Omit<Issue, 'id'>) => void;
   clearIssues: () => void;
   finishRun:   (stats: RunStats, hasIssues: boolean) => void;
+  setSupabaseSync: (summary: SupabaseSyncSummary) => void;
   resetStats:  () => void;
 }
 
 const EMPTY_STATS: RunStats = {
   packages: 0, copied: 0, skipped: 0, errors: 0,
   pubFolders: 0, published: 0, thumbnails: 0, notes: 0, disconnected: 0,
+  cdnThumbUploaded: 0, cdnThumbCached: 0, cdnThumbUnchanged: 0,
+  cdnOrigUploaded: 0, cdnOrigCached: 0, cdnOrigUnchanged: 0,
 };
 
 let _idCounter = 0;
@@ -67,11 +87,12 @@ export const usePipelineStore = create<PipelineStore>((set) => ({
   progress:     0,
   lastRunLabel: '',
   stats:        { ...EMPTY_STATS },
+  supabaseSync: null,
   log:          [],
   issues:       [],
 
   startRun: () =>
-    set({ runStatus: 'running', progress: 0, issues: [] }),
+    set({ runStatus: 'running', progress: 0, issues: [], supabaseSync: null }),
 
   stopRun: () => set({ runStatus: 'stopping' }),
 
@@ -98,6 +119,8 @@ export const usePipelineStore = create<PipelineStore>((set) => ({
       stats,
       lastRunLabel: hasIssues ? 'completed with issues' : 'completed',
     }),
+
+  setSupabaseSync: (summary) => set({ supabaseSync: summary }),
 
   resetStats: () => set({ stats: { ...EMPTY_STATS } }),
 }));

@@ -414,3 +414,15 @@
   transition: all var(--dur-fast) var(--ease-out);
 }
 .btnClear:hover { border-color: var(--gray-300); color: var(--text); }
+
+.errorText {
+  font-size: var(--text-xs);
+  color: var(--signal-error);
+  margin: 0;
+}
+
+.successText {
+  font-size: var(--text-xs);
+  color: var(--signal-success);
+  margin: 0;
+}

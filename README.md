@@ -20,18 +20,18 @@ See [CHANGELOG.md](CHANGELOG.md) for full version history.
 ## Architecture
 
 ```text
-dc-hub-desktop/              ← this repo (Tauri 2 desktop app)
+desktop/                      ← this repo (Tauri 2 desktop app)
   src/                       ← React + TypeScript frontend
   src-tauri/                 ← Rust backend (Tauri commands)
   NAMING CONVENTION.md       ← canonical naming reference (company-wide)
   CHANGELOG.md
   settings.json              ← local dev overrides (not committed)
 
-dc-hub-web/                  ← Next.js web portal (separate repo)
+web/                          ← Next.js web portal (separate repo)
   apps/portal/               ← client-facing DAM portal (reads Supabase via anon key)
   packages/                  ← shared types and UI
 
-dc-hub-python/               ← legacy Python utilities (not under git)
+python/                       ← legacy Python utilities (not under git)
   app.py                     ← original pipeline script (v1)
   vocab-manager.py           ← vocabulary editor (v1)
 ```
@@ -93,6 +93,8 @@ Clients are configured in the Settings view. Each client has:
 - Cloudflare R2 credentials
 
 Client configs are stored in `tauri-plugin-store` (OS app-data dir), never in plain files.
+
+Step-by-step setup and connection instructions for each destination type are in [CLOUD_DESTINATIONS.md](CLOUD_DESTINATIONS.md).
 
 ---
 

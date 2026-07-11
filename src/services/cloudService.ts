@@ -118,85 +118,54 @@ export interface DeviceCodeInfo {
   message:         string;
 }
 
-export async function startOneDriveDeviceCode(clientId: string): Promise<DeviceCodeInfo> {
-  const res = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/devicecode', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id: clientId,
-      scope:     'Files.ReadWrite offline_access User.Read',
-    }),
-  });
-  if (!res.ok) throw new Error(`OneDrive device code request failed: ${await res.text()}`);
-  const json = await res.json();
-  return {
-    deviceCode:      json.device_code,
-    userCode:        json.user_code,
-    verificationUri: json.verification_uri,
-    expiresIn:       json.expires_in,
-    interval:        json.interval ?? 5,
-    message:         json.message ?? '',
-  };
+// Uses Rust/reqwest commands — WKWebView fetch() to Microsoft's device-code
+// endpoints fails with "TypeError: Load failed" because those endpoints don't
+// send CORS headers for the tauri://localhost origin.
+//
+// tenantId: pass 'common' for multi-tenant/personal apps, or the Azure AD
+// tenant GUID for single-tenant ("My organization only") app registrations —
+// those reject `/common` with AADSTS50059.
+export async function startOneDriveDeviceCode(clientId: string, tenantId: string): Promise<DeviceCodeInfo> {
+  return invoke<DeviceCodeInfo>('onedrive_device_code', { clientId, tenantId });
 }
 
 export async function pollOneDriveToken(
   clientId:   string,
+  tenantId:   string,
   deviceCode: string,
   _intervalSecs: number,
   signal: { cancelled: boolean },
 ): Promise<CloudToken | null> {
-  const res = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type:   'urn:ietf:params:oauth:grant-type:device_code',
-      client_id:    clientId,
-      device_code:  deviceCode,
-    }),
-  });
+  const result = await invoke<{ accessToken: string; refreshToken: string; expiresIn: number } | null>(
+    'onedrive_poll_token',
+    { clientId, tenantId, deviceCode },
+  );
 
   if (signal.cancelled) return null;
+  if (!result) return null;
 
-  const json = await res.json();
-
-  if (json.access_token) {
-    return {
-      accessToken:  json.access_token,
-      refreshToken: json.refresh_token ?? '',
-      expiresAt:    Date.now() + (json.expires_in ?? 3600) * 1000,
-      email:        '',
-      displayName:  '',
-    };
-  }
-
-  if (json.error === 'authorization_declined' || json.error === 'expired_token') {
-    throw new Error(json.error_description ?? json.error);
-  }
-
-  // 'authorization_pending' or 'slow_down' — keep polling
-  return null;
+  return {
+    accessToken:  result.accessToken,
+    refreshToken: result.refreshToken,
+    expiresAt:    Date.now() + result.expiresIn * 1000,
+    email:        '',
+    displayName:  '',
+  };
 }
 
 export async function refreshOneDriveToken(
   clientId: string,
+  tenantId: string,
   refreshToken: string,
 ): Promise<Partial<CloudToken>> {
-  const res = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type:    'refresh_token',
-      client_id:     clientId,
-      refresh_token: refreshToken,
-      scope:         'Files.ReadWrite offline_access User.Read',
-    }),
-  });
-  if (!res.ok) throw new Error(`OneDrive refresh failed: ${await res.text()}`);
-  const json = await res.json();
+  const result = await invoke<{ accessToken: string; refreshToken: string; expiresIn: number }>(
+    'onedrive_refresh_token',
+    { clientId, tenantId, refreshToken },
+  );
   return {
-    accessToken:  json.access_token,
-    refreshToken: json.refresh_token ?? refreshToken,
-    expiresAt:    Date.now() + (json.expires_in ?? 3600) * 1000,
+    accessToken:  result.accessToken,
+    refreshToken: result.refreshToken,
+    expiresAt:    Date.now() + result.expiresIn * 1000,
   };
 }
 
@@ -353,19 +322,34 @@ export async function uploadOneDriveFile(
 
 /* ── Google Drive file upload ────────────────────────────────────────────── */
 
-async function getOrCreateGDriveFolder(accessToken: string, folderPath: string): Promise<string> {
-  const parts = folderPath.split('/').filter(Boolean);
-  let parentId = 'root';
+// sharedDriveId: pass a Shared Drive ID to target that team drive instead of
+// the signed-in account's own My Drive — required so uploads land in one
+// shared location regardless of which teammate's account authorized the
+// connection. All requests need supportsAllDrives=true for this to work.
+async function getOrCreateGDriveFolder(
+  accessToken:   string,
+  folderPath:    string,
+  sharedDriveId: string,
+): Promise<string> {
+  const rootId = sharedDriveId.trim() || 'root';
+  let parentId = rootId;
+  const parts  = folderPath.split('/').filter(Boolean);
+
   for (const part of parts) {
-    const q   = `name='${part.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`;
-    const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id)`, {
+    const q      = `name='${part.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`;
+    const params = new URLSearchParams({ q, fields: 'files(id)', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true' });
+    if (sharedDriveId.trim()) {
+      params.set('corpora', 'drive');
+      params.set('driveId', sharedDriveId.trim());
+    }
+    const res  = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     const data = await res.json() as { files?: Array<{ id: string }> };
     if (data.files?.length) {
       parentId = data.files[0].id;
     } else {
-      const cr = await fetch('https://www.googleapis.com/drive/v3/files', {
+      const cr = await fetch('https://www.googleapis.com/drive/v3/files?supportsAllDrives=true', {
         method:  'POST',
         headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
         body:    JSON.stringify({ name: part, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] }),
@@ -378,14 +362,15 @@ async function getOrCreateGDriveFolder(accessToken: string, folderPath: string):
 }
 
 export async function uploadGDriveFile(
-  accessToken: string,
-  bytes:        Uint8Array,
-  mimeType:     string,
-  fileName:     string,
-  folderPath:   string,   // e.g. "DC Hub/ESS"
-  getLink:      boolean,
+  accessToken:   string,
+  bytes:         Uint8Array,
+  mimeType:      string,
+  fileName:      string,
+  folderPath:    string,   // e.g. "DC Hub/ESS"
+  getLink:       boolean,
+  sharedDriveId: string = '',
 ): Promise<string | null> {
-  const folderId = await getOrCreateGDriveFolder(accessToken, folderPath);
+  const folderId = await getOrCreateGDriveFolder(accessToken, folderPath, sharedDriveId);
 
   // Multipart upload: metadata + file bytes
   const boundary = '----dc_hub_boundary';
@@ -403,7 +388,7 @@ export async function uploadGDriveFile(
   for (const p of parts) { body.set(p, offset); offset += p.byteLength; }
 
   const uploadRes = await fetch(
-    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink',
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink&supportsAllDrives=true',
     {
       method:  'POST',
       headers: {
@@ -419,7 +404,7 @@ export async function uploadGDriveFile(
   if (!getLink || !fileData.id) return null;
 
   // Make file publicly viewable and return sharing link
-  await fetch(`https://www.googleapis.com/drive/v3/files/${fileData.id}/permissions`, {
+  await fetch(`https://www.googleapis.com/drive/v3/files/${fileData.id}/permissions?supportsAllDrives=true`, {
     method:  'POST',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     body:    JSON.stringify({ role: 'reader', type: 'anyone' }),
@@ -430,12 +415,12 @@ export async function uploadGDriveFile(
 /* ── Token refresh dispatcher ────────────────────────────────────────────── */
 
 export async function refreshCloudToken(
-  config: { type: string; clientId?: string; clientSecret?: string; token: CloudToken | null },
+  config: { type: string; clientId?: string; tenantId?: string; clientSecret?: string; token: CloudToken | null },
 ): Promise<Partial<CloudToken>> {
   if (!config.token?.refreshToken) throw new Error('No refresh token available.');
-  const { type, clientId = '', token } = config;
+  const { type, clientId = '', tenantId = 'common', token } = config;
   if (type === 'dropbox')  return refreshDropboxToken(clientId, token.refreshToken);
-  if (type === 'onedrive') return refreshOneDriveToken(clientId, token.refreshToken);
+  if (type === 'onedrive') return refreshOneDriveToken(clientId, tenantId, token.refreshToken);
   if (type === 'gdrive')   return refreshGDriveToken(clientId, (config as { clientSecret: string }).clientSecret ?? '', token.refreshToken);
   throw new Error(`Unknown provider: ${type}`);
 }

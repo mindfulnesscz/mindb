@@ -1,11 +1,19 @@
 import { useState } from 'react';
-import { ChevronRight, Pencil, Trash2, Check, Plus, Search, X } from 'lucide-react';
+import { ChevronRight, Pencil, Trash2, Check, Plus, Search, X, FolderOpen } from 'lucide-react';
+import { mkdir, writeTextFile } from '@tauri-apps/plugin-fs';
+import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import {
   type Slot, type VocabTag,
   SUBTYPES, SLOT_LABELS, ENTITY_PREFIXES,
   buildFilenameCode, buildObsidianTags,
 } from '../../domain/vocabulary';
+import { generateStableId, appendStableId } from '../../domain/stableId';
 import { useVocabularyStore } from '../../store/vocabularyStore';
+import { useClientStore } from '../../store/clientStore';
+import { saveClients } from '../../services/clientService';
+import { resolveClientId, createDraftAsset, fetchExistingStableIds } from '../../services/supabaseService';
+import { writeReadme, README_FILENAME } from '../../services/readmeService';
+import { FolderTargetPicker } from '../../components/FolderTargetPicker';
 import { TagModal } from './TagModal';
 import css from './VocabularyView.module.css';
 
@@ -13,9 +21,17 @@ const SLOTS: Slot[] = ['entity', 'angle', 'format'];
 
 interface VersionState { major: string; minor: string; patch: string }
 
+// SHA-256 of an empty byte array — a well-known constant, no need to compute it. The
+// placeholder file seeded into OUT starts empty, so this is its correct manifest hash
+// until the real deliverable replaces it.
+const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+
 export function VocabularyView() {
   const { data, deleteTag } = useVocabularyStore();
   const allTags = data?.tags ?? [];
+
+  const { clients, activeClientId, updateClient } = useClientStore();
+  const activeClient = clients.find(c => c.id === activeClientId) ?? null;
 
   /* Vocabulary state */
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
@@ -29,6 +45,14 @@ export function VocabularyView() {
   const [description,  setDescription]  = useState('');
   const [version,      setVersion]      = useState<VersionState>({ major: '', minor: '', patch: '' });
   const [copied,       setCopied]        = useState(false);
+
+  /* Seed-folder state */
+  const [folderName,     setFolderName]     = useState('');
+  const [targetFolder,   setTargetFolder]   = useState(activeClient?.lastCreationFolder ?? '');
+  const [creating,       setCreating]       = useState(false);
+  const [createError,    setCreateError]    = useState<string | null>(null);
+  const [createSuccess,  setCreateSuccess]  = useState<string | null>(null);
+  const [createdDir,     setCreatedDir]     = useState<string | null>(null);
 
   function toggleGroup(key: string) {
     setCollapsedGroups(prev => {
@@ -86,6 +110,89 @@ export function VocabularyView() {
     await navigator.clipboard.writeText(generatedCode);
     setCopied(true);
     setTimeout(() => setCopied(false), 1800);
+  }
+
+  const canCreate = !creating && !!generatedCode && !!folderName.trim() && !!targetFolder
+    && !!activeClient?.supabaseUrl && !!activeClient?.supabaseServiceKey;
+
+  async function handleCreateFolder() {
+    if (!canCreate || !activeClient) return;
+    setCreating(true);
+    setCreateError(null);
+    setCreateSuccess(null);
+    setCreatedDir(null);
+
+    try {
+      const stem = generatedCode;
+      const byLabel = (slot: Slot) => orderedSelected.filter(t => t.slot === slot).map(t => t.label);
+      const name    = [...orderedSelected.map(t => t.label), description.trim()].filter(Boolean).join(' ');
+      const versionStr = version.major !== ''
+        ? `${version.major || '1'}-${version.minor || '0'}-${version.patch || '0'}`
+        : '0-1-0';
+
+      const config = { url: activeClient.supabaseUrl, serviceKey: activeClient.supabaseServiceKey };
+      const clientId = await resolveClientId(activeClient.name, activeClient.brandColor, config, () => {});
+      if (!clientId) throw new Error('Could not resolve Supabase client record.');
+
+      // Collision-check against every stable_id this client already has — same approach
+      // migrate-identity.ts uses, so a fresh asset can never clash with an existing folder.
+      const taken      = await fetchExistingStableIds(clientId, config);
+      const stableId   = generateStableId(taken);
+      // Folder identifier is the short, user-typed folder name — never the long tag-derived
+      // name, and never the bracket-coded file stem (folder names can't contain parentheses).
+      const folder     = appendStableId(folderName.trim(), stableId);
+      const packageDir = `${targetFolder}/${folder}`;
+
+      await mkdir(packageDir, { recursive: true });
+      await mkdir(`${packageDir}/IN`, { recursive: true });
+      await mkdir(`${packageDir}/WRK`, { recursive: true });
+      await mkdir(`${packageDir}/OUT`, { recursive: true });
+
+      // Seed an empty placeholder named after the generated shortcode — no extension, so
+      // the pipeline scanner (isPublishableFile requires a dot) ignores it until you
+      // replace it with the real file. Manifest reserves child_id 'c1' for it up front,
+      // so the first real sync updates this row instead of creating a duplicate.
+      await writeTextFile(`${packageDir}/OUT/${stem}`, '');
+      await writeTextFile(
+        `${packageDir}/.dchub.json`,
+        JSON.stringify({
+          stable_id: stableId,
+          children: { [stem]: { child_id: 'c1', sha256: EMPTY_SHA256 } },
+          updated_at: new Date().toISOString(),
+        }, null, 2),
+      );
+      await writeReadme(packageDir, {
+        name: name || stem, stableId, status: 'draft', version: versionStr, perm: 'internal',
+        tags: orderedSelected, stats: null,
+      });
+
+      try {
+        await createDraftAsset({
+          clientId, stableId, name: name || stem,
+          entities: byLabel('entity'), angles: byLabel('angle'), formats: byLabel('format'),
+          tags: orderedSelected.map(t => t.label),
+          // No primary-tag concept in this flow — see conversation history if that
+          // changes; the columns stay nullable for whenever that's revisited.
+          primaryEntityId: null, primaryAngleId: null, primaryFormatId: null,
+        }, config);
+      } catch (e) {
+        throw new Error(`Folder + ${README_FILENAME} were created, but the Supabase draft row failed: ${e instanceof Error ? e.message : e}`);
+      }
+
+      updateClient(activeClient.id, { lastCreationFolder: targetFolder });
+      saveClients({ clients: useClientStore.getState().clients, activeClientId }).catch(console.error);
+
+      setCreatedDir(packageDir);
+      setCreateSuccess(`Created "${folder}" — placeholder seeded in OUT, draft asset ready.`);
+      setFolderName('');
+      setSelected(new Map());
+      setDescription('');
+      setVersion({ major: '', minor: '', patch: '' });
+    } catch (e) {
+      setCreateError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCreating(false);
+    }
   }
 
   return (
@@ -179,6 +286,34 @@ export function VocabularyView() {
 
           {selected.size > 0 && (
             <button className={css.btnClear} onClick={clearGenerator}>Clear selection</button>
+          )}
+
+          <hr className={css.obsDivider} />
+
+          <div>
+            <div className={css.genLabel}>Folder name</div>
+            <input
+              className={css.descInput}
+              placeholder="Sealing overview"
+              value={folderName}
+              onChange={e => setFolderName(e.target.value)}
+            />
+          </div>
+
+          <FolderTargetPicker label="Target parent folder" value={targetFolder} onChange={setTargetFolder} />
+
+          {createError   && <p className={css.errorText}>{createError}</p>}
+          {createSuccess && <p className={css.successText}>{createSuccess}</p>}
+
+          <button className={css.btnCopy} onClick={handleCreateFolder} disabled={!canCreate}>
+            {creating ? 'Creating…' : 'Create asset folder'}
+          </button>
+
+          {createdDir && (
+            <button className={css.btnClear} onClick={() => revealItemInDir(createdDir)}>
+              <FolderOpen size={13} style={{ marginRight: 6, verticalAlign: -2 }} />
+              Reveal in Finder
+            </button>
           )}
         </aside>
       </div>

@@ -26,16 +26,18 @@ export interface DropboxDestConfig {
 export interface OneDriveDestConfig {
   type:       'onedrive';
   clientId:   string;
+  tenantId:   string;   // Azure AD tenant GUID, or 'common' for multi-tenant/personal apps
   remotePath: string;
   token:      CloudToken | null;
 }
 
 export interface GDriveDestConfig {
-  type:         'gdrive';
-  clientId:     string;
-  clientSecret: string;
-  remotePath:   string;
-  token:        CloudToken | null;
+  type:          'gdrive';
+  clientId:      string;
+  clientSecret:  string;
+  sharedDriveId: string;   // Shared Drive ID, or '' to use the signed-in account's own My Drive
+  remotePath:    string;
+  token:         CloudToken | null;
 }
 
 export type DestConfig =
@@ -50,6 +52,7 @@ export interface CloudDestination {
   role:         DestRole;
   flatExport:   boolean;
   generateLink: boolean;
+  enabled:      boolean;   // whether this destination is checked for pipeline runs; missing/legacy = enabled
   config:       DestConfig;
 }
 
@@ -72,6 +75,11 @@ export interface Client {
   r2SecretKey:       string;
   r2Bucket:          string;  // bucket name, e.g. dc-hub-ess
   r2PublicDomain:    string;  // public-facing domain, e.g. https://cdn.disruptcollective.com
+  // Folder-based stable identity migration — false until the one-time migration script
+  // has been run and verified for this client; gates stable_id-based matching in the pipeline.
+  identityMigrated:  boolean;
+  // Asset creation flow (Task 6) — remembers the last folder a new asset was scaffolded into.
+  lastCreationFolder: string;
 }
 
 export function makeClient(partial: Partial<Client> = {}): Client {
@@ -92,6 +100,8 @@ export function makeClient(partial: Partial<Client> = {}): Client {
     r2SecretKey:       '',
     r2Bucket:          '',
     r2PublicDomain:    '',
+    identityMigrated:  false,
+    lastCreationFolder: '',
     ...partial,
   };
 }
@@ -103,6 +113,7 @@ export function makeDestination(partial: Partial<CloudDestination> = {}): CloudD
     role:         'internal',
     flatExport:   false,
     generateLink: false,
+    enabled:      true,
     config:       { type: 'local', path: '' },
     ...partial,
   };

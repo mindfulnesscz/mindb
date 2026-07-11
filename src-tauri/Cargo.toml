@@ -1,6 +1,6 @@
 [package]
 name = "dc-hub-app"
-version = "0.1.0"
+version = "2.2.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -26,9 +26,10 @@ tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-store = "2"
+tauri-plugin-notification = "2"
 reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
 sha2 = "0.10"
 hmac = "0.12"
 hex = "0.4"
-tokio = { version = "1", features = ["net", "io-util", "time"] }
+tokio = { version = "1", features = ["net", "io-util", "time", "fs"] }
 

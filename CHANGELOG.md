@@ -5,6 +5,42 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [2.2.0] — 2026-07-11
+
+Folder-based stable identity, CDN originals, and a major R2 sync correctness/performance pass.
+
+### Added
+
+**Folder-based stable identity** (gated per client via `identityMigrated`; live on ESS since 2026-07-09)
+- ` __hash` package-folder suffix as a rename-proof asset anchor; per-folder `.dchub.json` manifest maps filenames → stable `child_id`s with SHA-256 content-hash fallback for renamed files
+- `stableId.ts`, `assetGrouping.ts` domain modules; `scripts/migrate-identity.ts` scaffolds existing folders and maps legacy DB rows
+- Two relationship kinds: `parent_id` (gallery grid) vs `variant_of` (rendition picker); variant groups roll shared tags up onto a generically-named primary
+- Stale stable-identity rows are soft-marked `disconnected` instead of hard-deleted — ratings/comments/history survive disk churn
+- Per-package `readme.md` snapshot (`readmeService.ts`) with taxonomy and feedback stats
+
+**CDN originals**
+- `runOriginalUpload` pipeline step — uploads original files to R2 under version-stable keys (`originals/{stableId}/{childId}.ext`, legacy fallback `originals/{shortcode}.ext`), synced to `assets.download_url` for the portal's download button
+- Local R2 upload cache (mtime+size+sha256) — unchanged files skip with zero network calls
+
+**Misc**
+- `notifyService.ts` — run-completion notifications
+- `CLOUD_DESTINATIONS.md` — destination model documentation
+
+### Fixed
+
+- **R2 sync speed**: one upfront `list_r2_keys` manifest per prefix replaces a per-file HEAD + per-file LIST; `upload_to_r2` skips the HEAD when the caller's cached hash or the manifest already answers; shared keep-alive `reqwest` client (was a fresh TLS handshake per request); async file reads; upload concurrency 3→8
+- **URL wipe on sync**: cache-skipped uploads never populated the URL maps, so every Supabase sync overwrote `download_url`/`thumbnail_url` with null (268 + 415 nulled rows on ESS). Cached skips now record their deterministic public URL, and the sync fills/omits instead of nulling — a cached or disabled upload phase can no longer erase URLs the DB already has
+- **Extension-pair identity collision**: files differing only by extension (`foo.pdf` + `foo.webp`) collapsed to one stem → one child key, deleting each other's R2 original every run. Identity now resolves per file (filename-keyed), and the stale-sibling cleanup can never delete a key claimed by the current run
+- **Old versions uploading to CDN**: version files left in OUT all mapped to the asset's single version-stable key and overwrote each other every run. Both CDN steps now upload only the highest version per base+ext (per directory), logged as `⊘ N older version file(s) excluded from CDN`
+- **Version bumps splitting identity**: `resolveChildId` gained a version-lineage tier (filename → content-hash → version-stripped base+ext → new), so a version bump keeps its asset's child id, DB row, feedback, and CDN key
+- CDN upload logs now show the destination object key (`✓ file.pdf → originals/…/c2.pdf`)
+
+### Changed
+
+- Version unified at **2.2.0** across `package.json`, `tauri.conf.json`, and `Cargo.toml` (previously 0.1.0 / 2.0.0 / 0.1.0)
+
+---
+
 ## [2.1.0] — 2026-07-02  `feature/cloud-integration`
 
 Major feature release: Supabase DAM backend, Cloudflare R2 CDN, multi-client system, cloud destinations, and repo reorganisation.

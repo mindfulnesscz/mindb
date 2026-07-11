@@ -9,7 +9,7 @@ import { useSettingsStore } from './store/settingsStore';
 import { useClientStore } from './store/clientStore';
 import { loadVocabulary, saveVocabulary } from './services/vocabService';
 import { loadSettings, saveSettings } from './services/settingsService';
-import { loadClients } from './services/clientService';
+import { loadClients, saveClients, pullCloudDestinations } from './services/clientService';
 import './styles/tokens.css';
 import './styles/global.css';
 import css from './App.module.css';
@@ -18,7 +18,7 @@ export default function App() {
   const active = useAppStore(s => s.active);
   const { setData: setVocab }     = useVocabularyStore();
   const { setSettings, markClean, setField } = useSettingsStore();
-  const { setClients, setActiveClientId, clients, activeClientId } = useClientStore();
+  const { setClients, setActiveClientId, updateClient, clients, activeClientId } = useClientStore();
 
   /* Boot: load settings and clients (vocab loads below once clientId is known) */
   useEffect(() => {
@@ -50,6 +50,22 @@ export default function App() {
       loadVocabulary(activeClientId).then(setVocab).catch(console.error);
     }
   }, [activeClientId, clients]);
+
+  /* Pull shared cloud destination definitions from Supabase once per client switch —
+     guarded separately from the effect above so it doesn't re-fire on every local
+     clients mutation (including the one this pull itself triggers). */
+  const cloudSyncClientRef = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (cloudSyncClientRef.current === activeClientId) return;
+    cloudSyncClientRef.current = activeClientId;
+    const client = useClientStore.getState().clients.find(c => c.id === activeClientId) ?? null;
+    if (!client) return;
+    pullCloudDestinations(client).then(merged => {
+      if (!merged || JSON.stringify(merged) === JSON.stringify(client.cloudDestinations)) return;
+      updateClient(client.id, { cloudDestinations: merged });
+      return saveClients({ clients: useClientStore.getState().clients, activeClientId: client.id });
+    }).catch(console.error);
+  }, [activeClientId]);
 
   /* Persist vocabulary on change — scoped to the currently active client.
      Using the ref instead of the activeClientId closure avoids stale-capture

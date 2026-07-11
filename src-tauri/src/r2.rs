@@ -84,29 +84,31 @@ fn uri_encode(s: &str, encode_slash: bool) -> String {
 // values URI-encoded, sorted by name then value, joined with `&`).
 // `content_type` is Some for PUT, None for GET/DELETE.
 
+// `extra_headers`: any headers beyond the fixed host/x-amz-content-sha256/x-amz-date base
+// (e.g. content-type, x-amz-meta-sha256) — order doesn't matter, this function sorts them.
+// SigV4 requires canonical headers sorted lexicographically by name.
 fn sign(
     method:        &str,
     host:          &str,
     canonical_uri: &str,  // e.g. "/dc-hub-ess/thumbnails/foo.webp"
     query:         &str,  // e.g. "list-type=2&max-keys=0"
     body_hash:     &str,
-    content_type:  Option<&str>,
+    extra_headers: &[(&str, &str)],
     datetime:      &str,
     date:          &str,
     access_key_id: &str,
     secret_key:    &str,
 ) -> String {
-    let (canonical_headers, signed_headers) = if let Some(ct) = content_type {
-        (
-            format!("content-type:{ct}\nhost:{host}\nx-amz-content-sha256:{body_hash}\nx-amz-date:{datetime}\n"),
-            "content-type;host;x-amz-content-sha256;x-amz-date",
-        )
-    } else {
-        (
-            format!("host:{host}\nx-amz-content-sha256:{body_hash}\nx-amz-date:{datetime}\n"),
-            "host;x-amz-content-sha256;x-amz-date",
-        )
-    };
+    let mut headers: Vec<(&str, String)> = vec![
+        ("host",                  host.to_string()),
+        ("x-amz-content-sha256",  body_hash.to_string()),
+        ("x-amz-date",            datetime.to_string()),
+    ];
+    for (k, v) in extra_headers { headers.push((k, v.to_string())); }
+    headers.sort_by(|a, b| a.0.cmp(b.0));
+
+    let canonical_headers: String = headers.iter().map(|(k, v)| format!("{k}:{v}\n")).collect();
+    let signed_headers = headers.iter().map(|(k, _)| *k).collect::<Vec<_>>().join(";");
 
     let canonical_request = format!(
         "{method}\n{canonical_uri}\n{query}\n{canonical_headers}\n{signed_headers}\n{body_hash}"
@@ -122,10 +124,11 @@ fn sign(
     format!("AWS4-HMAC-SHA256 Credential={access_key_id}/{scope},SignedHeaders={signed_headers},Signature={signature}")
 }
 
-// ── Shared reqwest client builder ─────────────────────────────────────────────
+// ── Shared reqwest client — keep-alive pool, one TLS handshake per host ──────
 
-fn client() -> reqwest::Client {
-    reqwest::Client::new()
+fn client() -> &'static reqwest::Client {
+    static HTTP: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    HTTP.get_or_init(reqwest::Client::new)
 }
 
 fn host_from(endpoint: &str) -> &str {
@@ -157,21 +160,24 @@ fn extract_xml_text<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
 pub struct R2UploadResult {
     pub url:     String,
     pub skipped: bool,  // true when object already existed on R2 and upload was skipped
+    pub sha256:  String, // content hash of the local file, for caller-side caching (avoids re-hashing unchanged files next run)
 }
 
-/// Check whether an object already exists in R2 using a signed HEAD request.
-async fn r2_object_exists(
+/// Reads back the `x-amz-meta-sha256` custom metadata header of an object via a signed
+/// HEAD request, if the object exists and carries one. `None` covers both "doesn't exist"
+/// and "exists but predates this metadata convention" — both mean "upload, don't skip."
+async fn r2_object_meta_sha256(
     endpoint:      &str,
     bucket:        &str,
     object_key:    &str,
     access_key_id: &str,
     secret_key:    &str,
-) -> Result<bool, String> {
+) -> Result<Option<String>, String> {
     let (datetime, date) = utc_now();
     let host = host_from(endpoint);
     let canonical_uri = format!("/{}/{}", uri_encode(bucket, true), uri_encode(object_key, false));
     let auth = sign("HEAD", host, &canonical_uri, "", EMPTY_HASH,
-                    None, &datetime, &date, access_key_id, secret_key);
+                    &[], &datetime, &date, access_key_id, secret_key);
 
     let url = format!("{endpoint}/{bucket}/{object_key}");
     let res = client()
@@ -185,14 +191,26 @@ async fn r2_object_exists(
         .map_err(|e| format!("R2 HEAD failed: {e}"))?;
 
     match res.status().as_u16() {
-        200       => Ok(true),
-        404 | 403 => Ok(false),   // 403 on R2 also means "doesn't exist" for missing keys
+        200 => Ok(res.headers().get("x-amz-meta-sha256")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)),
+        404 | 403 => Ok(None),   // 403 on R2 also means "doesn't exist" for missing keys
         s         => Err(format!("R2 HEAD unexpected status {s}")),
     }
 }
 
-/// Upload a local file to R2. Skips the upload if the object already exists.
+/// Upload a local file to R2, skipping the upload if an object already at this key has the
+/// same content (compared by sha256, stored as R2 object metadata — not by mere existence,
+/// since some keys are intentionally stable across content changes, e.g. version bumps
+/// reusing the same key; an existence-only check would silently skip those real updates).
 /// Returns the public CDN URL and whether the upload was skipped.
+///
+/// `remote_exists`: caller's knowledge from an upfront LIST of the key prefix —
+/// Some(false) means the key is definitely absent, so the HEAD round-trip is skipped
+/// and the upload proceeds directly. None means unknown (HEAD as before).
+/// `known_sha256`: the content hash the caller last uploaded to this key (from its
+/// local cache) — if the file still hashes to it and the object hasn't vanished,
+/// skip without a HEAD.
 #[tauri::command]
 pub async fn upload_to_r2(
     file_path:     String,
@@ -202,23 +220,34 @@ pub async fn upload_to_r2(
     access_key_id: String,
     secret_key:    String,
     public_domain: String,
+    content_type:  String,
+    remote_exists: Option<bool>,
+    known_sha256:  Option<String>,
 ) -> Result<R2UploadResult, String> {
     let endpoint = endpoint.trim_end_matches('/');
     let public_url = format!("{}/{object_key}", public_domain.trim_end_matches('/'));
 
-    // Skip upload if the object is already on R2
-    if r2_object_exists(endpoint, &bucket, &object_key, &access_key_id, &secret_key).await? {
-        return Ok(R2UploadResult { url: public_url, skipped: true });
+    let body      = tokio::fs::read(&file_path).await.map_err(|e| format!("Cannot read {file_path}: {e}"))?;
+    let body_hash = sha256_hex(&body);
+
+    // Skip upload only if the object at this key already has this exact content.
+    if remote_exists != Some(false) {
+        if known_sha256.as_deref() == Some(body_hash.as_str()) {
+            return Ok(R2UploadResult { url: public_url, skipped: true, sha256: body_hash });
+        }
+        let existing = r2_object_meta_sha256(endpoint, &bucket, &object_key, &access_key_id, &secret_key).await?;
+        if existing.as_deref() == Some(body_hash.as_str()) {
+            return Ok(R2UploadResult { url: public_url, skipped: true, sha256: body_hash });
+        }
     }
 
-    let body      = std::fs::read(&file_path).map_err(|e| format!("Cannot read {file_path}: {e}"))?;
-    let body_hash = sha256_hex(&body);
     let (datetime, date) = utc_now();
     let host      = host_from(endpoint);
 
     let canonical_uri = format!("/{}/{}", uri_encode(&bucket, true), uri_encode(&object_key, false));
     let auth = sign("PUT", host, &canonical_uri, "", &body_hash,
-                    Some("image/webp"), &datetime, &date, &access_key_id, &secret_key);
+                    &[("content-type", &content_type), ("x-amz-meta-sha256", &body_hash)],
+                    &datetime, &date, &access_key_id, &secret_key);
 
     let url = format!("{endpoint}/{bucket}/{object_key}");
     let res = client()
@@ -226,7 +255,8 @@ pub async fn upload_to_r2(
         .header("host",                  host)
         .header("x-amz-date",           &datetime)
         .header("x-amz-content-sha256", &body_hash)
-        .header("content-type",          "image/webp")
+        .header("content-type",          &content_type)
+        .header("x-amz-meta-sha256",     &body_hash)
         .header("authorization",         &auth)
         .body(body)
         .send()
@@ -234,7 +264,7 @@ pub async fn upload_to_r2(
         .map_err(|e| format!("R2 request failed: {e}"))?;
 
     if res.status().is_success() {
-        Ok(R2UploadResult { url: public_url, skipped: false })
+        Ok(R2UploadResult { url: public_url, skipped: false, sha256: body_hash })
     } else {
         let status = res.status();
         let body   = res.text().await.unwrap_or_default();
@@ -259,7 +289,7 @@ pub async fn check_r2_connection(
     let query = "list-type=2&max-keys=0";
     let canonical_uri = format!("/{}", uri_encode(&bucket, true));
     let auth = sign("GET", host, &canonical_uri, query, EMPTY_HASH,
-                    None, &datetime, &date, &access_key_id, &secret_key);
+                    &[], &datetime, &date, &access_key_id, &secret_key);
 
     let url = format!("{endpoint}/{bucket}?{query}");
     let res = client()
@@ -314,7 +344,7 @@ pub async fn list_r2_keys(
         };
 
         let auth = sign("GET", host, &canonical_uri, &query, EMPTY_HASH,
-                        None, &datetime, &date, &access_key_id, &secret_key);
+                        &[], &datetime, &date, &access_key_id, &secret_key);
 
         let url = format!("{endpoint}/{bucket}?{query}");
         let res = client()
@@ -368,7 +398,7 @@ pub async fn delete_r2_object(
 
     let canonical_uri = format!("/{}/{}", uri_encode(&bucket, true), uri_encode(&object_key, false));
     let auth = sign("DELETE", host, &canonical_uri, "", EMPTY_HASH,
-                    None, &datetime, &date, &access_key_id, &secret_key);
+                    &[], &datetime, &date, &access_key_id, &secret_key);
 
     let url = format!("{endpoint}/{bucket}/{object_key}");
     let res = client()
