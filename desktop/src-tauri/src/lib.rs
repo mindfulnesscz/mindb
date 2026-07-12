@@ -103,7 +103,8 @@ fn generate_thumbnail(src: String, dest: String, width: u32, quality: u32) -> Re
 
 /// Bind localhost:7623, wait for one OAuth redirect request, reply with a
 /// success page, and return the raw request path (e.g. "/cb?code=…&state=…").
-/// Times out after 3 minutes. Async so it never blocks the Tauri IPC thread.
+/// Times out after 10 minutes (hosted-email delivery can lag). Async so it
+/// never blocks the Tauri IPC thread.
 #[tauri::command]
 async fn wait_for_oauth_redirect() -> Result<String, String> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -145,9 +146,9 @@ async fn wait_for_oauth_redirect() -> Result<String, String> {
         Ok::<String, String>(path)
     };
 
-    timeout(Duration::from_secs(180), accept)
+    timeout(Duration::from_secs(600), accept)
         .await
-        .map_err(|_| "OAuth timed out — no redirect received within 3 minutes.".into())
+        .map_err(|_| "OAuth timed out — no redirect received within 10 minutes.".into())
         .and_then(|r| r)
 }
 
