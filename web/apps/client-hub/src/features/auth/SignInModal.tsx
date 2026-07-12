@@ -55,7 +55,7 @@ export default function SignInModal({ redirectTo, clientId, onClose }: SignInMod
 
   const [step,     setStep]     = useState<Step>('email')
   const [email,    setEmail]    = useState('')
-  const [authType, setAuthType] = useState<EmailAuthType | null>(null)
+  const [, setAuthType] = useState<EmailAuthType | null>(null)
   const [error,    setError]    = useState('')
 
   // Extra fields for unknown users

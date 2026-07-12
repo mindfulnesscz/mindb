@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import type { Client } from '@dc-hub/asset-library'
 import { useClients } from '../../hooks/useClients'
 import { useRole } from '../../context/RoleContext'
-import { createClient, updateClient, deleteClient } from '../../services/clientService'
+import { createClient, updateClient } from '../../services/clientService'
 
 // ── Helpers ───────────────────────────────────────────────────
 

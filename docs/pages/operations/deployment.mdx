@@ -11,13 +11,30 @@ npm run dev
 
 The desktop uses fixed port 1420, docs uses 3001, and the web portal normally uses Vite's default 5173. See [Daily developer routine](/getting-started/development).
 
+## Portal hosting (Vercel)
+
+`web/vercel.json` configures the build (workspace build command, `apps/client-hub/dist` output, SPA rewrites so client-side routes survive refresh). One-time setup:
+
+1. Vercel → **Add New Project** → import the `mindb` repo → set **Root Directory** to `web` (the rest is read from `vercel.json`).
+2. Environment variables: `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` (the production **publishable** key).
+3. **Domains** → add the custom domain, create the CNAME it asks for in Cloudflare DNS.
+4. Supabase (production) → Auth → URL Configuration: set **Site URL** to the portal domain and add it to the redirect list — portal magic links land there.
+
+From then on every push to `main` redeploys the portal automatically, and pull requests get preview URLs. No GitHub Action is involved; Vercel's git integration is the pipeline.
+
+## Desktop releases
+
+A version tag (`vX.Y.Z`, created by the [versioning workflow](/reference/versioning)) triggers `release-desktop.yml`: a macOS runner builds the Tauri bundle and attaches the `.dmg` to a **draft** GitHub Release — review, add notes, publish. Builds are currently **unsigned**: on first launch editors must right-click → Open (Gatekeeper). Signing/notarization requires an Apple Developer ID and is the planned next hardening step.
+
+Editor onboarding after install: pick/enter the environment (URL + anon key — public values), sign in with the magic link, done. Storage credentials are granted per run by the Control API; no per-machine CDN or key setup exists.
+
 ## Web and Supabase
 
-The web app reads Supabase URL/anon key from environment or portable localStorage settings. The desktop holds privileged per-client credentials locally. Configure Supabase Auth Site URL and allowed redirect patterns for every production/dev origin.
+The web app reads Supabase URL/anon key from environment (Vercel env vars in production) or portable localStorage settings. Configure Supabase Auth Site URL and allowed redirect patterns for every production/dev origin, including `http://localhost:7623/auth-callback` for desktop sign-in.
 
-Desktop workstations need filesystem permissions plus native dependencies for requested thumbnail formats. Port 7623 must be available for Dropbox/Google callbacks. OneDrive device flow needs outbound HTTPS but no callback listener.
+Desktop workstations need filesystem permissions plus native dependencies for requested thumbnail formats. Port 7623 must be available for OAuth and sign-in callbacks. OneDrive device flow needs outbound HTTPS but no callback listener.
 
-R2 requires endpoint, bucket, access key, secret, and public domain. Ensure CORS/caching and public access match the portal design. Deploy database migrations/RLS/RPC changes before UI features that depend on them, and regenerate database types when schema changes.
+R2 storage is server-authoritative: bucket and public domain live on the client row; credentials are minted per run by the `r2-grant` function (see [Database environments](/operations/database-environments#provisioning-the-storage-control-api-one-time-per-environment)). Deploy database migrations/RLS/RPC changes before UI features that depend on them, and regenerate database types when schema changes.
 
 ## Release artifacts
 

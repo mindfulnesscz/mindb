@@ -226,9 +226,9 @@ export default function ClientPortalPage() {
   // Fetch client by slug — works unauthenticated via security definer RPC
   useEffect(() => {
     if (!slug || !supabase) { setMissing(true); return }
-    supabase
+    (supabase as any)
       .rpc('get_client_portal', { p_slug: slug })
-      .then(({ data, error }) => {
+      .then(({ data, error }: { data: unknown; error: unknown }) => {
         if (error || !data || (data as PortalClient[]).length === 0) {
           setMissing(true)
         } else {

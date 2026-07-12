@@ -1,13 +1,13 @@
 const VISIBLE_PERMS = {
     public: ['public'],
-    client: ['public', 'client'],
+    member: ['public', 'client'],
     editor: ['public', 'client', 'internal'],
     admin: ['public', 'client', 'internal'],
 };
 export function canViewAsset(role, asset, viewingClientId) {
     if (!VISIBLE_PERMS[role].includes(asset.perm))
         return false;
-    if (role === 'client' && viewingClientId && asset.clientId !== viewingClientId)
+    if (role === 'member' && viewingClientId && asset.clientId !== viewingClientId)
         return false;
     return true;
 }
@@ -23,7 +23,7 @@ export function canApprove(role) {
 export function canDownload(role, asset) {
     if (role === 'public')
         return false;
-    if (role === 'client')
+    if (role === 'member')
         return asset.status === 'approved' || asset.status === 'published';
     return true;
 }

@@ -49,7 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function checkEmail(email: string): Promise<EmailAuthType> {
     if (!supabase) return 'unknown'
-    const { data, error } = await supabase.rpc('check_email_auth', { p_email: email })
+    const { data, error } = await (supabase as any).rpc('check_email_auth', { p_email: email })
     if (error) return 'unknown'
     return (data as EmailAuthType) ?? 'unknown'
   }

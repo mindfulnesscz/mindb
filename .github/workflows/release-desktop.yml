@@ -1,0 +1,37 @@
+name: Desktop release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    permissions:
+      contents: write   # create the GitHub Release + upload assets
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - run: npm ci
+        working-directory: desktop
+      - run: npm run version:check
+      # Unsigned build — editors right-click → Open on first launch.
+      # Signing/notarization lands with an Apple Developer ID (see
+      # docs: desktop/authentication-plan + operations/deployment).
+      - run: npm run tauri build
+        working-directory: desktop
+      - name: Publish release with artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true   # review release notes, then publish manually
+          files: |
+            desktop/src-tauri/target/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz

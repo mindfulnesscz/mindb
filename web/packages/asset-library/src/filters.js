@@ -9,9 +9,13 @@ export function applyFilters(assets, filters, role, viewingClientId) {
             return false;
         if (filters.entityTypes.length > 0 && !filters.entityTypes.includes(asset.entityType))
             return false;
+        const entityPool = asset.entities?.length ? asset.entities : [asset.entity];
+        if (filters.entities.length > 0 && !filters.entities.some(e => entityPool.includes(e)))
+            return false;
         if (filters.formats.length > 0 && !filters.formats.some(f => asset.formats.includes(f)))
             return false;
-        if (filters.angles.length > 0 && !filters.angles.includes(asset.angle))
+        const anglePool = asset.angles?.length ? asset.angles : [asset.angle];
+        if (filters.angles.length > 0 && !filters.angles.some(g => anglePool.includes(g)))
             return false;
         if (filters.perms.length > 0 && !filters.perms.includes(asset.perm))
             return false;
@@ -32,6 +36,7 @@ export function getDefaultFilters() {
         latestOnly: false,
         status: [],
         entityTypes: [],
+        entities: [],
         formats: [],
         angles: [],
         perms: [],
