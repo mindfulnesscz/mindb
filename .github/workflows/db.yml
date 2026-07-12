@@ -6,9 +6,12 @@ name: Database migrations
 on:
   pull_request:
     paths: ['supabase/**']
+  # No path filter on push: deploy jobs must run on every merge so "merged to
+  # main = production reconciled" always holds. db push and functions deploy are
+  # idempotent (only unapplied migrations run; functions redeploy cheaply). The
+  # path filter stays on pull_request, where it only gates the replay check.
   push:
     branches: [main, staging]
-    paths: ['supabase/**']
 
 jobs:
   # Every PR touching supabase/: prove the migrations replay from zero.
