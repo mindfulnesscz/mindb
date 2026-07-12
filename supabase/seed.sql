@@ -7,8 +7,10 @@
 --   Additional users: create in Studio (http://localhost:54323 → Authentication);
 --   any @acme.test address auto-joins Acme Studio as role 'client'.
 
-insert into public.clients (id, name, slug, accent, initials, domain_whitelist) values
-  ('00000000-0000-0000-0000-000000000001', 'Acme Studio', 'acme', '#1d4ed8', 'AS', '{acme.test}');
+-- identity_migrated: the local dev client runs the stable-identity path
+-- (matching production ESS) — the legacy path is not exercised locally.
+insert into public.clients (id, name, slug, accent, initials, domain_whitelist, identity_migrated) values
+  ('00000000-0000-0000-0000-000000000001', 'Acme Studio', 'acme', '#1d4ed8', 'AS', '{acme.test}', true);
 
 insert into public.tags (client_id, name, dimension, sort_order) values
   ('00000000-0000-0000-0000-000000000001', 'Product',   'entity', 1),
