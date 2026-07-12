@@ -5,6 +5,45 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [2.4.0] — 2026-07-12
+
+Authentication, environments, a credential-free desktop, and the production deployment pipeline. The desktop is gated behind staff sign-in, clients are database-first, no permanent secret exists on any workstation, and the portal ships continuously.
+
+### Added
+
+**Desktop authentication** (authentication-plan Phases 1–3)
+- Staff-only login gate: magic link with PKCE via the system browser and the `:7623` loopback callback; sessions persist and auto-refresh; sign-out in the nav rail
+- `client_members` assignment table + `clients.identity_migrated` — the identity flag lives in the database, closing the config-drift path to legacy hard-deletes
+- **Every Supabase operation runs as the signed-in user under RLS** — the service-role key no longer exists in the desktop; privileged sync fails closed when signed out
+- **`r2-grant` Control API** (first edge function): validates session → role → client assignment, then issues 1-hour bucket-scoped R2 credentials via Cloudflare's temporary-access API; bucket + public domain are server-authoritative on the client row; Rust signs `x-amz-security-token` on every R2 command
+- Secret-free client exports (`_version: 2.0`); importing an old bundle strips credentials and warns to rotate; anon-key fields reject `sb_secret_*`/service-role keys outright
+
+**Environments & DB-first clients**
+- Environments (Local / Staging / Production) as first-class connection configs with switchers on the login screen, in Settings, and in the client picker — switching re-authenticates, making cross-tier mixups structurally impossible
+- Clients are fetched from the database per environment (membership-filtered; admins see all) and managed by admins in the picker form (name, colour, storage); machine-local config (folders, OAuth tokens, logo) attaches per `(environment, client)`; legacy `clients.json` migrates automatically including vocab-file re-keying
+
+**Local development stack & database workflow**
+- Supabase CLI workflow: consolidated baseline migration verified against production, replayable from zero with seed (demo client, seeded admin `admin@acme.test`, taxonomy, sample assets); `db:start/reset/types` scripts; Docker setup guide
+- Migrations CI: PR replay validation; `staging` branch deploys the staging project; `main` deploys production behind approval; edge functions deploy alongside
+
+**Deployment**
+- Portal on Vercel (`web/vercel.json`): SPA rewrites, workspace build; production at `hub.disruptcollective.com`, `staging.` branch domain, previews per push; backend switching for local dev via committed Vite mode files (`dev:web:prod`, `dev:web:staging`)
+- Desktop releases: version tags build the Tauri `.dmg` on macOS CI into a draft GitHub Release (unsigned pending an Apple Developer ID)
+- Three-branch model: `dev` (checks) → `staging` (hosted rehearsal) → `main` (production)
+
+### Fixed
+
+- Production `assets.entities` was TEXT holding JSON strings — converted to a real `text[]` with a GIN index
+- Two production-only functions (`get_all_profiles`, `update_user_role`) captured into migrations; production grants gap on new tables repaired with default privileges
+- Gallery stuck on skeletons in dev against a real backend (StrictMode double-mount vs a ref-deduped fetch effect)
+- Extension-pair stems produced a self-referencing `variant_of` that hid entire asset groups
+- Environment switch could strand the app on a blank screen (stale auth client teardown + session-check timeout + visible boot splash)
+- Client-load failures now surface in the picker instead of masquerading as an empty list
+- Portal build errors that would have failed every deploy (dead password login view, untyped rpc calls)
+- Local auth redirects (magic links bounced to `:3000`; portal runs on `:5173`)
+
+---
+
 ## [2.3.0] — 2026-07-11
 
 Repository cleanup ahead of the refactoring phase.
