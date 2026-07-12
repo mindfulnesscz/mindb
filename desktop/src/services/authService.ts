@@ -27,6 +27,16 @@ export const AUTH_CALLBACK_URL = 'http://localhost:7623/auth-callback';
 let client: SupabaseClient | null = null;
 let clientKey = '';
 
+/* The signed-in session's current access token, kept fresh by supabase-js's
+ * auto-refresh via onAuthStateChange. The pipeline attaches this to every
+ * PostgREST request — the service-role key no longer exists desktop-side
+ * (authentication-plan Phase 3). */
+let currentAccessToken: string | null = null;
+
+export function getCurrentAccessToken(): string | null {
+  return currentAccessToken;
+}
+
 export function initAuthClient(config: AuthServerConfig): SupabaseClient {
   const key = `${config.url}::${config.anonKey}`;
   if (client && clientKey === key) return client;
@@ -39,6 +49,14 @@ export function initAuthClient(config: AuthServerConfig): SupabaseClient {
     },
   });
   clientKey = key;
+  currentAccessToken = null;
+  client.auth.onAuthStateChange((_event, session) => {
+    currentAccessToken = session?.access_token ?? null;
+  });
+  // Prime the token from a persisted session without waiting for the listener.
+  client.auth.getSession().then(({ data }) => {
+    currentAccessToken = data.session?.access_token ?? currentAccessToken;
+  }).catch(() => { /* signed out */ });
   return client;
 }
 

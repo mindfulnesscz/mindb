@@ -1,13 +1,14 @@
 /* Environments — which backend the desktop talks to.
  *
- * An environment is a connection: Supabase URL + anon key (sign-in and reads)
- * plus, until the Control API phase removes it, the service key the pipeline
- * still uses for privileged sync. Clients are NOT stored here — they live in
- * each environment's database and are fetched per sign-in (clientService).
+ * An environment is a connection: Supabase URL + anon key. Everything the
+ * desktop does — sign-in, reads, pipeline sync — runs as the signed-in user
+ * under RLS; no privileged key exists here (authentication-plan Phase 3).
+ * Clients are NOT stored here — they live in each environment's database
+ * and are fetched per sign-in (clientService).
  *
  * Persisted to environments.json. On first run, migrates from:
  *   - auth-server.json  (the Phase-B login gate's single server config)
- *   - clients.json      (legacy per-client supabaseUrl/serviceKey pairs)
+ *   - clients.json      (legacy per-client supabaseUrl/anon-key pairs)
  */
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { appDataDir, join } from '@tauri-apps/api/path';
@@ -17,8 +18,6 @@ export interface Environment {
   name:        string;   // e.g. "Production", "Staging", "Local"
   supabaseUrl: string;
   anonKey:     string;
-  /** service_role key — pipeline-only, scheduled for removal (authentication-plan Phase 3) */
-  serviceKey:  string;
 }
 
 export interface PersistedEnvironments {
@@ -44,7 +43,6 @@ export function makeEnvironment(partial: Partial<Environment> = {}): Environment
     name:        '',
     supabaseUrl: '',
     anonKey:     '',
-    serviceKey:  '',
     ...partial,
   };
 }
@@ -63,7 +61,14 @@ async function readJsonIfExists<T>(path: string): Promise<T | null> {
 export async function loadEnvironments(): Promise<PersistedEnvironments> {
   const path = await filePath();
   const existing = await readJsonIfExists<PersistedEnvironments>(path);
-  if (existing) return { activeId: existing.activeId ?? null, list: existing.list ?? [] };
+  if (existing) {
+    // Re-shape strictly: files written before Phase 3 carried a serviceKey —
+    // dropping unknown fields here scrubs it from disk on the next save.
+    const list = (existing.list ?? []).map(e => makeEnvironment({
+      id: e.id, name: e.name, supabaseUrl: e.supabaseUrl, anonKey: e.anonKey,
+    }));
+    return { activeId: existing.activeId ?? null, list };
+  }
 
   const dir = await appDataDir();
   const list: Environment[] = [];
@@ -77,7 +82,6 @@ export async function loadEnvironments(): Promise<PersistedEnvironments> {
     if (!url) continue;
     const found = byUrl.get(url);
     if (found) {
-      if (!found.serviceKey && c.supabaseServiceKey) found.serviceKey = c.supabaseServiceKey;
       if (!found.anonKey && c.supabaseAnonKey) found.anonKey = c.supabaseAnonKey;
       continue;
     }
@@ -85,7 +89,6 @@ export async function loadEnvironments(): Promise<PersistedEnvironments> {
       name:        guessName(url),
       supabaseUrl: url,
       anonKey:     c.supabaseAnonKey ?? '',
-      serviceKey:  c.supabaseServiceKey ?? '',
     });
     byUrl.set(url, env);
     list.push(env);

@@ -10,7 +10,7 @@ import { tokenStatus, cloudToken } from '../../domain/client';
 import type { CloudDestination, LocalDestConfig } from '../../domain/client';
 import { runPipeline, scanVersionMap } from '../../services/pipelineService';
 import type { CloudUrlEntry } from '../../services/pipelineService';
-import { exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary, resolveClientId, fetchClientInventory } from '../../services/supabaseService';
+import { exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary, fetchClientInventory } from '../../services/supabaseService';
 import { deleteCdnObjects } from '../../services/pipelineService';
 import { saveClients, pushCloudDestinations } from '../../services/clientService';
 import { notifyRunComplete } from '../../services/notifyService';
@@ -340,17 +340,18 @@ function ConfigSidebar() {
     // Cloud destinations for cloud export (selected non-local destinations)
     const cloudDests = selectedDests.filter(d => d.config.type !== 'local');
 
-    // ── Pre-run: resolve client + pre-populate CDN inventory from DB ──────────
-    let clientId: string | null = null;
-    const sbEnabled = !!(activeClient?.supabaseUrl && activeClient?.supabaseServiceKey);
+    // ── Pre-run: pre-populate CDN inventory from DB ──────────────────────────
+    // The client IS a DB row now — its id is the identity, no name resolution.
+    // Sync runs as the signed-in user (RLS staff policies); no service key.
+    const sbEnabled = !!(activeClient?.supabaseUrl && activeClient?.supabaseAnonKey);
     const sbConfig = sbEnabled ? {
-      url:        activeClient!.supabaseUrl!,
-      serviceKey: activeClient!.supabaseServiceKey!,
+      url:     activeClient!.supabaseUrl!,
+      anonKey: activeClient!.supabaseAnonKey!,
     } : null;
+    const clientId: string | null = sbConfig ? activeClient!.id : null;
     const log = appendLog as (type: string, msg: string) => void;
 
     if (sbConfig) {
-      clientId = await resolveClientId(activeClient!.name, activeClient!.brandColor, sbConfig, log);
       if (clientId && r2Config) {
         // Pre-populate cdnUrls from DB so runCdnUpload skips already-uploaded assets
         try {

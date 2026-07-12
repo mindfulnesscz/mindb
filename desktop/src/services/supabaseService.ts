@@ -1,21 +1,21 @@
 import { invoke } from '@tauri-apps/api/core';
 import { readFile, readTextFile, writeTextFile, exists as fsExists } from '@tauri-apps/plugin-fs';
 import { parseFilename, buildVocabContext } from '../domain/filenameTranslator';
-import { clientInitials } from '../domain/client';
 import type { CloudDestination } from '../domain/client';
 import { extractStableId } from '../domain/stableId';
 import { filterHighestVersions, parseVersion, compareVersions } from '../domain/version';
 import type { VocabularyData } from '../domain/vocabulary';
 import type { GalleryGroup } from '../domain/assetGrouping';
 import type { AssetVersions, CloudUrlEntry } from './pipelineService';
+import { getCurrentAccessToken } from './authService';
 import { writeReadme } from './readmeService';
 import type { AssetStatsSnapshot } from './readmeService';
 
 /* ── Types ───────────────────────────────────────────────────────────────── */
 
 export interface SupabaseConfig {
-  url:        string; // https://<project>.supabase.co
-  serviceKey: string; // service_role key — bypasses RLS
+  url:     string; // https://<project>.supabase.co
+  anonKey: string; // public API key — requests authenticate as the signed-in user
 }
 
 export interface SupabaseExportResult {
@@ -40,7 +40,7 @@ export async function fetchExistingStableIds(
   config:   SupabaseConfig,
 ): Promise<Set<string>> {
   const base    = `${config.url}/rest/v1`;
-  const headers = makeHeaders(config.serviceKey);
+  const headers = makeHeaders(config.anonKey);
   const rows = await fetchAllForClient<{ stable_id: string | null }>(
     base, 'assets?stable_id=not.is.null', clientId, 'stable_id', headers,
   );
@@ -53,7 +53,7 @@ export async function fetchClientInventory(
   config:   SupabaseConfig,
 ): Promise<Pick<InventoryRecord, 'shortcode' | 'thumbnail_url'>[]> {
   const base    = `${config.url}/rest/v1`;
-  const headers = makeHeaders(config.serviceKey);
+  const headers = makeHeaders(config.anonKey);
   return fetchAllForClient<Pick<InventoryRecord, 'shortcode' | 'thumbnail_url'>>(
     base,
     'assets?status=neq.archived',
@@ -75,7 +75,7 @@ export async function fetchAssetStats(
   config:   SupabaseConfig,
 ): Promise<Map<string, AssetStatsSnapshot>> {
   const base    = `${config.url}/rest/v1`;
-  const headers = makeHeaders(config.serviceKey);
+  const headers = makeHeaders(config.anonKey);
   const result  = new Map<string, AssetStatsSnapshot>();
   if (!assetIds.length) return result;
 
@@ -118,17 +118,23 @@ export async function fetchAssetStats(
 
 /* ── Internal fetch helpers ──────────────────────────────────────────────── */
 
-function makeHeaders(serviceKey: string): Record<string, string> {
+/** Requests run as the signed-in user: the anon key identifies the project,
+ * the session JWT authorizes — RLS staff policies are the write boundary.
+ * The service-role key no longer exists desktop-side (authentication-plan
+ * Phase 3). Throws when signed out: privileged sync fails closed. */
+function makeHeaders(anonKey: string): Record<string, string> {
+  const token = getCurrentAccessToken();
+  if (!token) throw new Error('Not signed in — Supabase sync requires an active session.');
   return {
-    apikey:         serviceKey,
-    Authorization:  `Bearer ${serviceKey}`,
+    apikey:         anonKey,
+    Authorization:  `Bearer ${token}`,
     'Content-Type': 'application/json',
   };
 }
 
 interface SbRustResponse { status: number; ok: boolean; body: string }
 
-/** Proxy fetch through Rust so the service role key never leaves the native context. */
+/** Proxy fetch through Rust — native networking, no webview CORS surface. */
 async function sbFetch(
   url:     string,
   options: { method?: string; headers: Record<string, string>; body?: string },
@@ -208,47 +214,10 @@ async function fetchVHForAssets(
  * Looks up the Supabase clients.id by name. Creates the row on first run,
  * making the pipeline self-bootstrapping — no manual Supabase setup needed.
  */
-function slugify(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
-}
 
-export async function resolveClientId(
-  clientName: string,
-  brandColor:  string,
-  config:      SupabaseConfig,
-  appendLog:   (type: string, msg: string) => void,
-): Promise<string | null> {
-  const base    = `${config.url}/rest/v1`;
-  const headers = makeHeaders(config.serviceKey);
-  try {
-    const res = await sbFetch(
-      `${base}/clients?name=eq.${encodeURIComponent(clientName)}&select=id&limit=1`,
-      { headers },
-    );
-    if (!res.ok) throw new Error(await res.text());
-    const rows = await res.json() as Array<{ id: string }>;
-    if (rows.length) return rows[0].id;
-
-    appendLog('dim', `  Supabase: creating client record for "${clientName}"…`);
-    const createRes = await sbFetch(`${base}/clients`, {
-      method:  'POST',
-      headers: { ...headers, Prefer: 'return=representation' },
-      body:    JSON.stringify({
-        name:     clientName,
-        slug:     slugify(clientName),
-        accent:   brandColor || '#161616',
-        initials: clientInitials(clientName),
-      }),
-    });
-    if (!createRes.ok) throw new Error(await createRes.text());
-    const created = await createRes.json() as Array<{ id: string }>;
-    appendLog('dim', `  Supabase: client created (${created[0].id})`);
-    return created[0].id;
-  } catch (e) {
-    appendLog('error', `  ✕  Supabase: could not resolve client ID: ${e}`);
-    return null;
-  }
-}
+/* resolveClientId (lookup-or-create by name) is gone: clients are DB-first —
+   the desktop picks a client the database already knows, so its UUID is the
+   identity everywhere. Creation lives in the client picker (admin, RLS-gated). */
 
 /* ── Cloud destination definitions — shared across the team via Supabase.
    Tokens never leave the machine that holds them; only the shape (client ID,
@@ -265,7 +234,7 @@ export async function fetchCloudDestinationDefs(
   config:   SupabaseConfig,
 ): Promise<CloudDestination[]> {
   const base    = `${config.url}/rest/v1`;
-  const headers = makeHeaders(config.serviceKey);
+  const headers = makeHeaders(config.anonKey);
   try {
     const res = await sbFetch(
       `${base}/clients?id=eq.${clientId}&select=cloud_destinations&limit=1`,
@@ -285,7 +254,7 @@ export async function saveCloudDestinationDefs(
   config:       SupabaseConfig,
 ): Promise<void> {
   const base    = `${config.url}/rest/v1`;
-  const headers = makeHeaders(config.serviceKey);
+  const headers = makeHeaders(config.anonKey);
   await sbFetch(`${base}/clients?id=eq.${clientId}`, {
     method:  'PATCH',
     headers: { ...headers, Prefer: 'return=minimal' },
@@ -319,7 +288,7 @@ export async function resolveTagId(
   config:    SupabaseConfig,
 ): Promise<string | null> {
   const base    = `${config.url}/rest/v1`;
-  const headers = makeHeaders(config.serviceKey);
+  const headers = makeHeaders(config.anonKey);
   try {
     const res = await sbFetch(
       `${base}/tags?client_id=eq.${clientId}&dimension=eq.${dimension}&name=eq.${encodeURIComponent(label)}&select=id&limit=1`,
@@ -336,7 +305,7 @@ export async function resolveTagId(
  * text on failure rather than swallowing it — the caller already surfaces exceptions. */
 export async function createDraftAsset(input: DraftAssetInput, config: SupabaseConfig): Promise<string> {
   const base    = `${config.url}/rest/v1`;
-  const headers = makeHeaders(config.serviceKey);
+  const headers = makeHeaders(config.anonKey);
   const key       = `${input.stableId}:c1`;
   const shortcode = `${input.name} __${key}`;
   const res = await sbFetch(`${base}/assets`, {
@@ -571,7 +540,7 @@ export async function exportAssetsToSupabase(
 ): Promise<SupabaseExportResult> {
   const result: SupabaseExportResult = { created: 0, updated: 0, disconnected: 0, deleted: 0, errors: 0, staleObjectKeys: [] };
   const base    = `${config.url}/rest/v1`;
-  const headers = makeHeaders(config.serviceKey);
+  const headers = makeHeaders(config.anonKey);
 
   const allGalleries = galleries ?? [];
   const useStable     = !!identity?.migrated;
@@ -1289,7 +1258,7 @@ export async function syncTagsFromVocabulary(
 ): Promise<void> {
   appendLog('section', '━━━ TAG SYNC ━━━');
   const base    = `${config.url}/rest/v1`;
-  const headers = makeHeaders(config.serviceKey);
+  const headers = makeHeaders(config.anonKey);
 
   type TagRow = { id: string; name: string; dimension: string; parent_id: string | null };
 
@@ -1393,7 +1362,7 @@ export async function syncVersionHistory(
   appendLog('section', '━━━ VERSION HISTORY SYNC ━━━');
 
   const base     = `${config.url}/rest/v1`;
-  const headers  = makeHeaders(config.serviceKey);
+  const headers  = makeHeaders(config.anonKey);
   const vocabCtx = buildVocabContext(vocab);
   const today    = new Date().toISOString().slice(0, 10);
 
@@ -1548,15 +1517,15 @@ export async function syncVersionHistory(
 /* ── Connection check (used by Settings UI) ──────────────────────────────── */
 
 export async function checkSupabaseConnection(
-  url:        string,
-  serviceKey: string,
+  url:     string,
+  anonKey: string,
 ): Promise<{ ok: boolean; message: string }> {
   try {
     const res = await sbFetch(
       `${url.trim()}/rest/v1/clients?select=count&limit=0`,
-      { headers: makeHeaders(serviceKey.trim()) },
+      { headers: makeHeaders(anonKey.trim()) },
     );
-    if (res.ok) return { ok: true, message: 'Connected — service key valid' };
+    if (res.ok) return { ok: true, message: 'Connected — session authorized' };
     const body = await res.text();
     return { ok: false, message: `Error ${res.status}: ${body.slice(0, 120)}` };
   } catch (e) {

@@ -86,6 +86,10 @@ export function ClientPickerModal({ onClose }: Props) {
       if (!result) return;
       await saveVocabulary(result.vocabulary, result.clientId);
       await refresh();
+      if (result.containedSecrets) {
+        alert('This export file contained credentials (old format). They were NOT imported — '
+          + 'and since the file itself may have been shared, rotate those keys/tokens.');
+      }
     } catch (e) {
       alert(`Import failed: ${e}`);
     }

@@ -180,7 +180,6 @@ function mergeClient(env: Environment, row: DbClientRow, local: LocalClientConfi
     identityMigrated:   !!row.identity_migrated,
     supabaseUrl:        env.supabaseUrl,
     supabaseAnonKey:    env.anonKey,
-    supabaseServiceKey: env.serviceKey,
     ...local,
   });
 }
@@ -323,16 +322,18 @@ export function mergeCloudDestinations(
 /** Pulls shared destination definitions from Supabase and merges with this
  * machine's tokens. The client id IS the DB row id now — no name resolution. */
 export async function pullCloudDestinations(client: Client): Promise<CloudDestination[] | null> {
-  if (!client.supabaseUrl || !client.supabaseServiceKey) return null;
-  const sbConfig = { url: client.supabaseUrl, serviceKey: client.supabaseServiceKey };
+  if (!client.supabaseUrl || !client.supabaseAnonKey) return null;
+  const sbConfig = { url: client.supabaseUrl, anonKey: client.supabaseAnonKey };
   const remote = await fetchCloudDestinationDefs(client.id, sbConfig);
   return mergeCloudDestinations(client.cloudDestinations, remote);
 }
 
-/** Pushes this machine's destination definitions (tokens stripped) up to Supabase. */
+/** Pushes this machine's destination definitions (tokens stripped) up to Supabase.
+ * Writes the clients row, which RLS restricts to admins — editors get a 403;
+ * callers should treat that as "definitions are managed by an admin". */
 export async function pushCloudDestinations(client: Client): Promise<void> {
-  if (!client.supabaseUrl || !client.supabaseServiceKey) return;
-  const sbConfig = { url: client.supabaseUrl, serviceKey: client.supabaseServiceKey };
+  if (!client.supabaseUrl || !client.supabaseAnonKey) return;
+  const sbConfig = { url: client.supabaseUrl, anonKey: client.supabaseAnonKey };
   await saveCloudDestinationDefs(client.id, client.cloudDestinations, sbConfig);
 }
 
@@ -340,9 +341,37 @@ export async function pushCloudDestinations(client: Client): Promise<void> {
 
 export interface ClientExport {
   _type:       'dc-hub-client-export';
-  _version:    '1.0';
+  _version:    '1.0' | '2.0';   // 2.0 = secret-free
   client:      Client;
   vocabulary:  VocabularyData;
+}
+
+/** Exports must be safe to attach to a support ticket: no credentials, no
+ * tokens (authentication-plan, "Export and import behavior"). */
+function sanitizeForExport(client: Client): Client {
+  return {
+    ...client,
+    supabaseServiceKey: '',
+    supabaseAnonKey:    '',   // env-owned; harmless but doesn't belong in a client bundle
+    supabaseUrl:        '',
+    r2AccessKeyId:      '',
+    r2SecretKey:        '',
+    cloudDestinations: client.cloudDestinations.map(d => {
+      if (d.config.type === 'local') return d;
+      const config = { ...d.config, token: null };
+      if (config.type === 'gdrive') config.clientSecret = '';
+      return { ...d, config };
+    }),
+  };
+}
+
+/** True when a parsed bundle still carries credential-bearing fields —
+ * i.e. it predates secret-free exports and should trigger a rotation warning. */
+function bundleHasSecrets(client: Partial<Client>): boolean {
+  if (client.supabaseServiceKey || client.r2SecretKey || client.r2AccessKeyId) return true;
+  return (client.cloudDestinations ?? []).some(d =>
+    d.config.type !== 'local' && (d.config.token?.accessToken || d.config.token?.refreshToken ||
+      (d.config.type === 'gdrive' && d.config.clientSecret)));
 }
 
 export async function exportClientBundle(
@@ -351,8 +380,8 @@ export async function exportClientBundle(
 ): Promise<void> {
   const bundle: ClientExport = {
     _type: 'dc-hub-client-export',
-    _version: '1.0',
-    client,
+    _version: '2.0',
+    client: sanitizeForExport(client),
     vocabulary,
   };
   const defaultName = `${client.name.trim().replace(/[^a-z0-9]/gi, '-').replace(/-+/g, '-')}-dc-hub.json`;
@@ -371,7 +400,7 @@ export async function exportClientBundle(
 export async function importClientBundle(
   envId: string,
   knownClients: Client[],
-): Promise<{ clientId: string; vocabulary: VocabularyData } | null> {
+): Promise<{ clientId: string; vocabulary: VocabularyData; containedSecrets: boolean } | null> {
   const selected = await openDialog({
     multiple: false,
     filters: [{ name: 'DC Hub Client', extensions: ['json'] }],
@@ -393,8 +422,13 @@ export async function importClientBundle(
     );
   }
 
+  // Old bundles may carry credentials — never let them land on disk, and tell
+  // the caller so the user can be advised to rotate whatever was in the file.
+  const containedSecrets = bundleHasSecrets(bundle.client);
+  const clean = sanitizeForExport(bundle.client as Client);
+
   const local = await loadLocal();
-  local.entries[`${envId}:${match.id}`] = pickLocalFields(bundle.client);
+  local.entries[`${envId}:${match.id}`] = pickLocalFields(clean);
   await saveLocal();
-  return { clientId: match.id, vocabulary: bundle.vocabulary };
+  return { clientId: match.id, vocabulary: bundle.vocabulary, containedSecrets };
 }

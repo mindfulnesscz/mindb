@@ -156,18 +156,16 @@ function EnvironmentSettings() {
     await saveEnvironments({ activeId: activeEnvId, list }).catch(console.error);
   }
 
-  const [name,       setName]       = useState(activeEnv?.name        ?? '');
-  const [url,        setUrl]        = useState(activeEnv?.supabaseUrl ?? '');
-  const [serviceKey, setServiceKey] = useState(activeEnv?.serviceKey  ?? '');
-  const [anonKey,    setAnonKey]    = useState(activeEnv?.anonKey     ?? '');
+  const [name,    setName]    = useState(activeEnv?.name        ?? '');
+  const [url,     setUrl]     = useState(activeEnv?.supabaseUrl ?? '');
+  const [anonKey, setAnonKey] = useState(activeEnv?.anonKey     ?? '');
   const [status,     setStatus]     = useState<CheckStatus>('idle');
   const [msg,        setMsg]        = useState('');
 
   useEffect(() => {
-    setName      (activeEnv?.name        ?? '');
-    setUrl       (activeEnv?.supabaseUrl ?? '');
-    setServiceKey(activeEnv?.serviceKey  ?? '');
-    setAnonKey   (activeEnv?.anonKey     ?? '');
+    setName   (activeEnv?.name        ?? '');
+    setUrl    (activeEnv?.supabaseUrl ?? '');
+    setAnonKey(activeEnv?.anonKey     ?? '');
     setStatus('idle');
     setMsg('');
   }, [activeEnv?.id]);
@@ -175,17 +173,17 @@ function EnvironmentSettings() {
   async function handleBlur() {
     if (!activeEnv) return;
     const updated = environments.map(e => e.id === activeEnv.id
-      ? { ...e, name: name.trim(), supabaseUrl: url.trim().replace(/\/+$/, ''), serviceKey: serviceKey.trim(), anonKey: anonKey.trim() }
+      ? { ...e, name: name.trim(), supabaseUrl: url.trim().replace(/\/+$/, ''), anonKey: anonKey.trim() }
       : e);
     setEnvironments(updated);
     await saveEnvironments({ activeId: activeEnvId, list: updated }).catch(console.error);
   }
 
   async function checkConnection() {
-    if (!url || !serviceKey) return;
+    if (!url || !anonKey) return;
     setStatus('checking');
     setMsg('');
-    const result = await checkSupabaseConnection(url, serviceKey);
+    const result = await checkSupabaseConnection(url, anonKey);
     setMsg(result.message);
     setStatus(result.ok ? 'ok' : 'error');
   }
@@ -263,24 +261,15 @@ function EnvironmentSettings() {
             </span>
           </div>
           <div className={css.field}>
-            <span className={css.fieldLabel}>Secret key (service role)</span>
+            <span className={css.fieldLabel}>Connection</span>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <input
-                className={`${css.input} ${css.inputMono}`}
-                type="password"
-                value={serviceKey}
-                onChange={e => setServiceKey(e.target.value)}
-                onBlur={handleBlur}
-                placeholder="eyJhbGci…"
-                style={{ flex: 1 }}
-              />
               <button
                 className={css.btnSave}
                 onClick={checkConnection}
-                disabled={!url || !serviceKey || status === 'checking'}
+                disabled={!url || !anonKey || status === 'checking'}
                 style={{ flexShrink: 0, padding: '7px 12px' }}
               >
-                {status === 'checking' ? 'Checking…' : 'Check'}
+                {status === 'checking' ? 'Checking…' : 'Check connection'}
               </button>
               <span
                 style={{ width: 10, height: 10, borderRadius: '50%', background: dotColor, flexShrink: 0 }}
@@ -296,7 +285,7 @@ function EnvironmentSettings() {
               </span>
             )}
             <span className={css.fieldHint}>
-              Used by the pipeline to write assets (bypasses RLS). Keep private — never share this key.
+              The pipeline writes as your signed-in user under row-level security — no privileged key exists in this app.
             </span>
           </div>
           <div className={css.field}>

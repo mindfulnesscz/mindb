@@ -11,7 +11,7 @@ import { generateStableId, appendStableId } from '../../domain/stableId';
 import { useVocabularyStore } from '../../store/vocabularyStore';
 import { useClientStore } from '../../store/clientStore';
 import { saveClients } from '../../services/clientService';
-import { resolveClientId, createDraftAsset, fetchExistingStableIds } from '../../services/supabaseService';
+import { createDraftAsset, fetchExistingStableIds } from '../../services/supabaseService';
 import { writeReadme, README_FILENAME } from '../../services/readmeService';
 import { FolderTargetPicker } from '../../components/FolderTargetPicker';
 import { TagModal } from './TagModal';
@@ -113,7 +113,7 @@ export function VocabularyView() {
   }
 
   const canCreate = !creating && !!generatedCode && !!folderName.trim() && !!targetFolder
-    && !!activeClient?.supabaseUrl && !!activeClient?.supabaseServiceKey;
+    && !!activeClient?.supabaseUrl && !!activeClient?.supabaseAnonKey;
 
   async function handleCreateFolder() {
     if (!canCreate || !activeClient) return;
@@ -130,9 +130,8 @@ export function VocabularyView() {
         ? `${version.major || '1'}-${version.minor || '0'}-${version.patch || '0'}`
         : '0-1-0';
 
-      const config = { url: activeClient.supabaseUrl, serviceKey: activeClient.supabaseServiceKey };
-      const clientId = await resolveClientId(activeClient.name, activeClient.brandColor, config, () => {});
-      if (!clientId) throw new Error('Could not resolve Supabase client record.');
+      const config = { url: activeClient.supabaseUrl, anonKey: activeClient.supabaseAnonKey };
+      const clientId = activeClient.id; // DB-first: the picked client IS the DB row
 
       // Collision-check against every stable_id this client already has — same approach
       // migrate-identity.ts uses, so a fresh asset can never clash with an existing folder.
