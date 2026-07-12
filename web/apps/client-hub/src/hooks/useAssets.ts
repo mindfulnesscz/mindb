@@ -31,12 +31,12 @@ export function useAssets(
   const hasData = useRef(false)
 
   const filtersKey = JSON.stringify({ filters, role, clientId, rev })
-  const prevKey = useRef<string>('')
 
+  // No ref-based dedupe here: the filtersKey dependency already re-runs the
+  // effect only on value changes, and a ref guard breaks under StrictMode's
+  // dev double-mount — run #1's fetch gets cancelled by the cleanup, run #2
+  // sees the same key and skips, and `loading` never resolves.
   useEffect(() => {
-    if (prevKey.current === filtersKey) return
-    prevKey.current = filtersKey
-
     let cancelled = false
     // Show skeleton only on the very first load; keep stale assets visible during re-fetch
     if (!hasData.current) setLoading(true)
