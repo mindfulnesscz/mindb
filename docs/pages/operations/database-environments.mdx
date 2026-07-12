@@ -121,6 +121,34 @@ Two functions in the baseline (`get_all_profiles`, `update_user_role`) were reco
 
 `db.yml` needs, in the `staging` / `production` GitHub environments: `SUPABASE_ACCESS_TOKEN` (personal access token), `SUPABASE_STAGING_REF` / `SUPABASE_PROD_REF` (project refs), `SUPABASE_STAGING_DB_PASSWORD` / `SUPABASE_PROD_DB_PASSWORD`. Configure the `production` environment to require manual approval.
 
-## Storage tiers
+## Storage tiers — setting up a staging/dev CDN bucket
 
-R2 buckets follow the same split: production bucket plus a staging bucket, each configured per client-profile in the desktop app (endpoint/bucket/public domain are already per-client values). Local pipeline testing against the staging bucket + staging DB + a small test source folder rehearses a publish end-to-end without touching client-visible data.
+R2 buckets follow the same split as databases: the production bucket serves clients; a staging bucket absorbs test publishes. The desktop configures R2 per **(environment, client)** — machine-local, in the CDN card of Settings.
+
+### One-time bucket setup (Cloudflare dashboard)
+
+1. **Create the bucket** — R2 → *Create bucket* (e.g. `dc-hub-staging`).
+2. **Enable public access** — bucket → **Settings** → *Public access* → enable the **r2.dev subdomain**. Cloudflare shows a URL like `https://pub-<hash>.r2.dev` — this is the bucket's public domain. (Production uses a custom domain instead, e.g. `cdn.disruptcollective.com`; either works, but each domain serves exactly ONE bucket.)
+3. **Add the CORS policy** — bucket → Settings → *CORS Policy*: allow methods `GET`, `HEAD` from origin `*`. Without it, the portal's blob-download path falls back to open-in-tab.
+4. **API token** — R2 → *Manage API tokens* → create a token scoped to this bucket with object read/write. This yields the Access Key ID + Secret for the desktop.
+
+### Desktop configuration (per client, per environment)
+
+Settings → CDN card, with the right client and environment active:
+
+| Field | Value |
+|---|---|
+| Endpoint | `https://<account-id>.r2.cloudflarestorage.com` |
+| Access Key ID / Secret | from the bucket-scoped API token |
+| Bucket | e.g. `dc-hub-staging` |
+| **Public domain** | the bucket's public URL, e.g. `https://pub-<hash>.r2.dev` — lowercase `https://`, no trailing slash |
+
+**The public domain must belong to the SAME bucket as the `Bucket` field.** This is the classic failure: uploads land in the staging bucket while the public domain points at production's CDN — every asset URL then returns `object not found` even though the objects exist. The pipeline writes `publicDomain + objectKey` into the database verbatim; it cannot detect a mismatch.
+
+### Fixing wrong URLs after a misconfiguration
+
+Correct the Public domain field, then **run the pipeline once**. Files that are already uploaded skip, but the run rewrites every `thumbnail_url`/`download_url` with the corrected domain — no manual backfill.
+
+### End-to-end rehearsal
+
+Local DB + staging bucket + a small test source folder = a full publish rehearsal with zero contact with client-visible data. The seeded local client (`Acme Studio`) is flagged `identity_migrated`, so the rehearsal exercises the same stable-identity path as production ESS.

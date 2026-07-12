@@ -130,7 +130,10 @@ function TagItems({
 }) {
   return (
     <div className="space-y-0.5">
-      {items.map(item => (
+      {/* Dedupe — the same tag label can arrive twice (e.g. once per tag group),
+          and duplicate React keys make rows drop or double. One checkbox per
+          label is also the right filtering semantic. */}
+      {[...new Set(items)].map(item => (
         <label key={item} className="flex items-center gap-2 py-0.5 cursor-pointer select-none">
           <input
             type="checkbox"
