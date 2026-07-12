@@ -78,7 +78,10 @@ export default function App() {
         setClients(clients);
         setActiveClientId(activeClientId);
       })
-      .catch(console.error);
+      .catch(e => {
+        console.error(e);
+        useClientStore.getState().setLoadError(String(e instanceof Error ? e.message : e));
+      });
   }, [authStatus, activeEnvId, activeEnv?.supabaseUrl, activeEnv?.anonKey]);
 
   /* Track whether this is the first client load so we don't double-save on boot */

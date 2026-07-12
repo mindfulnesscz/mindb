@@ -170,7 +170,12 @@ export function ClientPickerModal({ onClose }: Props) {
             )}
 
             <div className={css.list}>
-              {store.clients.length === 0 && (
+              {store.loadError && (
+                <p className={css.empty} style={{ color: 'var(--signal-error)' }}>
+                  Could not load clients: {store.loadError}
+                </p>
+              )}
+              {!store.loadError && store.clients.length === 0 && (
                 <p className={css.empty}>
                   No clients in this environment{isAdmin ? ' — add one below.' : ' are assigned to you. Ask an admin for access.'}
                 </p>
