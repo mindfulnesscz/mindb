@@ -69,12 +69,10 @@ export interface Client {
   supabaseUrl:        string;  // https://<project>.supabase.co
   supabaseServiceKey: string;  // service_role key — used by pipeline (bypasses RLS)
   supabaseAnonKey:    string;  // anon key — used by the web portal
-  // Cloudflare R2 CDN
-  r2Endpoint:        string;  // https://{account}.r2.cloudflarestorage.com
-  r2AccessKeyId:     string;
-  r2SecretKey:       string;
-  r2Bucket:          string;  // bucket name, e.g. dc-hub-ess
-  r2PublicDomain:    string;  // public-facing domain, e.g. https://cdn.disruptcollective.com
+  // Cloudflare R2 CDN — DB-owned (clients.r2_bucket / r2_public_domain);
+  // credentials come per-run from the r2-grant Control API, never stored here.
+  r2Bucket:          string;
+  r2PublicDomain:    string;
   // Folder-based stable identity migration — false until the one-time migration script
   // has been run and verified for this client; gates stable_id-based matching in the pipeline.
   identityMigrated:  boolean;
@@ -95,9 +93,6 @@ export function makeClient(partial: Partial<Client> = {}): Client {
     supabaseUrl:        '',
     supabaseServiceKey: '',
     supabaseAnonKey:    '',
-    r2Endpoint:         '',
-    r2AccessKeyId:     '',
-    r2SecretKey:       '',
     r2Bucket:          '',
     r2PublicDomain:    '',
     identityMigrated:  false,

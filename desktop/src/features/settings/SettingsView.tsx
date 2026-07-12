@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { useSettingsStore } from '../../store/settingsStore';
-import { useClientStore } from '../../store/clientStore';
 import { useEnvironmentStore } from '../../store/environmentStore';
 import { useAuthStore } from '../../store/authStore';
 import { saveEnvironments, makeEnvironment } from '../../services/environmentService';
@@ -113,10 +112,6 @@ export function SettingsView() {
             <EnvironmentSettings />
           </div>
 
-          {/* CDN — Cloudflare R2 per active client */}
-          <div className={css.card} style={{ gridColumn: '1 / -1' }}>
-            <R2ClientSettings />
-          </div>
         </div>
       </div>
     </div>
@@ -309,166 +304,6 @@ function EnvironmentSettings() {
 }
 
 /* ── R2 CDN per-client settings ──────────────────────────────────────────── */
-
-function R2ClientSettings() {
-  const store        = useClientStore();
-  const activeClient = store.clients.find(c => c.id === store.activeClientId) ?? null;
-
-  const [endpoint,     setEndpoint]     = useState(activeClient?.r2Endpoint     ?? '');
-  const [accessKeyId,  setAccessKeyId]  = useState(activeClient?.r2AccessKeyId  ?? '');
-  const [secretKey,    setSecretKey]    = useState(activeClient?.r2SecretKey    ?? '');
-  const [bucket,       setBucket]       = useState(activeClient?.r2Bucket       ?? '');
-  const [publicDomain, setPublicDomain] = useState(activeClient?.r2PublicDomain ?? '');
-  const [status,       setStatus]       = useState<CheckStatus>('idle');
-  const [msg,          setMsg]          = useState('');
-
-  useEffect(() => {
-    setEndpoint    (activeClient?.r2Endpoint     ?? '');
-    setAccessKeyId (activeClient?.r2AccessKeyId  ?? '');
-    setSecretKey   (activeClient?.r2SecretKey    ?? '');
-    setBucket      (activeClient?.r2Bucket       ?? '');
-    setPublicDomain(activeClient?.r2PublicDomain ?? '');
-    setStatus('idle');
-    setMsg('');
-  }, [activeClient?.id]);
-
-  async function persist(patch: Partial<typeof activeClient>) {
-    if (!activeClient) return;
-    store.updateClient(activeClient.id, patch as Parameters<typeof store.updateClient>[1]);
-    const envId = useEnvironmentStore.getState().activeEnvId;
-    const updated = useClientStore.getState().clients.find(c => c.id === activeClient.id);
-    if (envId && updated) {
-      const { saveLocalClient } = await import('../../services/clientService');
-      await saveLocalClient(envId, updated).catch(console.error);
-    }
-  }
-
-  async function checkConnection() {
-    if (!endpoint || !accessKeyId || !secretKey || !bucket) return;
-    setStatus('checking');
-    setMsg('');
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke<string>('check_r2_connection', {
-        endpoint:     endpoint.trim(),
-        bucket:       bucket.trim(),
-        accessKeyId:  accessKeyId.trim(),
-        secretKey:    secretKey.trim(),
-      });
-      setMsg('Connected');
-      setStatus('ok');
-    } catch (e) {
-      setMsg(String(e));
-      setStatus('error');
-    }
-  }
-
-  const dotColor = status === 'ok'       ? '#4ade80'
-                 : status === 'error'    ? 'var(--signal-error)'
-                 : status === 'checking' ? '#facc15'
-                 : 'var(--gray-300)';
-
-  const canCheck = !!(endpoint && accessKeyId && secretKey && bucket);
-
-  return (
-    <>
-      <div className={css.cardTitle}>CDN — Cloudflare R2</div>
-      {!activeClient ? (
-        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-subtle)', margin: 0 }}>
-          Select a client to configure CDN.
-        </p>
-      ) : (
-        <div className={css.fields}>
-          <div className={css.field}>
-            <span className={css.fieldLabel}>R2 Endpoint — {activeClient.name}</span>
-            <input
-              className={`${css.input} ${css.inputMono}`}
-              value={endpoint}
-              onChange={e => setEndpoint(e.target.value)}
-              onBlur={() => persist({ r2Endpoint: endpoint.trim() })}
-              placeholder="https://abc123.r2.cloudflarestorage.com"
-            />
-            <span className={css.fieldHint}>
-              Jurisdiction-specific S3 endpoint from Cloudflare R2 → Manage R2 API tokens.
-            </span>
-          </div>
-          <div className={css.field}>
-            <span className={css.fieldLabel}>Bucket name</span>
-            <input
-              className={`${css.input} ${css.inputMono}`}
-              value={bucket}
-              onChange={e => setBucket(e.target.value)}
-              onBlur={() => persist({ r2Bucket: bucket.trim() })}
-              placeholder="dc-hub-ess"
-            />
-          </div>
-          <div className={css.field}>
-            <span className={css.fieldLabel}>Public domain</span>
-            <input
-              className={`${css.input} ${css.inputMono}`}
-              value={publicDomain}
-              onChange={e => setPublicDomain(e.target.value)}
-              onBlur={() => persist({ r2PublicDomain: publicDomain.trim() })}
-              placeholder="https://cdn.disruptcollective.com"
-            />
-            <span className={css.fieldHint}>
-              Custom domain mapped to this bucket (no trailing slash). Thumbnails are served from here.
-            </span>
-          </div>
-          <div className={css.field}>
-            <span className={css.fieldLabel}>Access Key ID</span>
-            <input
-              className={`${css.input} ${css.inputMono}`}
-              value={accessKeyId}
-              onChange={e => setAccessKeyId(e.target.value)}
-              onBlur={() => persist({ r2AccessKeyId: accessKeyId.trim() })}
-              placeholder="8a28b84f…"
-            />
-          </div>
-          <div className={css.field}>
-            <span className={css.fieldLabel}>Secret Access Key</span>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <input
-                className={`${css.input} ${css.inputMono}`}
-                type="password"
-                value={secretKey}
-                onChange={e => setSecretKey(e.target.value)}
-                onBlur={() => persist({ r2SecretKey: secretKey.trim() })}
-                placeholder="••••••••••••••••"
-                style={{ flex: 1 }}
-              />
-              <button
-                className={css.btnSave}
-                onClick={checkConnection}
-                disabled={!canCheck || status === 'checking'}
-                style={{ flexShrink: 0, padding: '7px 12px' }}
-              >
-                {status === 'checking' ? 'Checking…' : 'Check'}
-              </button>
-              <span
-                style={{ width: 10, height: 10, borderRadius: '50%', background: dotColor, flexShrink: 0 }}
-                title={msg || (status === 'idle' ? 'Not checked yet' : '')}
-              />
-            </div>
-            {msg && (
-              <span
-                className={css.fieldHint}
-                style={{ color: status === 'ok' ? '#22c55e' : status === 'error' ? 'var(--signal-error)' : undefined }}
-              >
-                {msg}
-              </span>
-            )}
-            <span className={css.fieldHint}>
-              The Cloudflare API token (<code>cfat_…</code>) is not needed — only the S3 Access Key ID and Secret.
-            </span>
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
-
-/* ── Generic labelled input ──────────────────────────────────────────────── */
 
 function Field({
   label, value, onChange, type = 'text', hint, mono, password,

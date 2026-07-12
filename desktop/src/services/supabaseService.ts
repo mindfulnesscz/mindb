@@ -215,6 +215,36 @@ async function fetchVHForAssets(
  * making the pipeline self-bootstrapping — no manual Supabase setup needed.
  */
 
+/* ── Storage grants — the Control API (authentication-plan Phase 3) ───────
+   The desktop holds no permanent R2 credentials. Each pipeline run requests
+   a short-lived, client-scoped grant from the r2-grant edge function, which
+   validates the session, the role, and the client assignment server-side. */
+
+export interface R2Grant {
+  endpoint:        string;
+  bucket:          string;
+  publicDomain:    string;
+  accessKeyId:     string;
+  secretAccessKey: string;
+  sessionToken:    string;
+  expiresAt:       number;
+}
+
+export async function requestR2Grant(config: SupabaseConfig, clientId: string): Promise<R2Grant> {
+  const res = await sbFetch(`${config.url}/functions/v1/r2-grant`, {
+    method:  'POST',
+    headers: makeHeaders(config.anonKey),
+    body:    JSON.stringify({ client_id: clientId }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    let msg = body;
+    try { msg = (JSON.parse(body) as { error?: string }).error ?? body; } catch { /* raw body */ }
+    throw new Error(`Storage grant refused (${res.status}): ${msg}`);
+  }
+  return await res.json<R2Grant>();
+}
+
 /* resolveClientId (lookup-or-create by name) is gone: clients are DB-first —
    the desktop picks a client the database already knows, so its UUID is the
    identity everywhere. Creation lives in the client picker (admin, RLS-gated). */

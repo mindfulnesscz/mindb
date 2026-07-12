@@ -31,11 +31,6 @@ export interface LocalClientConfig {
   targetFolder:       string;
   vaultFolder:        string;
   cloudDestinations:  CloudDestination[];
-  r2Endpoint:         string;
-  r2AccessKeyId:      string;
-  r2SecretKey:        string;
-  r2Bucket:           string;
-  r2PublicDomain:     string;
   lastCreationFolder: string;
 }
 
@@ -57,8 +52,7 @@ interface PersistedLocal {
 
 const EMPTY_LOCAL: LocalClientConfig = {
   logoDataUrl: null, sourceFolder: '', targetFolder: '', vaultFolder: '',
-  cloudDestinations: [], r2Endpoint: '', r2AccessKeyId: '', r2SecretKey: '',
-  r2Bucket: '', r2PublicDomain: '', lastCreationFolder: '',
+  cloudDestinations: [], lastCreationFolder: '',
 };
 
 async function localPath(): Promise<string> {
@@ -80,9 +74,11 @@ async function loadLocal(): Promise<PersistedLocal> {
   if (localMemo) return localMemo;
   const existing = await readJsonIfExists<PersistedLocal>(await localPath());
   if (existing) {
+    const entries: Record<string, LocalClientConfig> = {};
+    for (const [k, v] of Object.entries(existing.entries ?? {})) entries[k] = pickLocalFields(v as Partial<Client>);
     localMemo = {
       version: 2,
-      entries:       existing.entries       ?? {},
+      entries,
       pendingByName: existing.pendingByName ?? {},
       activeByEnv:   existing.activeByEnv   ?? {},
       migratedFromClientsJson: existing.migratedFromClientsJson ?? false,
@@ -101,17 +97,14 @@ async function saveLocal(): Promise<void> {
 }
 
 function pickLocalFields(c: Partial<Client>): LocalClientConfig {
+  // Strict shape: pre-Control-API entries carried R2 credentials — re-shaping
+  // through this function scrubs them from client-local.json on the next save.
   return {
     logoDataUrl:        c.logoDataUrl        ?? null,
     sourceFolder:       c.sourceFolder       ?? '',
     targetFolder:       c.targetFolder       ?? '',
     vaultFolder:        c.vaultFolder        ?? '',
     cloudDestinations:  c.cloudDestinations  ?? [],
-    r2Endpoint:         c.r2Endpoint         ?? '',
-    r2AccessKeyId:      c.r2AccessKeyId      ?? '',
-    r2SecretKey:        c.r2SecretKey        ?? '',
-    r2Bucket:           c.r2Bucket           ?? '',
-    r2PublicDomain:     c.r2PublicDomain     ?? '',
     lastCreationFolder: c.lastCreationFolder ?? '',
   };
 }
@@ -147,6 +140,8 @@ interface DbClientRow {
   name:               string;
   accent:             string | null;
   identity_migrated:  boolean | null;
+  r2_bucket:          string | null;
+  r2_public_domain:   string | null;
 }
 
 /** Fetches the clients this user may operate in the ACTIVE environment, using
@@ -155,7 +150,7 @@ interface DbClientRow {
 async function fetchDbClients(role: string): Promise<DbClientRow[]> {
   const auth = getAuthClient();
   if (!auth) throw new Error('Not signed in');
-  const select = 'id,name,accent,identity_migrated';
+  const select = 'id,name,accent,identity_migrated,r2_bucket,r2_public_domain';
   if (role === 'admin') {
     const { data, error } = await auth.from('clients').select(select).order('name');
     if (error) throw new Error(error.message);
@@ -178,6 +173,8 @@ function mergeClient(env: Environment, row: DbClientRow, local: LocalClientConfi
     name:               row.name,
     brandColor:         row.accent || '#161616',
     identityMigrated:   !!row.identity_migrated,
+    r2Bucket:           row.r2_bucket ?? '',
+    r2PublicDomain:     row.r2_public_domain ?? '',
     supabaseUrl:        env.supabaseUrl,
     supabaseAnonKey:    env.anonKey,
     ...local,
@@ -294,7 +291,7 @@ export async function createDbClient(name: string, accent: string): Promise<DbCl
   return data as DbClientRow;
 }
 
-export async function updateDbClient(id: string, patch: { name?: string; accent?: string }): Promise<void> {
+export async function updateDbClient(id: string, patch: { name?: string; accent?: string; r2_bucket?: string | null; r2_public_domain?: string | null }): Promise<void> {
   const auth = getAuthClient();
   if (!auth) throw new Error('Not signed in');
   const { error } = await auth.from('clients').update(patch).eq('id', id);
@@ -354,8 +351,6 @@ function sanitizeForExport(client: Client): Client {
     supabaseServiceKey: '',
     supabaseAnonKey:    '',   // env-owned; harmless but doesn't belong in a client bundle
     supabaseUrl:        '',
-    r2AccessKeyId:      '',
-    r2SecretKey:        '',
     cloudDestinations: client.cloudDestinations.map(d => {
       if (d.config.type === 'local') return d;
       const config = { ...d.config, token: null };
@@ -368,7 +363,8 @@ function sanitizeForExport(client: Client): Client {
 /** True when a parsed bundle still carries credential-bearing fields —
  * i.e. it predates secret-free exports and should trigger a rotation warning. */
 function bundleHasSecrets(client: Partial<Client>): boolean {
-  if (client.supabaseServiceKey || client.r2SecretKey || client.r2AccessKeyId) return true;
+  const legacy = client as Partial<Client> & { r2SecretKey?: string; r2AccessKeyId?: string };
+  if (legacy.supabaseServiceKey || legacy.r2SecretKey || legacy.r2AccessKeyId) return true;
   return (client.cloudDestinations ?? []).some(d =>
     d.config.type !== 'local' && (d.config.token?.accessToken || d.config.token?.refreshToken ||
       (d.config.type === 'gdrive' && d.config.clientSecret)));

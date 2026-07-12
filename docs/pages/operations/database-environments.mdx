@@ -132,22 +132,35 @@ R2 buckets follow the same split as databases: the production bucket serves clie
 3. **Add the CORS policy** — bucket → Settings → *CORS Policy*: allow methods `GET`, `HEAD` from origin `*`. Without it, the portal's blob-download path falls back to open-in-tab.
 4. **API token** — R2 → *Manage API tokens* → create a token scoped to this bucket with object read/write. This yields the Access Key ID + Secret for the desktop.
 
-### Desktop configuration (per client, per environment)
+### Client storage config (database — admins)
 
-Settings → CDN card, with the right client and environment active:
+The desktop holds **no R2 credentials**. A client's bucket and public domain live on its `clients` row (edited in the desktop's client form by admins), and each pipeline run requests a short-lived, client-scoped credential grant from the `r2-grant` edge function. The server decides bucket and public domain — a bucket/domain mismatch (uploads in one bucket, URLs pointing at another) is no longer possible to configure.
 
-| Field | Value |
+| Field (client form → Storage) | Value |
 |---|---|
-| Endpoint | `https://<account-id>.r2.cloudflarestorage.com` |
-| Access Key ID / Secret | from the bucket-scoped API token |
-| Bucket | e.g. `dc-hub-staging` |
-| **Public domain** | the bucket's public URL, e.g. `https://pub-<hash>.r2.dev` — lowercase `https://`, no trailing slash |
+| R2 bucket | e.g. `dc-hub-staging` |
+| Public domain | that bucket's public URL, e.g. `https://pub-<hash>.r2.dev` — lowercase `https://`, no trailing slash |
 
-**The public domain must belong to the SAME bucket as the `Bucket` field.** This is the classic failure: uploads land in the staging bucket while the public domain points at production's CDN — every asset URL then returns `object not found` even though the objects exist. The pipeline writes `publicDomain + objectKey` into the database verbatim; it cannot detect a mismatch.
+### Provisioning the storage Control API (one-time, per environment)
+
+The `r2-grant` function needs three secrets to mint temporary credentials:
+
+1. **Cloudflare API token** — dashboard → My Profile → API Tokens → *Create Token* with **Account · Workers R2 Storage · Edit** permission.
+2. **Account ID** — dashboard → R2 (shown in the sidebar/URL).
+3. **Parent R2 access key** — R2 → *Manage API tokens* → a key with read/write on the relevant buckets; its scope bounds every temporary credential.
+
+```bash
+supabase link --project-ref <env-ref>
+supabase secrets set CF_API_TOKEN=… CF_ACCOUNT_ID=… R2_PARENT_ACCESS_KEY_ID=…
+```
+
+For the **local stack**, put the same three values in `supabase/functions/.env` (gitignored) and run `supabase functions serve r2-grant`. Until provisioned, pipeline runs log `CDN steps disabled — Storage grant refused (503)` and skip uploads; everything else still works.
+
+Functions deploy through CI alongside migrations (merge → staging, tag → production).
 
 ### Fixing wrong URLs after a misconfiguration
 
-Correct the Public domain field, then **run the pipeline once**. Files that are already uploaded skip, but the run rewrites every `thumbnail_url`/`download_url` with the corrected domain — no manual backfill.
+Correct the client's Public domain (client form), then **run the pipeline once**. Files that are already uploaded skip, but the run rewrites every `thumbnail_url`/`download_url` with the corrected domain — no manual backfill.
 
 ### End-to-end rehearsal
 

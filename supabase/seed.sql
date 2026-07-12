@@ -9,8 +9,10 @@
 
 -- identity_migrated: the local dev client runs the stable-identity path
 -- (matching production ESS) — the legacy path is not exercised locally.
-insert into public.clients (id, name, slug, accent, initials, domain_whitelist, identity_migrated) values
-  ('00000000-0000-0000-0000-000000000001', 'Acme Studio', 'acme', '#1d4ed8', 'AS', '{acme.test}', true);
+-- Storage: local publishing rehearses against the staging bucket.
+insert into public.clients (id, name, slug, accent, initials, domain_whitelist, identity_migrated, r2_bucket, r2_public_domain) values
+  ('00000000-0000-0000-0000-000000000001', 'Acme Studio', 'acme', '#1d4ed8', 'AS', '{acme.test}', true,
+   'dc-hub-staging', 'https://pub-70cb5e135f5b48fa8e681980c96e19d8.r2.dev');
 
 insert into public.tags (client_id, name, dimension, sort_order) values
   ('00000000-0000-0000-0000-000000000001', 'Product',   'entity', 1),

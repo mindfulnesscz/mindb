@@ -107,17 +107,30 @@ export function ClientPickerModal({ onClose }: Props) {
     setView('form');
   }
 
-  async function handleSave(name: string, accent: string, logoDataUrl: string | null) {
+  async function handleSave(
+    name: string, accent: string, logoDataUrl: string | null,
+    r2Bucket: string, r2PublicDomain: string,
+  ) {
     if (!activeEnvId) return;
     setBusy(true);
+    const storage = {
+      r2_bucket:        r2Bucket.trim() || null,
+      r2_public_domain: r2PublicDomain.trim().replace(/\/+$/, '') || null,
+    };
     try {
       if (editing) {
-        await updateDbClient(editing.id, { name, accent });
-        store.updateClient(editing.id, { name, brandColor: accent, logoDataUrl });
+        await updateDbClient(editing.id, { name, accent, ...storage });
+        store.updateClient(editing.id, {
+          name, brandColor: accent, logoDataUrl,
+          r2Bucket: storage.r2_bucket ?? '', r2PublicDomain: storage.r2_public_domain ?? '',
+        });
         const updated = useClientStore.getState().clients.find(c => c.id === editing.id);
         if (updated) await saveLocalClient(activeEnvId, updated);
       } else {
-        await createDbClient(name, accent);
+        const created = await createDbClient(name, accent);
+        if (storage.r2_bucket || storage.r2_public_domain) {
+          await updateDbClient(created.id, storage);
+        }
         await refresh();
       }
       setView('list');
@@ -220,7 +233,7 @@ export function ClientPickerModal({ onClose }: Props) {
 interface FormProps {
   initial: Client | null;
   busy:    boolean;
-  onSave:  (name: string, accent: string, logoDataUrl: string | null) => Promise<void>;
+  onSave:  (name: string, accent: string, logoDataUrl: string | null, r2Bucket: string, r2PublicDomain: string) => Promise<void>;
   onBack:  () => void;
   onClose: () => void;
 }
@@ -229,6 +242,8 @@ function ClientForm({ initial, busy, onSave, onBack, onClose }: FormProps) {
   const [name, setName]     = useState(initial?.name ?? '');
   const [accent, setAccent] = useState(initial?.brandColor ?? '#161616');
   const [logo, setLogo]     = useState<string | null>(initial?.logoDataUrl ?? null);
+  const [bucket, setBucket] = useState(initial?.r2Bucket ?? '');
+  const [domain, setDomain] = useState(initial?.r2PublicDomain ?? '');
 
   async function pickLogo() {
     const selected = await openDialog({
@@ -294,6 +309,28 @@ function ClientForm({ initial, busy, onSave, onBack, onClose }: FormProps) {
           </div>
         </div>
 
+        <div className={css.section}>
+          <div className={css.sectionTitle}>Storage (database — grants are scoped to this bucket)</div>
+          <label className={css.field}>
+            <span className={css.fieldLabel}>R2 bucket</span>
+            <input
+              className={`${css.input} ${css.inputMono}`}
+              value={bucket}
+              onChange={e => setBucket(e.target.value)}
+              placeholder="dc-hub-clientname"
+            />
+          </label>
+          <label className={css.field}>
+            <span className={css.fieldLabel}>Public domain</span>
+            <input
+              className={`${css.input} ${css.inputMono}`}
+              value={domain}
+              onChange={e => setDomain(e.target.value)}
+              placeholder="https://pub-….r2.dev or https://cdn.example.com"
+            />
+          </label>
+        </div>
+
         {initial && (
           <div className={css.section}>
             <div className={css.sectionTitle}>Logo (this machine only)</div>
@@ -316,7 +353,7 @@ function ClientForm({ initial, busy, onSave, onBack, onClose }: FormProps) {
         <button className={css.outlineBtn} onClick={onBack}>Cancel</button>
         <button
           className={css.saveBtn}
-          onClick={() => onSave(name.trim(), accent, logo)}
+          onClick={() => onSave(name.trim(), accent, logo, bucket, domain)}
           disabled={!name.trim() || busy}
         >
           {busy ? 'Saving…' : initial ? 'Save changes' : 'Create client'}

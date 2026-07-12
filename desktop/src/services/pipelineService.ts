@@ -31,6 +31,7 @@ export interface R2Config {
   endpoint:     string;
   accessKeyId:  string;
   secretKey:    string;
+  sessionToken: string;  // short-lived grant credentials (Control API) — always present
   bucket:       string;
   publicDomain: string;
 }
@@ -716,6 +717,7 @@ async function fetchR2KeyManifest(
       bucket:      r2.bucket,
       accessKeyId: r2.accessKeyId,
       secretKey:   r2.secretKey,
+      sessionToken: r2.sessionToken,
       prefix,
     });
     return new Set(keys);
@@ -842,6 +844,7 @@ async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<void> {
           bucket:       r2.bucket,
           accessKeyId:  r2.accessKeyId,
           secretKey:    r2.secretKey,
+          sessionToken: r2.sessionToken,
           publicDomain: r2.publicDomain,
           contentType:  'image/webp',
           remoteExists: remoteKeys ? remoteKeys.has(objectKey) : null,
@@ -968,6 +971,7 @@ async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promise<void
           bucket:       r2.bucket,
           accessKeyId:  r2.accessKeyId,
           secretKey:    r2.secretKey,
+          sessionToken: r2.sessionToken,
           publicDomain: r2.publicDomain,
           contentType:  mimeFromExt(ext),
           remoteExists: remoteKeys ? remoteKeys.has(objectKey) : null,
@@ -992,12 +996,13 @@ async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promise<void
                 bucket:       r2.bucket,
                 accessKeyId:  r2.accessKeyId,
                 secretKey:    r2.secretKey,
+          sessionToken: r2.sessionToken,
                 prefix:       `${keyPrefix}.`,
               });
           for (const staleKey of siblingKeys.filter(k => k !== objectKey && !plannedKeys.has(k))) {
             await invoke('delete_r2_object', {
               endpoint: r2.endpoint, bucket: r2.bucket,
-              accessKeyId: r2.accessKeyId, secretKey: r2.secretKey, objectKey: staleKey,
+              accessKeyId: r2.accessKeyId, secretKey: r2.secretKey, sessionToken: r2.sessionToken, objectKey: staleKey,
             });
             remoteKeys?.delete(staleKey);
             appendLog('dim', `  ↷  removed stale original: ${staleKey}`);
@@ -1059,6 +1064,7 @@ export async function reconcileCdn(ctx: RunContext, stats: RunStats): Promise<vo
       bucket:       r2.bucket,
       accessKeyId:  r2.accessKeyId,
       secretKey:    r2.secretKey,
+          sessionToken: r2.sessionToken,
       prefix:       'thumbnails/',
     });
   } catch (e) {
@@ -1084,6 +1090,7 @@ export async function reconcileCdn(ctx: RunContext, stats: RunStats): Promise<vo
         bucket:       r2.bucket,
         accessKeyId:  r2.accessKeyId,
         secretKey:    r2.secretKey,
+          sessionToken: r2.sessionToken,
         objectKey,
       });
       appendLog('dim', `  ↷  removed: ${objectKey}`);
@@ -1116,6 +1123,7 @@ export async function deleteCdnObjects(
         bucket:      r2.bucket,
         accessKeyId: r2.accessKeyId,
         secretKey:   r2.secretKey,
+      sessionToken: r2.sessionToken,
         objectKey,
       });
       appendLog('dim', `  ↷  removed: ${objectKey}`);

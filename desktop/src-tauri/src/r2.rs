@@ -154,6 +154,15 @@ fn extract_xml_text<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
     out
 }
 
+/// Temporary credentials (Control API grants) must sign the session token as
+/// an `x-amz-security-token` header on every request.
+fn token_headers(session_token: Option<&str>) -> Vec<(&'static str, &str)> {
+    match session_token {
+        Some(t) => vec![("x-amz-security-token", t)],
+        None    => vec![],
+    }
+}
+
 // ── Tauri commands ────────────────────────────────────────────────────────────
 
 #[derive(serde::Serialize)]
@@ -172,20 +181,24 @@ async fn r2_object_meta_sha256(
     object_key:    &str,
     access_key_id: &str,
     secret_key:    &str,
+    session_token: Option<&str>,
 ) -> Result<Option<String>, String> {
     let (datetime, date) = utc_now();
     let host = host_from(endpoint);
     let canonical_uri = format!("/{}/{}", uri_encode(bucket, true), uri_encode(object_key, false));
+    let extra = token_headers(session_token);
     let auth = sign("HEAD", host, &canonical_uri, "", EMPTY_HASH,
-                    &[], &datetime, &date, access_key_id, secret_key);
+                    &extra, &datetime, &date, access_key_id, secret_key);
 
     let url = format!("{endpoint}/{bucket}/{object_key}");
-    let res = client()
+    let mut rb = client()
         .head(&url)
         .header("host",                  host)
         .header("x-amz-date",           &datetime)
         .header("x-amz-content-sha256",  EMPTY_HASH)
-        .header("authorization",         &auth)
+        .header("authorization",         &auth);
+    if let Some(t) = session_token { rb = rb.header("x-amz-security-token", t); }
+    let res = rb
         .send()
         .await
         .map_err(|e| format!("R2 HEAD failed: {e}"))?;
@@ -223,6 +236,7 @@ pub async fn upload_to_r2(
     content_type:  String,
     remote_exists: Option<bool>,
     known_sha256:  Option<String>,
+    session_token: Option<String>,
 ) -> Result<R2UploadResult, String> {
     let endpoint = endpoint.trim_end_matches('/');
     let public_url = format!("{}/{object_key}", public_domain.trim_end_matches('/'));
@@ -235,7 +249,7 @@ pub async fn upload_to_r2(
         if known_sha256.as_deref() == Some(body_hash.as_str()) {
             return Ok(R2UploadResult { url: public_url, skipped: true, sha256: body_hash });
         }
-        let existing = r2_object_meta_sha256(endpoint, &bucket, &object_key, &access_key_id, &secret_key).await?;
+        let existing = r2_object_meta_sha256(endpoint, &bucket, &object_key, &access_key_id, &secret_key, session_token.as_deref()).await?;
         if existing.as_deref() == Some(body_hash.as_str()) {
             return Ok(R2UploadResult { url: public_url, skipped: true, sha256: body_hash });
         }
@@ -245,19 +259,22 @@ pub async fn upload_to_r2(
     let host      = host_from(endpoint);
 
     let canonical_uri = format!("/{}/{}", uri_encode(&bucket, true), uri_encode(&object_key, false));
+    let mut extra: Vec<(&str, &str)> = vec![("content-type", &content_type), ("x-amz-meta-sha256", &body_hash)];
+    if let Some(ref t) = session_token { extra.push(("x-amz-security-token", t)); }
     let auth = sign("PUT", host, &canonical_uri, "", &body_hash,
-                    &[("content-type", &content_type), ("x-amz-meta-sha256", &body_hash)],
-                    &datetime, &date, &access_key_id, &secret_key);
+                    &extra, &datetime, &date, &access_key_id, &secret_key);
 
     let url = format!("{endpoint}/{bucket}/{object_key}");
-    let res = client()
+    let mut rb = client()
         .put(&url)
         .header("host",                  host)
         .header("x-amz-date",           &datetime)
         .header("x-amz-content-sha256", &body_hash)
         .header("content-type",          &content_type)
         .header("x-amz-meta-sha256",     &body_hash)
-        .header("authorization",         &auth)
+        .header("authorization",         &auth);
+    if let Some(ref t) = session_token { rb = rb.header("x-amz-security-token", t); }
+    let res = rb
         .body(body)
         .send()
         .await
@@ -280,6 +297,7 @@ pub async fn check_r2_connection(
     bucket:        String,
     access_key_id: String,
     secret_key:    String,
+    session_token: Option<String>,
 ) -> Result<String, String> {
     let (datetime, date) = utc_now();
     let endpoint  = endpoint.trim_end_matches('/');
@@ -288,16 +306,19 @@ pub async fn check_r2_connection(
     // ListObjectsV2 with max-keys=0 — cheapest valid S3 call
     let query = "list-type=2&max-keys=0";
     let canonical_uri = format!("/{}", uri_encode(&bucket, true));
+    let extra = token_headers(session_token.as_deref());
     let auth = sign("GET", host, &canonical_uri, query, EMPTY_HASH,
-                    &[], &datetime, &date, &access_key_id, &secret_key);
+                    &extra, &datetime, &date, &access_key_id, &secret_key);
 
     let url = format!("{endpoint}/{bucket}?{query}");
-    let res = client()
+    let mut rb = client()
         .get(&url)
         .header("host",                  host)
         .header("x-amz-date",           &datetime)
         .header("x-amz-content-sha256",  EMPTY_HASH)
-        .header("authorization",         &auth)
+        .header("authorization",         &auth);
+    if let Some(ref t) = session_token { rb = rb.header("x-amz-security-token", t); }
+    let res = rb
         .send()
         .await
         .map_err(|e| format!("Connection failed: {e}"))?;
@@ -322,6 +343,7 @@ pub async fn list_r2_keys(
     access_key_id: String,
     secret_key:    String,
     prefix:        String,
+    session_token: Option<String>,
 ) -> Result<Vec<String>, String> {
     let endpoint = endpoint.trim_end_matches('/');
     let host     = host_from(endpoint);
@@ -343,16 +365,19 @@ pub async fn list_r2_keys(
             format!("list-type=2&max-keys=1000&prefix={}", encoded_prefix)
         };
 
+        let extra = token_headers(session_token.as_deref());
         let auth = sign("GET", host, &canonical_uri, &query, EMPTY_HASH,
-                        &[], &datetime, &date, &access_key_id, &secret_key);
+                        &extra, &datetime, &date, &access_key_id, &secret_key);
 
         let url = format!("{endpoint}/{bucket}?{query}");
-        let res = client()
+        let mut rb = client()
             .get(&url)
             .header("host",                  host)
             .header("x-amz-date",           &datetime)
             .header("x-amz-content-sha256",  EMPTY_HASH)
-            .header("authorization",         &auth)
+            .header("authorization",         &auth);
+        if let Some(ref t) = session_token { rb = rb.header("x-amz-security-token", t); }
+        let res = rb
             .send()
             .await
             .map_err(|e| format!("R2 list failed: {e}"))?;
@@ -391,22 +416,26 @@ pub async fn delete_r2_object(
     access_key_id: String,
     secret_key:    String,
     object_key:    String,
+    session_token: Option<String>,
 ) -> Result<(), String> {
     let (datetime, date) = utc_now();
     let endpoint  = endpoint.trim_end_matches('/');
     let host      = host_from(endpoint);
 
     let canonical_uri = format!("/{}/{}", uri_encode(&bucket, true), uri_encode(&object_key, false));
+    let extra = token_headers(session_token.as_deref());
     let auth = sign("DELETE", host, &canonical_uri, "", EMPTY_HASH,
-                    &[], &datetime, &date, &access_key_id, &secret_key);
+                    &extra, &datetime, &date, &access_key_id, &secret_key);
 
     let url = format!("{endpoint}/{bucket}/{object_key}");
-    let res = client()
+    let mut rb = client()
         .delete(&url)
         .header("host",                  host)
         .header("x-amz-date",           &datetime)
         .header("x-amz-content-sha256",  EMPTY_HASH)
-        .header("authorization",         &auth)
+        .header("authorization",         &auth);
+    if let Some(ref t) = session_token { rb = rb.header("x-amz-security-token", t); }
+    let res = rb
         .send()
         .await
         .map_err(|e| format!("R2 delete failed: {e}"))?;

@@ -14,3 +14,6 @@ target
 # supabase CLI local state
 supabase/.temp
 supabase/.branches
+
+# edge function local secrets
+supabase/functions/.env

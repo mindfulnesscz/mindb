@@ -8,9 +8,9 @@ import { useVocabularyStore } from '../../store/vocabularyStore';
 import { useClientStore } from '../../store/clientStore';
 import { tokenStatus, cloudToken } from '../../domain/client';
 import type { CloudDestination, LocalDestConfig } from '../../domain/client';
-import { runPipeline, scanVersionMap } from '../../services/pipelineService';
+import { runPipeline, scanVersionMap, type RunContext } from '../../services/pipelineService';
 import type { CloudUrlEntry } from '../../services/pipelineService';
-import { exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary, fetchClientInventory } from '../../services/supabaseService';
+import { exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary, fetchClientInventory, requestR2Grant } from '../../services/supabaseService';
 import { deleteCdnObjects } from '../../services/pipelineService';
 import { saveClients, pushCloudDestinations } from '../../services/clientService';
 import { notifyRunComplete } from '../../services/notifyService';
@@ -323,26 +323,14 @@ function ConfigSidebar() {
     const cdnUrls      = new Map<string, string>();
     const originalUrls = new Map<string, string>();
     const cloudUrls    = new Map<string, CloudUrlEntry[]>();
-    const r2Config = (
-      activeClient?.r2Endpoint &&
-      activeClient?.r2AccessKeyId &&
-      activeClient?.r2SecretKey &&
-      activeClient?.r2Bucket &&
-      activeClient?.r2PublicDomain
-    ) ? {
-      endpoint:     activeClient.r2Endpoint,
-      accessKeyId:  activeClient.r2AccessKeyId,
-      secretKey:    activeClient.r2SecretKey,
-      bucket:       activeClient.r2Bucket,
-      publicDomain: activeClient.r2PublicDomain,
-    } : undefined;
-
     // Cloud destinations for cloud export (selected non-local destinations)
     const cloudDests = selectedDests.filter(d => d.config.type !== 'local');
 
-    // ── Pre-run: pre-populate CDN inventory from DB ──────────────────────────
+    // ── Pre-run: storage grant + CDN inventory ───────────────────────────────
     // The client IS a DB row now — its id is the identity, no name resolution.
     // Sync runs as the signed-in user (RLS staff policies); no service key.
+    // CDN uploads run on a short-lived, client-scoped storage grant from the
+    // r2-grant Control API — no permanent R2 credentials exist on this machine.
     const sbEnabled = !!(activeClient?.supabaseUrl && activeClient?.supabaseAnonKey);
     const sbConfig = sbEnabled ? {
       url:     activeClient!.supabaseUrl!,
@@ -350,6 +338,24 @@ function ConfigSidebar() {
     } : null;
     const clientId: string | null = sbConfig ? activeClient!.id : null;
     const log = appendLog as (type: string, msg: string) => void;
+
+    let r2Config: RunContext['r2'];
+    if (sbConfig && clientId && (settings.doThumbnails || settings.doCdnOriginals)) {
+      try {
+        const grant = await requestR2Grant(sbConfig, clientId);
+        r2Config = {
+          endpoint:     grant.endpoint,
+          accessKeyId:  grant.accessKeyId,
+          secretKey:    grant.secretAccessKey,
+          sessionToken: grant.sessionToken,
+          bucket:       grant.bucket,
+          publicDomain: grant.publicDomain,
+        };
+        log('dim', `  Storage grant issued for "${activeClient!.name}" (bucket ${grant.bucket}, expires ${new Date(grant.expiresAt).toLocaleTimeString()})`);
+      } catch (e) {
+        log('error', `  ✕  CDN steps disabled — ${e}`);
+      }
+    }
 
     if (sbConfig) {
       if (clientId && r2Config) {
