@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dev:staging": "vite --mode staging",
+    "dev:production": "vite --mode production"
   },
   "dependencies": {
     "@dc-hub/asset-library": "*",

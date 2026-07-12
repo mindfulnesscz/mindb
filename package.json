@@ -25,6 +25,8 @@
     "version:patch": "node scripts/version.mjs patch",
     "version:minor": "node scripts/version.mjs minor",
     "version:major": "node scripts/version.mjs major",
-    "version:set": "node scripts/version.mjs"
+    "version:set": "node scripts/version.mjs",
+    "dev:web:staging": "npm --prefix web run dev:staging --workspace=apps/client-hub",
+    "dev:web:prod": "npm --prefix web run dev:production --workspace=apps/client-hub"
   }
 }
