@@ -1,12 +1,14 @@
 name: Database migrations
 
+# Branch model: dev (integration, checks only) → staging (deploys the staging
+# backend) → main (deploys production, approval-gated). The portal follows the
+# same branches via Vercel's git integration; desktop releases ride v* tags.
 on:
   pull_request:
     paths: ['supabase/**']
   push:
-    branches: [main]
+    branches: [main, staging]
     paths: ['supabase/**']
-    tags: ['v*.*.*']
 
 jobs:
   # Every PR touching supabase/: prove the migrations replay from zero.
@@ -21,9 +23,9 @@ jobs:
       - run: supabase db start
       - run: supabase db lint --level warning
 
-  # Merge to main: apply new migrations to STAGING.
+  # Push to the staging branch: apply new migrations to STAGING.
   deploy-staging:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
     runs-on: ubuntu-latest
     environment: staging
     steps:
@@ -45,10 +47,10 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_STAGING_REF }}
 
-  # Release tag: apply new migrations to PRODUCTION.
+  # Merge to main: apply new migrations to PRODUCTION.
   # The `production` GitHub environment should require manual approval.
   deploy-production:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
     steps:
