@@ -143,11 +143,15 @@ The desktop holds **no R2 credentials**. A client's bucket and public domain liv
 
 ### Provisioning the storage Control API (one-time, per environment)
 
-The `r2-grant` function needs three secrets to mint temporary credentials:
+The `r2-grant` function needs three secrets to mint temporary credentials. **One R2 API token provides two of them** — no account-level token builder needed:
 
-1. **Cloudflare API token** — dashboard → My Profile → API Tokens → *Create Token* with **Account · Workers R2 Storage · Edit** permission.
-2. **Account ID** — dashboard → R2 (shown in the sidebar/URL).
-3. **Parent R2 access key** — R2 → *Manage API tokens* → a key with read/write on the relevant buckets; its scope bounds every temporary credential.
+1. Cloudflare dashboard → **R2** → **API** (top right) → **Manage API tokens** → *Create Account API token*.
+2. Permissions: **Admin Read & Write** (or *Object Read & Write* scoped to the relevant buckets — this token's scope bounds every temporary credential it mints).
+3. The creation screen shows three values. You need two:
+   - **Token value** → `CF_API_TOKEN` (the bearer for Cloudflare's REST API)
+   - **Access Key ID** → `R2_PARENT_ACCESS_KEY_ID`
+   - (the Secret Access Key is not needed by the grant function)
+4. **Account ID** → `CF_ACCOUNT_ID` — shown on the R2 overview page (also in the R2 endpoint URL: `https://<account-id>.r2.cloudflarestorage.com`).
 
 ```bash
 supabase link --project-ref <env-ref>
