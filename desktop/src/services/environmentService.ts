@@ -37,6 +37,27 @@ function guessName(url: string): string {
   return host ? `Production (${host.slice(0, 8)})` : 'Production';
 }
 
+/** Guard the anon-key fields against privileged keys. The desktop must never
+ * hold one (authentication-plan): sb_secret_* is Supabase's secret API key,
+ * and a JWT with role service_role bypasses RLS entirely. Returns a
+ * user-facing error, or null when the key is acceptable. */
+export function validateAnonKey(key: string): string | null {
+  const k = key.trim();
+  if (!k) return null; // emptiness is handled by required-field checks
+  if (k.startsWith('sb_secret_')) {
+    return 'That is the SECRET key — it must never be entered in this app. Use the publishable key (sb_publishable_…) from Supabase → Settings → API Keys.';
+  }
+  if (k.startsWith('eyJ')) {
+    try {
+      const payload = JSON.parse(atob(k.split('.')[1] ?? ''));
+      if (payload?.role === 'service_role') {
+        return 'That is the service_role key — it bypasses all security and must never be entered in this app. Use the anon/publishable key instead.';
+      }
+    } catch { /* not a decodable JWT — let the server reject it on sign-in */ }
+  }
+  return null;
+}
+
 export function makeEnvironment(partial: Partial<Environment> = {}): Environment {
   return {
     id:          crypto.randomUUID(),

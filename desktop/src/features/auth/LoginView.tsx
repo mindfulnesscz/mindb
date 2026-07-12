@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useAuthStore } from '../../store/authStore';
 import { useEnvironmentStore } from '../../store/environmentStore';
-import { makeEnvironment, saveEnvironments } from '../../services/environmentService';
+import { makeEnvironment, saveEnvironments, validateAnonKey } from '../../services/environmentService';
 import {
   initAuthClient, checkEmail, sendMagicLink,
   waitForMagicLink, loadProfile, signOut, DESKTOP_ROLES,
@@ -56,6 +56,9 @@ export function LoginView() {
     const url = serverUrl.trim().replace(/\/+$/, '');
     const anonKey = serverKey.trim();
     if (!url || !anonKey) return;
+    const keyError = validateAnonKey(anonKey);
+    if (keyError) { setError(keyError); return; }
+    setError('');
 
     // The server config IS an environment: update the active one, or create
     // the first. Further environments come from "+ Add environment…" above.
@@ -147,10 +150,11 @@ export function LoginView() {
             <label className={css.label}>Anon key</label>
             <input
               className={css.input}
-              placeholder="eyJhbGciOi…"
+              placeholder="sb_publishable_…"
               value={serverKey}
               onChange={e => setServerKey(e.target.value)}
             />
+            {error && <p className={css.error}>{error}</p>}
             <button className={css.button} type="submit" disabled={!serverUrl.trim() || !serverKey.trim()}>
               Save & continue
             </button>

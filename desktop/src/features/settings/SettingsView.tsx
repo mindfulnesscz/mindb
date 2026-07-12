@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useEnvironmentStore } from '../../store/environmentStore';
 import { useAuthStore } from '../../store/authStore';
-import { saveEnvironments, makeEnvironment } from '../../services/environmentService';
+import { saveEnvironments, makeEnvironment, validateAnonKey } from '../../services/environmentService';
 import { checkSupabaseConnection } from '../../services/supabaseService';
 import { CloudDestinations } from '../cloud/CloudDestinations';
 import css from './SettingsView.module.css';
@@ -167,6 +167,8 @@ function EnvironmentSettings() {
 
   async function handleBlur() {
     if (!activeEnv) return;
+    const keyError = validateAnonKey(anonKey);
+    if (keyError) { setStatus('error'); setMsg(keyError); return; } // refuse to persist a privileged key
     const updated = environments.map(e => e.id === activeEnv.id
       ? { ...e, name: name.trim(), supabaseUrl: url.trim().replace(/\/+$/, ''), anonKey: anonKey.trim() }
       : e);
