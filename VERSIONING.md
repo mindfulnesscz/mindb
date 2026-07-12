@@ -19,6 +19,6 @@ A bump updates, in one pass:
 - `docs/package.json` + `docs/package-lock.json`
 - `CHANGELOG.md` — a new section is inserted when one doesn't exist yet; replace the generated placeholder before committing
 
-Version commands do not commit, tag, or push. After reviewing the changes, commit them and create the matching `vX.Y.Z` tag. CI (`.github/workflows/version.yml`) rejects mismatched manifests and release tags.
+Version commands do not commit, tag, or push. The release path (branch-protected: `main` only accepts merges from `staging`): commit the bump on a branch → PR to `staging` → verify on staging → PR `staging → main` → merge → create the matching `vX.Y.Z` tag on the merge commit and push it. CI (`.github/workflows/version.yml`) rejects mismatched manifests and release tags.
 
 The contributor-facing release checklist and drift recovery procedure are also available in the documentation site at `/reference/versioning`.
