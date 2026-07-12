@@ -137,8 +137,20 @@ export default function App() {
     if (dirty) saveSettings(settings).then(markClean).catch(console.error);
   }, [settings, dirty]);
 
-  /* The gate: nothing operational renders without a staff session. */
-  if (authStatus === 'booting') return null;
+  /* The gate: nothing operational renders without a staff session. A visible
+     splash while booting — never a blank window; getSession is also
+     timeout-guarded in authService so this state always resolves. */
+  if (authStatus === 'booting') {
+    return (
+      <div style={{
+        minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'var(--paper-cream)', color: 'var(--gray-500)',
+        fontFamily: '"Commissioner", sans-serif', fontSize: '0.9rem',
+      }}>
+        Connecting…
+      </div>
+    );
+  }
   if (authStatus !== 'signedIn') return <LoginView />;
 
   return (

@@ -26,6 +26,7 @@ export const AUTH_CALLBACK_URL = 'http://localhost:7623/auth-callback';
 
 let client: SupabaseClient | null = null;
 let clientKey = '';
+let authSubscription: { unsubscribe: () => void } | null = null;
 
 /* The signed-in session's current access token, kept fresh by supabase-js's
  * auto-refresh via onAuthStateChange. The pipeline attaches this to every
@@ -40,6 +41,14 @@ export function getCurrentAccessToken(): string | null {
 export function initAuthClient(config: AuthServerConfig): SupabaseClient {
   const key = `${config.url}::${config.anonKey}`;
   if (client && clientKey === key) return client;
+  // Tear the previous environment's client down — its auto-refresh timers and
+  // listeners otherwise keep running and can contend with the new instance
+  // (symptom: getSession() hangs on environment switch → endless boot screen).
+  if (client) {
+    authSubscription?.unsubscribe();
+    authSubscription = null;
+    try { client.auth.stopAutoRefresh(); } catch { /* already stopped */ }
+  }
   client = createClient(config.url, config.anonKey, {
     auth: {
       flowType: 'pkce',
@@ -50,9 +59,10 @@ export function initAuthClient(config: AuthServerConfig): SupabaseClient {
   });
   clientKey = key;
   currentAccessToken = null;
-  client.auth.onAuthStateChange((_event, session) => {
+  const { data } = client.auth.onAuthStateChange((_event, session) => {
     currentAccessToken = session?.access_token ?? null;
   });
+  authSubscription = data.subscription;
   // Prime the token from a persisted session without waiting for the listener.
   client.auth.getSession().then(({ data }) => {
     currentAccessToken = data.session?.access_token ?? currentAccessToken;
@@ -130,8 +140,13 @@ export async function waitForMagicLink(): Promise<Session> {
 
 export async function getSession(): Promise<Session | null> {
   if (!client) return null;
-  const { data } = await client.auth.getSession();
-  return data.session;
+  // Belt and braces: never let a wedged storage/lock state hang the boot.
+  // Timing out reads as "no session" — the login screen, which can recover.
+  const result = await Promise.race([
+    client.auth.getSession(),
+    new Promise<null>(resolve => setTimeout(() => resolve(null), 5000)),
+  ]);
+  return result ? result.data.session : null;
 }
 
 /** The authoritative role check — the profile row, read under the user's own
