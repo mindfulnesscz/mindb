@@ -64,9 +64,7 @@ node scripts/bootstrap-env.mjs staging
 node scripts/bootstrap-env.mjs staging --execute
 ```
 
-The config file (`scripts/environments/<name>.env`, gitignored) holds every value — project ref, site URL, admin email, the three Supabase secrets, and the Cloudflare grant creds. You never type a secret or a flag on the command line, so there is nothing for the shell to mangle. Dry-run is the **default**; `--execute` is required to apply, and a production project ref is refused unless you add `--i-know-its-prod`. Buckets are **one per environment**; a new agency gets its own config file and its own everything.
-
-The three env vars are per-environment secrets from the Supabase dashboard (access token = your account PAT; DB password + service key from the target project). Buckets are **one per environment** by convention (`dc-hub-staging`, `dc-hub-bucket`, …); a new agency always gets its own.
+The config file (`scripts/environments/<name>.env`, gitignored) holds every value — project ref, site URL, admin email, the three Supabase secrets (access token = your account PAT; DB password + service key from the target project's dashboard), and the Cloudflare grant creds. You never type a secret or a flag on the command line, so there is nothing for the shell to mangle. Dry-run is the **default**; `--execute` is required to apply, and a production project ref is refused unless you add `--i-know-its-prod`. Buckets are **one per environment** (`dc-hub-staging`, `dc-hub-bucket`, …); a new agency gets its own config file and its own everything.
 
 **The manual half** (platform-account actions the script deliberately doesn't automate — it prints this list at the end):
 
