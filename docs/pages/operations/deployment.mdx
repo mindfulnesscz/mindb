@@ -19,7 +19,9 @@ The desktop uses fixed port 1420, docs uses 3001, and the web portal normally us
 | `staging` | `staging.hub.disruptcollective.com` (branch domain) | pushed to the **staging** Supabase project | rehearsal against hosted infra |
 | `main` | `hub.disruptcollective.com` (production) | pushed to **production**, approval-gated | what clients and editors use |
 
-Flow: work on `dev` (or feature branches into it) → merge `dev → staging` when a slice should hit hosted rehearsal → merge `staging → main` to release. Desktop releases ride `v*` tags off `main` (`release-desktop.yml`). The local stack is not bound to any branch — it always runs whatever you have checked out.
+Flow — **`main` is a promotion-only branch**: every pull request targets `staging` (from `dev` or feature branches); nothing PRs to `main` directly. After verifying on the staging infrastructure, a human opens the `staging → main` PR and merges it — that merge IS the release decision. Desktop releases ride `v*` tags on the merged `main` commit (`release-desktop.yml`). The local stack is not bound to any branch — it always runs whatever you have checked out.
+
+Release ritual: bump the version on a branch (`npm run version:minor`, fill the changelog) → PR to `staging` → merge, test on staging → PR `staging → main` → merge → tag `vX.Y.Z` on the merge commit and push the tag.
 
 Schema-dependent UI: merge the migration first (or in the same merge — migrations are additive-first by convention), since Vercel and the CI deploy in parallel on the same push.
 
