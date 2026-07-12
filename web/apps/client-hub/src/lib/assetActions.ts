@@ -12,7 +12,8 @@ export const webAssetActions: AssetActions = {
     try {
       // The anchor `download` attribute is ignored for cross-origin URLs (the CDN),
       // so fetch to a blob first. Requires CORS on the R2 public domain.
-      const res = await fetch(url)
+      // no-referrer so a hotlink-protected CDN treats this like a direct hit.
+      const res = await fetch(url, { referrerPolicy: 'no-referrer' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const blob = await res.blob()
       const objectUrl = URL.createObjectURL(blob)
