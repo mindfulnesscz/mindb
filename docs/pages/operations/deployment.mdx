@@ -54,14 +54,17 @@ A hosted environment — a new tier (staging) or a whole new agency instance —
 - optionally creates the first client with its storage config and assigns the admin to it
 
 ```bash
-SUPABASE_ACCESS_TOKEN=…  SUPABASE_DB_PASSWORD=…  SUPABASE_SERVICE_KEY=… \
-npm run bootstrap:env -- \
-  --ref <supabase-project-ref> \
-  --site-url https://staging.hub.disruptcollective.com \
-  --admin you@disruptcollective.com \
-  --client "ESS" --bucket dc-hub-staging --domain https://<staging-cdn> \
-  --dry-run    # preview first; drop it to execute
+# 1. copy the template, then fill it in IN YOUR EDITOR (no shell escaping, ever)
+cp scripts/environments/example.env.template scripts/environments/staging.env
+
+# 2. preview — changes nothing
+node scripts/bootstrap-env.mjs staging
+
+# 3. execute
+node scripts/bootstrap-env.mjs staging --execute
 ```
+
+The config file (`scripts/environments/<name>.env`, gitignored) holds every value — project ref, site URL, admin email, the three Supabase secrets, and the Cloudflare grant creds. You never type a secret or a flag on the command line, so there is nothing for the shell to mangle. Dry-run is the **default**; `--execute` is required to apply, and a production project ref is refused unless you add `--i-know-its-prod`. Buckets are **one per environment**; a new agency gets its own config file and its own everything.
 
 The three env vars are per-environment secrets from the Supabase dashboard (access token = your account PAT; DB password + service key from the target project). Buckets are **one per environment** by convention (`dc-hub-staging`, `dc-hub-bucket`, …); a new agency always gets its own.
 
