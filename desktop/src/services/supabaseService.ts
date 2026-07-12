@@ -959,7 +959,16 @@ export async function exportAssetsToSupabase(
       // syncVersionHistory, not as separate stable-identity rows. Only files that remain
       // genuinely distinct after this pass are true variants.
       const highestStems = new Set(filterHighestVersions(items.map(i => i.stem)));
-      const deduped = items.filter(i => highestStems.has(i.stem));
+      // Also collapse duplicate stems: groupAssets emits one entry per FILE, so
+      // extension pairs (foo.pdf + foo.png) repeat a stem — resolving the stem
+      // twice yields two records with the same child id, and the second write
+      // used to stamp variant_of onto the chosen primary itself, hiding the group.
+      const seenStems = new Set<string>();
+      const deduped = items.filter(i => {
+        if (!highestStems.has(i.stem) || seenStems.has(i.stem)) return false;
+        seenStems.add(i.stem);
+        return true;
+      });
 
       // Deterministic order for brand-new manifests (no prior child_id yet) — matches
       // migrate-identity.ts's alphabetical assignment so a fresh folder's primary is stable.
@@ -1007,7 +1016,9 @@ export async function exportAssetsToSupabase(
       parentWrites.push({ key: primaryKey, record: primary.record });
       readmeTargets.push({ packageDir, stableId, stem: primary.stem });
       for (const item of resolvedItems) {
-        if (item === primary) continue;
+        // Compare by child id, not object identity — a duplicate resolution of
+        // the primary must never become a self-referencing variant write.
+        if (item.childId === primary.childId) continue;
         childWrites.push({ key: `${stableId}:${item.childId}`, record: item.record, parentKey: primaryKey, relation: 'variant_of' });
       }
 
@@ -1102,7 +1113,14 @@ export async function exportAssetsToSupabase(
       return [...byKey.values()];
     }
     const dedupedParents = dedupe(parentWrites, 'parent/single');
-    const dedupedChildren = dedupe(childWrites, 'child');
+    // Final guard: a key can't be both a primary and a child — the primary wins,
+    // or the child write would PATCH a relation onto the primary's own row.
+    const parentKeys = new Set(dedupedParents.map(p => p.key));
+    const dedupedChildren = dedupe(childWrites, 'child').filter(c => {
+      if (!parentKeys.has(c.key)) return true;
+      appendLog('warn', `  ⚠  ${c.key} resolved as both primary and child — keeping the primary`);
+      return false;
+    });
 
     // PATCH leaves omitted fields untouched in Postgres — drop URL fields we have no
     // value for, so a run where an upload phase was cached or disabled can't wipe
