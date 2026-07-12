@@ -42,6 +42,38 @@ Schema-dependent UI: merge the migration first (or in the same merge — migrati
 
 **Supabase function secrets** (per project, once): `supabase secrets set CF_API_TOKEN=… CF_ACCOUNT_ID=… R2_PARENT_ACCESS_KEY_ID=…` — see [Database environments](/operations/database-environments#provisioning-the-storage-control-api-one-time-per-environment).
 
+## Standing up a new environment
+
+A hosted environment — a new tier (staging) or a whole new agency instance — splits into a **scriptable** half and a small **manual** half. `scripts/bootstrap-env.mjs` (`npm run bootstrap:env`) does the scriptable half in one idempotent, re-runnable pass:
+
+- links the project and pushes the schema (all migrations)
+- deploys edge functions
+- sets edge-function secrets from `supabase/functions/.env` (the Cloudflare grant credentials)
+- sets the Auth **Site URL + redirect allow-list via the Management API** — config as code, so the `localhost:3000` magic-link drift can't recur
+- **invites the founding admin** and stamps `role=admin` (no chicken-and-egg, no hand-SQL — they click the email and they're in)
+- optionally creates the first client with its storage config and assigns the admin to it
+
+```bash
+SUPABASE_ACCESS_TOKEN=…  SUPABASE_DB_PASSWORD=…  SUPABASE_SERVICE_KEY=… \
+npm run bootstrap:env -- \
+  --ref <supabase-project-ref> \
+  --site-url https://staging.hub.disruptcollective.com \
+  --admin you@disruptcollective.com \
+  --client "ESS" --bucket dc-hub-staging --domain https://<staging-cdn> \
+  --dry-run    # preview first; drop it to execute
+```
+
+The three env vars are per-environment secrets from the Supabase dashboard (access token = your account PAT; DB password + service key from the target project). Buckets are **one per environment** by convention (`dc-hub-staging`, `dc-hub-bucket`, …); a new agency always gets its own.
+
+**The manual half** (platform-account actions the script deliberately doesn't automate — it prints this list at the end):
+
+1. Create the Supabase project (dashboard, or `supabase projects create`).
+2. Cloudflare R2: create the bucket, enable a public domain (r2.dev or custom), add CORS `GET`/`HEAD` from `*`; create an account-scoped R2 API token and put its Token value + Access Key ID into `supabase/functions/.env` before running (or re-run after).
+3. Vercel: point a project/branch at the site URL with this environment's URL + anon key.
+4. DNS for any custom domain.
+
+After the script runs and the manual list is done, an editor adds the environment in the desktop (Settings → Environments) and signs in. Nothing else is hand-assembled.
+
 ## Portal hosting (Vercel)
 
 `web/vercel.json` configures the build (workspace build command, `apps/client-hub/dist` output, SPA rewrites so client-side routes survive refresh). One-time setup:
