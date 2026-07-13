@@ -5,6 +5,25 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [2.4.1] — 2026-07-13
+
+Deployment plumbing and field fixes shaken out while standing up staging and running production against the new auth/storage model.
+
+### Added
+
+- **`bootstrap-env` tool** (`npm run bootstrap:env`) — provisions a hosted environment (a new tier or a whole new agency instance) in one idempotent pass: link + `db push`, functions deploy, function secrets, Auth site-URL/redirect allow-list via the Management API (config as code), invite-based founding admin, and an optional first client with storage + membership. Config lives in a gitignored per-environment file (`scripts/environments/<name>.env`) — no secrets or flags typed on the command line. Dry-run by default; a production ref is refused without `--i-know-its-prod`.
+
+### Changed
+
+- CI deploys on **every** push to `main`/`staging`, not only pushes that touch `supabase/**` — a path filter previously let a migration or function already on the branch never actually deploy ("merged but not deployed").
+- Desktop sign-in loopback window widened 3 → 10 minutes, since hosted-project magic-link email lands in a real inbox slower than the local Mailpit.
+
+### Fixed
+
+- Portal CDN images now load with `referrerPolicy="no-referrer"` (and the download fetch too), so a hotlink-protected CDN serves them as it would a direct hit.
+- Documented the CDN blank-image failure modes (hotlink protection, relative/hostless URLs from an empty `r2_public_domain`, 403 missing object, download-as-`.html`) with the null-URLs-then-re-run fix for the stale-skip trap.
+
+
 ## [2.4.0] — 2026-07-12
 
 Authentication, environments, a credential-free desktop, and the production deployment pipeline. The desktop is gated behind staff sign-in, clients are database-first, no permanent secret exists on any workstation, and the portal ships continuously.

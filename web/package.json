@@ -10,5 +10,5 @@
     "build": "npm run build --workspace=apps/client-hub",
     "typecheck": "npm run typecheck --workspace=packages/asset-library && npm run typecheck --workspace=apps/client-hub"
   },
-  "version": "2.4.0"
+  "version": "2.4.1"
 }
