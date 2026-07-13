@@ -174,6 +174,15 @@ Functions deploy through CI alongside migrations (merge → staging, tag → pro
 
 Correct the client's Public domain (client form), then **run the pipeline once**. Files that are already uploaded skip, but the run rewrites every `thumbnail_url`/`download_url` with the corrected domain — no manual backfill.
 
+**Symptom → cause cheat-sheet** (all seen in the wild):
+
+- **Portal thumbnails blank, but the image opens fine in a new tab** — the CDN domain has Cloudflare **Hotlink Protection** on (blocks cross-site `<img>` by Referer). Turn it off for a public asset CDN; the portal also loads images with `referrerPolicy="no-referrer"` as a belt-and-braces.
+- **Thumbnail requests return `200 text/html` (the app's `index.html`)** — the stored `thumbnail_url`s are **relative/hostless**, so the browser resolves them against the portal origin. Cause: the client synced with an **empty `r2_public_domain`** (URL became `"" + /thumbnails/…`). Fix: set the client's Public domain, **null the poisoned rows** (`update assets set thumbnail_url=null, download_url=null where client_id=…`) so the next run doesn't skip them, then run the pipeline.
+- **CDN URL returns `403`** — the object isn't in the bucket (never uploaded, or wrong bucket). Re-run the pipeline with the correct `r2_bucket`.
+- **Download saves a `.html` file** — same as the `text/html` case: `download_url` points at an HTML 404/error page, not the object.
+
+The `update … set thumbnail_url=null` step matters because the pipeline pre-loads existing URLs from the DB and skips re-uploading anything it thinks is already there — stale URLs would otherwise make it skip forever.
+
 ### End-to-end rehearsal
 
 Local DB + staging bucket + a small test source folder = a full publish rehearsal with zero contact with client-visible data. The seeded local client (`Acme Studio`) is flagged `identity_migrated`, so the rehearsal exercises the same stable-identity path as production ESS.

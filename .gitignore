@@ -17,3 +17,6 @@ supabase/.branches
 
 # edge function local secrets
 supabase/functions/.env
+
+# per-environment bootstrap configs (hold secrets)
+scripts/environments/*.env

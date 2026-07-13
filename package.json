@@ -1,7 +1,7 @@
 {
   "name": "dc-hub-workspace",
   "private": true,
-  "version": "2.4.0",
+  "version": "2.4.1",
   "type": "module",
   "scripts": {
     "setup": "npm ci --prefix desktop && npm ci --prefix web && npm ci --prefix docs",
@@ -27,6 +27,7 @@
     "version:major": "node scripts/version.mjs major",
     "version:set": "node scripts/version.mjs",
     "dev:web:staging": "npm --prefix web run dev:staging --workspace=apps/client-hub",
-    "dev:web:prod": "npm --prefix web run dev:production --workspace=apps/client-hub"
+    "dev:web:prod": "npm --prefix web run dev:production --workspace=apps/client-hub",
+    "bootstrap:env": "node scripts/bootstrap-env.mjs"
   }
 }
