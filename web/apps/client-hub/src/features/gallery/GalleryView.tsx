@@ -25,7 +25,7 @@ function AssetCard({ asset, onClick, role }: { asset: Asset; onClick: () => void
     >
       <div className="relative aspect-video bg-gray-150 overflow-hidden">
         {asset.thumbnailUrl
-          ? <img src={asset.thumbnailUrl} alt={asset.name} className="w-full h-full object-cover" />
+          ? <img referrerPolicy="no-referrer" src={asset.thumbnailUrl} alt={asset.name} className="w-full h-full object-cover" />
           : <div className="w-full h-full bg-gray-150" />
         }
         <div className="absolute top-2 left-2 flex gap-1">

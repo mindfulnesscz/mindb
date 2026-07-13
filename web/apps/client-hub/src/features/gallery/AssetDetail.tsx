@@ -360,7 +360,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
                 {children.map((child, i) => (
                   <div key={child.id} className="aspect-video bg-gray-150 rounded-sm overflow-hidden relative">
                     {child.thumbnailUrl
-                      ? <img src={child.thumbnailUrl} alt={child.name} className="w-full h-full object-cover" />
+                      ? <img referrerPolicy="no-referrer" src={child.thumbnailUrl} alt={child.name} className="w-full h-full object-cover" />
                       : <div className="w-full h-full bg-gray-150 flex items-center justify-center text-text-muted text-xs font-sans">{i + 1}</div>
                     }
                   </div>
@@ -370,7 +370,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
               <div className="relative">
                 <div className="aspect-video bg-gray-150 rounded-sm overflow-hidden">
                   {children[carouselIdx]?.thumbnailUrl
-                    ? <img src={children[carouselIdx].thumbnailUrl} alt={children[carouselIdx].name} className="w-full h-full object-cover" />
+                    ? <img referrerPolicy="no-referrer" src={children[carouselIdx].thumbnailUrl} alt={children[carouselIdx].name} className="w-full h-full object-cover" />
                     : <div className="w-full h-full bg-gray-150" />
                   }
                 </div>
@@ -399,7 +399,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
         ) : (
           <div className="aspect-video bg-gray-150 rounded-sm overflow-hidden">
             {selectedAsset.thumbnailUrl
-              ? <img src={selectedAsset.thumbnailUrl} alt={selectedAsset.name} className="w-full h-full object-cover" />
+              ? <img referrerPolicy="no-referrer" src={selectedAsset.thumbnailUrl} alt={selectedAsset.name} className="w-full h-full object-cover" />
               : <div className="w-full h-full bg-gray-150" />
             }
           </div>
