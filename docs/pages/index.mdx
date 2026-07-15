@@ -1,25 +1,25 @@
 # DC Hub documentation
 
-DC Hub is a local-to-cloud digital asset publishing system. The **desktop application** discovers and transforms files, publishes binaries to R2 and optional cloud drives, and synchronizes metadata to Supabase. The **web portal** reads that metadata and presents role-aware client galleries, feedback, downloads, and administration.
+DC Hub is a local-to-cloud digital asset publishing system. The **desktop application** (editor/admin signed-in) discovers and transforms files, publishes binaries to R2 and optional cloud drives, and synchronizes metadata to Supabase. The **web portal** reads that metadata and presents role-aware galleries, feedback, downloads, and administration (clients, users, tags, branding).
 
-These pages describe what the current source code actually does, including ordering, skip rules, failure boundaries, security implications, and known limitations.
+These pages describe what the current source code actually does, including ordering, skip rules, failure boundaries, and known limitations.
 
 ## Start here
 
 - New operator: [First run](/getting-started/first-run) → [Publishing runbook](/operations/runbook)
-- New contributor: [Daily developer routine](/getting-started/development) → [Architecture](/getting-started/architecture) → [Repository map](/reference/file-layout)
+- New contributor: [Platform division](/getting-started/platform-division) → [Team staging setup](/getting-started/team-dev-setup) → [Daily developer routine](/getting-started/development) → [Architecture](/getting-started/architecture)
 - Release owner: [Versioning and releases](/reference/versioning) → [Commands](/reference/commands)
-- Cloud administrator: [Provider comparison](/cloud-storage/overview), then [Dropbox](/cloud-storage/dropbox), [OneDrive](/cloud-storage/onedrive), or [Google Drive](/cloud-storage/google-drive)
-- Pipeline diagnosis: [Pipeline lifecycle](/desktop/pipeline-lifecycle), [Logs](/desktop/logs), and [Troubleshooting](/operations/troubleshooting)
-- Portal administration: [Authentication](/web-portal/authentication), [Permissions](/web-portal/permissions), and [Administration](/web-portal/admin)
-- Security roadmap: [Desktop authentication and secret-management plan](/desktop/authentication-plan) *(planned, not implemented)*
+- Cloud administrator: [R2 CDN](/desktop/cdn), [Provider overview](/cloud-storage/overview)
+- Pipeline diagnosis: [Pipeline lifecycle](/desktop/pipeline-lifecycle), [Logs](/desktop/logs), [Troubleshooting](/operations/troubleshooting)
+- Portal administration: [Authentication](/web-portal/authentication), [Permissions](/web-portal/permissions), [Administration](/web-portal/admin)
+- Secret residual risk (OAuth storage / provider standardization): [Auth & secrets roadmap](/desktop/authentication-plan)
 
 ## End-to-end data flow
 
 1. One scan finds publishable files under configured `OUT` folders.
-2. Optional local transformations create thumbnails, collect package files, mirror local targets, export to cloud providers, and generate Obsidian notes.
-3. R2 stores browser-facing thumbnails and originals. SHA-256 metadata prevents uploading unchanged bytes.
-4. Supabase receives asset rows, taxonomy, version history, CDN URLs, and client-role cloud links.
-5. The web app queries Supabase, filters records by client/status/role, and records comments, ratings, views, and downloads.
+2. Optional local stages create thumbnails, collect package files, mirror local targets, export to cloud providers, and generate Obsidian notes.
+3. R2 (when the environment’s `r2-grant` succeeds) stores browser-facing thumbnails and originals under `{client_id}/…`. Content hashes skip unchanged bytes.
+4. Supabase receives asset rows, version history, CDN URLs, and cloud links. Tags and client identity are managed on the web (DB source of truth).
+5. The web app queries Supabase, filters by client/status/role, and records comments, ratings, views, and downloads.
 
-The critical distinction is that **local generation, R2 upload, provider upload, and database synchronization are independent phases**. A green thumbnail line does not mean R2, Dropbox, OneDrive, Google Drive, or Supabase succeeded. See [How to read pipeline logs](/desktop/logs).
+**Local generation, R2 upload, provider upload, and database synchronization are independent phases.** A green thumbnail line does not mean R2 or Supabase succeeded. See [How to read pipeline logs](/desktop/logs).

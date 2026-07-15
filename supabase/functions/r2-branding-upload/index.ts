@@ -1,7 +1,10 @@
-// Server-side branding logo upload — admin-only, writes to R2 under branding/{client_id}/
+// Server-side branding logo upload — admin-only, writes to R2 under branding/{client_id}/.
+// Uses the same Cloudflare temp-credentials flow as r2-grant (no extra upload keys).
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { AwsClient } from 'npm:aws4fetch';
+
+const GRANT_TTL_SECONDS = 3600;
 
 interface UploadBody {
   client_id?: string;
@@ -15,6 +18,44 @@ function json(status: number, body: Record<string, unknown>): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+async function obtainTempCredentials(bucket: string): Promise<{
+  endpoint: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken: string;
+} | null> {
+  const cfToken   = Deno.env.get('CF_API_TOKEN');
+  const accountId = Deno.env.get('CF_ACCOUNT_ID');
+  const parentKey   = Deno.env.get('R2_PARENT_ACCESS_KEY_ID');
+  if (!cfToken || !accountId || !parentKey) return null;
+
+  const cfRes = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/r2/temp-access-credentials`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${cfToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        bucket,
+        parentAccessKeyId: parentKey,
+        permission: 'object-read-write',
+        ttlSeconds: GRANT_TTL_SECONDS,
+      }),
+    },
+  );
+  const cfBody = await cfRes.json().catch(() => null);
+  if (!cfRes.ok || !cfBody?.result?.accessKeyId) {
+    console.error('Cloudflare temp-credentials failed:', cfRes.status, JSON.stringify(cfBody?.errors ?? cfBody));
+    return null;
+  }
+
+  return {
+    endpoint:        `https://${accountId}.r2.cloudflarestorage.com`,
+    accessKeyId:     cfBody.result.accessKeyId,
+    secretAccessKey: cfBody.result.secretAccessKey,
+    sessionToken:    cfBody.result.sessionToken,
+  };
 }
 
 Deno.serve(async (req) => {
@@ -41,20 +82,31 @@ Deno.serve(async (req) => {
 
   const bucket       = Deno.env.get('R2_BUCKET');
   const publicDomain = Deno.env.get('R2_PUBLIC_DOMAIN');
-  const accountId    = Deno.env.get('CF_ACCOUNT_ID');
-  const accessKey    = Deno.env.get('R2_UPLOAD_ACCESS_KEY_ID');
-  const secretKey    = Deno.env.get('R2_UPLOAD_SECRET_ACCESS_KEY');
-  if (!bucket || !publicDomain || !accountId || !accessKey || !secretKey) {
-    return json(503, { error: 'Branding upload not provisioned on this environment' });
+  if (!bucket || !publicDomain) {
+    return json(503, {
+      error: 'Branding upload not provisioned — set R2_BUCKET and R2_PUBLIC_DOMAIN function secrets',
+    });
+  }
+
+  const creds = await obtainTempCredentials(bucket);
+  if (!creds) {
+    return json(503, {
+      error: 'Storage backend not provisioned — set CF_API_TOKEN, CF_ACCOUNT_ID, and R2_PARENT_ACCESS_KEY_ID',
+    });
   }
 
   const ext = filename.split('.').pop()?.toLowerCase() ?? 'png';
   const objectKey = `branding/${client_id}/logo.${ext}`;
   const bytes = Uint8Array.from(atob(data_base64), c => c.charCodeAt(0));
 
-  const endpoint = `https://${accountId}.r2.cloudflarestorage.com`;
-  const aws = new AwsClient({ accessKeyId: accessKey, secretAccessKey: secretKey, service: 's3', region: 'auto' });
-  const putRes = await aws.fetch(`${endpoint}/${bucket}/${objectKey}`, {
+  const aws = new AwsClient({
+    accessKeyId:     creds.accessKeyId,
+    secretAccessKey: creds.secretAccessKey,
+    sessionToken:    creds.sessionToken,
+    service: 's3',
+    region:  'auto',
+  });
+  const putRes = await aws.fetch(`${creds.endpoint}/${bucket}/${objectKey}`, {
     method: 'PUT',
     headers: { 'Content-Type': content_type ?? `image/${ext}` },
     body: bytes,

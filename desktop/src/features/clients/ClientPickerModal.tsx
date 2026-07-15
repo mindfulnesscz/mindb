@@ -21,7 +21,7 @@ const PORTAL_BASE = 'http://localhost:5173';
 export function ClientPickerModal({ onClose }: Props) {
   const store = useClientStore();
   const { setField } = useSettingsStore();
-  const { profile, setStatus } = useAuthStore();
+  const { profile } = useAuthStore();
   const { environments, activeEnvId, setActiveEnvId } = useEnvironmentStore();
   const [busy, setBusy] = useState(false);
 
@@ -52,7 +52,6 @@ export function ClientPickerModal({ onClose }: Props) {
     store.setClients([]);
     store.setActiveClientId(null);
     await saveEnvironments({ activeId: envId, list: environments });
-    setStatus('booting');
     onClose();
   }
 

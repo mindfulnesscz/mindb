@@ -1,7 +1,11 @@
 # Taxonomy
 
-Vocabulary dimensions include entities, formats, angles, and additional tags, with hierarchy and ordering. The desktop parses filename tokens, can inherit/aggregate metadata across grouped assets, and synchronizes tags so the portal can render nested filters.
+Internal tag dimensions are **entity**, **angle**, and **format**. Per-client display names live in `clients.dimension_labels` (e.g. WHY / HOW / WHAT) and are edited in the web client drawer.
 
-The web tag service loads global tags plus client-scoped tags and builds trees by `parent_id`. Filtering uses asset arrays, not tag joins. A taxonomy rename therefore requires considering vocabulary parsing, existing asset arrays, synchronized tag rows, filter URLs/state, and stable identity.
+**Source of truth for the tag tree** is the Supabase `tags` table (`name`, `dimension`, `parent_id`, `sort_order`, `shortcode`). Admins manage them in the web drawer (TagsAdmin). Changing a shortcode can enqueue a `rename_tasks` row for the desktop to apply on a later pipeline run.
 
-Avoid ambiguous tokens and deleting live parent tags without a migration plan. Test representative filenames before rolling out vocabulary changes.
+Filename shortcodes and the **desktop vocabulary JSON** remain a local naming / scaffolding aid for generators and parsing (`filenameTranslator`). They are not the portal’s SoT for nested filters.
+
+The web tag service loads global + client-scoped tags and builds trees by `parent_id`. Gallery filters use asset text arrays, not SQL joins. Before renaming live shortcodes, plan for existing filenames, asset arrays, filter URLs, and stable identity — prefer `rename_tasks` over silent drift.
+
+See [Platform division](/getting-started/platform-division) and [Naming and vocabulary](/desktop/naming).

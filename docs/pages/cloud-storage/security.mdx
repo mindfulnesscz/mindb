@@ -1,11 +1,19 @@
-# Cloud security and sharing
+# Cloud integration security
 
-> **Current limitation:** desktop integration credentials are stored in local client configuration. A planned feature will add Supabase user authentication, protected token storage, and a trusted backend so permanent Supabase/R2 credentials no longer reach the desktop. See [Desktop authentication and secret-management plan](/desktop/authentication-plan).
+> **Current residual risk:** provider OAuth tokens (and Google client secret where used) remain in machine-local client configuration. Supabase user authentication, secret-free exports, and R2 grants are **already shipped** — permanent service-role and parent R2 keys do not belong on the desktop. See [Auth & secrets roadmap](/desktop/authentication-plan).
 
-Use least-privilege provider apps and dedicated organizational destinations. A destination marked `internal` prevents its collected link from being written to client-facing metadata, but it does not change provider ACLs. Conversely, a `client` label does not itself grant provider access; link generation requests public/anonymous sharing.
+## Public CDN nature
 
-R2 public URLs and anonymous provider links are bearer links: anyone who obtains one may retain access independently of later portal role changes. For confidential assets, use a private bucket with signed delivery or provider organization-scoped links; those mechanisms are not implemented by the current portal.
+R2 objects served through a public domain or custom hostname are reachable by anyone who knows the URL. Treat CDN assets as published unless a private delivery layer is added later.
 
-Secrets stored locally include Supabase service-role key, R2 keys, Google client secret, and OAuth tokens. Restrict OS account access, disk backups, logs/screenshots, and exported client bundles. Rotate secrets after suspected exposure. Never copy the service-role key into web environment variables or browser storage.
+## Local secrets today
 
-OAuth’s `state` and PKCE defend callback substitution/code interception. The localhost listener accepts one callback and times out, but users should not run simultaneous Dropbox/Google connection flows because they compete for port 7623.
+Expect only **OAuth tokens** (and optional Google client secret) in local config. Restrict OS account access, disk backups, logs, and screenshots. Never put a service-role key or parent R2 secret in web env vars or the desktop. Client export bundles are secret-free (`_version: 2.0`); old imports strip legacy credential fields and warn to rotate.
+
+## Temporary grants
+
+Pipeline CDN uploads use short-lived credentials from `r2-grant` (role + client scope). Branding uploads use `r2-branding-upload` (admin only). Failures when unprovisioned are explicit 503s — they do not fall back to embedding permanent keys.
+
+## Operator habits
+
+Prefer Staging for multi-person work ([Team staging setup](/getting-started/team-dev-setup)). Rotate provider tokens after suspected exposure. Prefer least-privilege Cloudflare tokens for edge secrets.

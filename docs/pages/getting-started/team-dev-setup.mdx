@@ -1,0 +1,76 @@
+# Team staging setup
+
+Day-to-day development uses a **shared Staging** backend for both Supabase and R2. Local Supabase is for schema and migration work only — not for full pipeline + portal rehearsals against shared CDN objects.
+
+See also [Platform division](/getting-started/platform-division) and [Database environments](/operations/database-environments).
+
+## The rule
+
+**Never mix a local database with a shared R2 bucket (or the reverse).** Metadata rows and CDN URLs must live in the same environment, or URLs, inventories, and “dummy” assets go out of sync across developers.
+
+| Workflow | Database | Object storage |
+|----------|----------|----------------|
+| Feature work, pipeline, portal, logos, tags | **Staging Supabase** | **Staging R2** |
+| Migration authoring / `db:reset` checks | Local Supabase | Skip CDN (grant 503 is fine) |
+| Client-facing production | Production Supabase | Production R2 |
+
+A fully local sandbox (local S3 + local DB) is intentional future work — not built yet.
+
+## One-time staging setup
+
+1. Create a Supabase project (e.g. `dc-hub-staging`) and a Cloudflare R2 bucket (e.g. `dc-hub-staging`) with public access.
+2. Apply schema: `supabase link --project-ref <staging-ref>` then `supabase db push` (afterwards prefer CI on the `staging` branch).
+3. Set edge function secrets on that project:
+
+```bash
+supabase secrets set \
+  R2_BUCKET=dc-hub-staging \
+  R2_PUBLIC_DOMAIN=https://pub-xxxx.r2.dev \
+  CF_API_TOKEN=… \
+  CF_ACCOUNT_ID=… \
+  R2_PARENT_ACCESS_KEY_ID=…
+supabase functions deploy
+```
+
+4. Fill `web/apps/client-hub/.env.staging` with the staging URL and anon/publishable key.
+
+## Daily use
+
+**Web**
+
+```bash
+npm run dev:web:staging
+```
+
+**Desktop**
+
+1. Settings → Environments → add **Staging** with staging URL + anon key.
+2. Select Staging as active.
+3. Sign in with a staging **admin** or **editor** account (magic link).
+4. Pick a DB client; configure machine-local folders only (source / OUT / vault).
+
+Do not paste service-role keys or permanent R2 credentials into the desktop — R2 uses short-lived grants from `r2-grant`.
+
+## Dummy data and second developers
+
+Create staging-only clients for fixtures (e.g. `Acme — Petr`). When another developer joins:
+
+- Same Staging Supabase project and same Staging R2 bucket.
+- Separate personal clients, or one agreed “integration” client everyone treats carefully.
+- Deployments: merge migrations to `staging` via CI; production is `main` (approval-gated) + release tags.
+
+## What lives where
+
+| Concern | Surface |
+|---------|---------|
+| Clients, users/roles, logos, dimension labels, tags | Web admin on staging |
+| Pipeline, folders, OAuth destinations | Desktop pointed at staging |
+| Schema changes | Local `db:reset` → PR → CI → `staging` → `main` |
+
+## CI
+
+- PRs: [`.github/workflows/check.yml`](https://github.com) — `npm run check` + tests; migration validate when `supabase/` changes.
+- Push to `staging`: apply migrations + deploy functions to staging.
+- Push to `main`: production migrations/functions (approval-gated).
+
+See [Configuration and deployment](/operations/deployment) and [Daily developer routine](/getting-started/development).

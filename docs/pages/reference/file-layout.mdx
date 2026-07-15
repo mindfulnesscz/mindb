@@ -5,18 +5,22 @@
 | `package.json` | Root setup, dev, build, check, and version command surface |
 | `scripts/dev.mjs` | Starts/supervises desktop, web, and docs with prefixed logs |
 | `scripts/version.mjs` | Synchronizes the monorepo's canonical version |
-| `.github/workflows` | Repository consistency checks |
+| `.github/workflows` | `check.yml` (PR gates), `db.yml` (migrations/functions), desktop release |
 | `CHANGELOG.md` / `VERSIONING.md` | Shared release history and release procedure |
 | `desktop/src/features` | Desktop screens and controls |
-| `desktop/src/services` | Pipeline, sync, providers, DAM orchestration |
+| `desktop/src/services` | Pipeline, sync, providers, DAM; `supabase/` and `pipeline/` modules |
 | `desktop/src/domain` | Naming, vocabulary, identity, client types |
-| `desktop/src/store` | Zustand settings/client/pipeline state |
+| `desktop/src/store` | Zustand settings/client/pipeline/environment state |
 | `desktop/src-tauri/src` | Native commands for thumbnails, R2, cloud, Supabase |
 | `web/apps/client-hub/src/features` | Portal/admin/gallery screens |
 | `web/apps/client-hub/src/services` | Browser data access |
 | `web/apps/client-hub/src/context` | Auth and role/client state |
 | `web/packages/asset-library` | Shared types, permissions, filters |
-| `supabase/migrations` | Checked-in schema changes (Supabase CLI, replayable from zero) |
+| `web/packages/database` | Generated `@dc-hub/database` types (`npm run db:types`) |
+| `supabase/migrations` | Checked-in schema changes (replayable from zero) |
+| `supabase/functions` | Edge functions (`r2-grant`, `r2-branding-upload`, …) |
 | `docs/pages` | This Nextra documentation |
+
+Machine-local desktop files (not in git): `environments.json`, `client-local.json`, OAuth tokens under app data.
 
 Generated/dependency directories (`node_modules`, `dist`, `.next`, and `desktop/src-tauri/target`) are ignored and should not be reviewed as source. The duplicate `.js` files beside TypeScript in `web/packages/asset-library/src` are currently checked-in artifacts; edit the `.ts` sources unless the build/release process is explicitly changed to regenerate them.

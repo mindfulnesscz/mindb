@@ -1,10 +1,11 @@
 # First run
 
-1. Create or select a desktop client and set its source folder. Confirm the configured `OUT` folder name matches the real tree.
-2. Configure Supabase URL, service-role key, and anon key. Never place the service-role key in the web build.
-3. Configure R2 if browser thumbnails/downloads are required. Test the connection before publishing.
-4. Optionally connect [Dropbox](/cloud-storage/dropbox), [OneDrive](/cloud-storage/onedrive), or [Google Drive](/cloud-storage/google-drive). Select destinations in the pipeline as well as enabling the cloud-export task.
-5. Review [Settings reference](/reference/settings), particularly dry run, filtering marks, version selection, thumbnail size, and enabled stages.
-6. Run a small representative package first. Verify the local thumbnail, R2 object, Supabase row, portal visibility, and provider copy independently.
+1. Sign into the correct **environment** on the desktop (Staging for team work, Local for schema-only). Staff magic-link: editor or admin only.
+2. Select a client from the database list (create clients in the **web admin**, not in the desktop). Set machine-local source / OUT / vault folders.
+3. Confirm Supabase is the environment’s URL + anon key only — never a service-role key on the desktop.
+4. CDN is environment-provisioned (`r2-grant`). If Staging secrets are set, enable thumbnails/originals upload and run a small package. If not, expect CDN steps to skip with a grant 503 — local files and metadata sync can still work when pointed at a matching DB.
+5. Logos and portal branding: edit in **web admin** (file upload → CDN, or paste URL). Tags and dimension labels: same drawer.
+6. Optionally connect [Dropbox](/cloud-storage/dropbox), [OneDrive](/cloud-storage/onedrive), or [Google Drive](/cloud-storage/google-drive). Select destinations for the run.
+7. Review [Settings reference](/reference/settings). Run a small package first. Verify local outputs, R2 object (if grant ok), Supabase row, portal visibility, and provider copies independently.
 
-For production use, follow the [publishing runbook](/operations/runbook).
+See [Team staging setup](/getting-started/team-dev-setup), [Platform division](/getting-started/platform-division), and the [publishing runbook](/operations/runbook).

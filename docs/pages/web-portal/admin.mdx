@@ -1,7 +1,5 @@
-# Web administration
+# Portal administration
 
-The root route is the staff landing. Editors/admins navigate client cards; client forms manage name, initials, accent, logo, site, slug, portal background, and domain whitelist. Users are loaded via a privileged RPC that can join auth emails; only administrators should be able to change roles through `update_user_role`.
+The root route is the staff landing. Editors/admins navigate client cards. Client forms (admin) manage name, initials, accent, logo (CDN upload or URL), `dimension_labels`, site, slug, portal background, domain whitelist, and the **tags** tree. Users load via `get_all_profiles`; administrators change role and access through `update_user_access` (member client picker, editor `client_members` checkboxes). Desktop sign-in remains editor/admin only.
 
-The route/UI contains nuanced behavior that should be checked against database policy: settings is described as available to logged-in users, client-management helpers in the shared package say admin-only, while some existing screens expose client views to editors. Treat RLS/RPC authorization as final and keep UI documentation aligned after policy changes.
-
-Deleting clients or assets can cascade or fail based on foreign keys. Disconnected asset cleanup deliberately deletes rows one-by-one because `variant_of` references can block some rows; it returns both deleted count and blocked names.
+See [Admin dashboard](/admin) and [Platform division](/getting-started/platform-division).

@@ -1,52 +1,49 @@
 # Admin Dashboard
 
-Accessible at `/` for users with `editor` or `admin` role.
+Accessible at `/` for users with `editor` or `admin` role. Client identity, users, branding, and tags are owned by the web — see [Platform division](/getting-started/platform-division).
 
 ## Access rules
 
 | Role | What they see |
 |---|---|
-| `admin` | Clients tab + Users tab |
-| `editor` | Clients tab only (no role management) |
-| `editor` with 1 client | Redirected directly to that client's portal |
+| `admin` | Clients tab + Users tab; can create/edit clients, logos, tags, dimension labels |
+| `editor` | Clients tab (read-oriented); redirected to sole client portal when they have exactly one |
 | `member` / `public` | "Staff access only" screen |
+
+Desktop pipeline access is limited to **editor** and **admin**.
 
 ## Clients tab
 
-Shows all clients as cards. Each card displays the client's badge, name, slug, website, and domain whitelist preview.
+Shows clients as cards (badge, name, slug, website, domain whitelist preview).
 
-- **Click a card** → navigates to that client's portal (`/:slug`)
-- **Edit button** (appears on hover) → opens the client drawer
+- **Click a card** → portal (`/:slug`)
+- **Edit** (admins) → client drawer
 
 ### Client drawer fields
 
 | Field | Notes |
 |---|---|
 | Name | Required |
-| Initials | Auto-derived from name, max 3 chars |
-| Brand colour | Hex colour picker |
-| Logo URL | Optional image |
+| Initials | Max 3 chars |
+| Brand colour | Hex |
+| Logo | File upload to CDN (`branding/{client_id}/`) via `r2-branding-upload`, or paste URL |
+| Taxonomy labels | Per-client display names for entity / angle / format (`dimension_labels`) |
 | Website | Optional |
-| Portal URL slug | Used in the portal URL — auto-derived from name, editor-adjustable |
-| Portal background | Colour, gradient string, or image URL |
-| Domain whitelist | Tag input — press Enter or comma to add a domain |
-
-### Domain whitelist behaviour
-
-Domains added here are used by the auth system at sign-in time. Anyone with a matching email domain gets `role = 'member'` and `client_id` pointing to this client automatically on first sign-in.
+| Portal URL slug | Shareable portal path |
+| Portal background | Colour, gradient, or image URL |
+| Domain whitelist | Auto-assigns matching emails as `member` of this client |
+| Tags | CRUD tree + shortcodes (DB source of truth) when editing an existing client |
 
 ## Users tab (admin only)
 
-Shows a table of all registered users with:
-- Avatar initials + name
-- Email address
-- Assigned client
-- Role (dropdown for all users except yourself)
+Table of all profiles:
 
-Changing the role dropdown saves immediately via the `update_user_role` RPC. An admin cannot change their own role.
+- Name, email
+- **Access** — for `member`: client dropdown; for `editor`: client checkboxes (`client_members`)
+- **Role** — public / member / editor / admin (cannot change your own role)
 
-Editors can see the Users tab list (read-only) but cannot change roles.
+Saves via `update_user_access` (not only `update_user_role`).
 
 ## Settings
 
-Available at `/settings` to any authenticated user. Stores the Supabase URL and anon key in `localStorage` — used when the app is running without environment variables (i.e. as a portable build).
+`/settings` stores optional portable Supabase URL + anon key in `localStorage` when env vars are absent.

@@ -10,4 +10,4 @@ Refresh behavior:
 - OneDrive: native refresh call with client ID and tenant authority; Microsoft may rotate the refresh token.
 - Google: token POST with client ID, client secret, and refresh token.
 
-Revocation, password/policy changes, consent removal, Testing-mode expiry, or missing offline consent can invalidate refresh tokens. A failed refresh requires reconnecting. Protect client configuration backups because they may contain live provider, R2, and service-role secrets.
+Revocation, password/policy changes, consent removal, Testing-mode expiry, or missing offline consent can invalidate refresh tokens. A failed refresh requires reconnecting. Protect client configuration backups — they may still contain live **provider OAuth** tokens. Service-role and permanent R2 secrets should not be present in current exports.

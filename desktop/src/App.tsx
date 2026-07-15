@@ -14,7 +14,7 @@ import { loadSettings, saveSettings } from './services/settingsService';
 import { loadClientsForEnvironment, saveLocalClient, pullCloudDestinations } from './services/clientService';
 import { loadEnvironments } from './services/environmentService';
 import { useEnvironmentStore } from './store/environmentStore';
-import { initAuthClient, getSession, loadProfile, DESKTOP_ROLES } from './services/authService';
+import { switchAuthClient, getSession, loadProfile, DESKTOP_ROLES } from './services/authService';
 import './styles/tokens.css';
 import './styles/global.css';
 import css from './App.module.css';
@@ -29,6 +29,7 @@ export default function App() {
 
   /* Boot: load environments once. */
   const envsLoaded = useRef(false);
+  const authRunId = useRef(0);
   useEffect(() => {
     loadEnvironments().then(envs => {
       setEnvironments(envs.list);
@@ -43,33 +44,34 @@ export default function App() {
      keys storage by project) signs straight in without a new magic link. */
   useEffect(() => {
     if (!envsLoaded.current || !activeEnvId) return;
-    const env = environments.find(e => e.id === activeEnvId) ?? null;
+    const env = useEnvironmentStore.getState().environments.find(e => e.id === activeEnvId) ?? null;
     if (!env || !env.supabaseUrl || !env.anonKey) { setAuthStatus('unconfigured'); return; }
 
-    let cancelled = false;
+    const runId = ++authRunId.current;
     (async () => {
       setAuthStatus('booting');
       setProfile(null);
       setServer({ url: env.supabaseUrl, anonKey: env.anonKey });
-      initAuthClient({ url: env.supabaseUrl, anonKey: env.anonKey });
+      useClientStore.getState().setClients([]);
+      useClientStore.getState().setActiveClientId(null);
       try {
+        await switchAuthClient({ url: env.supabaseUrl, anonKey: env.anonKey });
+        if (authRunId.current !== runId) return;
         const session = await getSession();
-        if (cancelled) return;
+        if (authRunId.current !== runId) return;
         if (!session) { setAuthStatus('signedOut'); return; }
         const profile = await loadProfile();
-        if (cancelled) return;
+        if (authRunId.current !== runId) return;
         if (!DESKTOP_ROLES.includes(profile.role)) { setAuthStatus('denied'); return; }
         setProfile(profile);
         setAuthStatus('signedIn');
       } catch (e) {
-        if (cancelled) return;
+        if (authRunId.current !== runId) return;
         console.error('Auth failed for environment:', e);
         setAuthStatus('signedOut');
       }
     })();
-
-    return () => { cancelled = true; };
-  }, [activeEnvId, environments]);
+  }, [activeEnvId]);
 
   /* Boot: settings are auth-independent */
   useEffect(() => {

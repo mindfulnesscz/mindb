@@ -7,8 +7,10 @@ The database schema is code: it lives in `supabase/migrations/` at the repo root
 | Tier | What | Schema arrives by |
 |---|---|---|
 | Local | Docker stack via `npm run db:start` | `npm run db:reset` — replays all migrations + `seed.sql` |
-| Staging | Hosted Supabase project | CI (`.github/workflows/db.yml`) pushes on merge to `main` |
-| Production | Live client-facing project | CI pushes on a `v*.*.*` release tag (approval-gated) |
+| Staging | Hosted Supabase project | CI (`db.yml`) on push to the **`staging`** branch |
+| Production | Live client-facing project | CI on push to **`main`** (approval-gated) |
+
+Day-to-day feature/pipeline work should use **shared Staging** for both Supabase and R2 — see [Team staging setup](/getting-started/team-dev-setup). Local is for schema/migration checking, not hybrid rehearsals against a shared bucket.
 
 ## Local development
 
@@ -47,15 +49,15 @@ It's recreated by every `db:reset`, so it always exists on a fresh local stack. 
 
 **Two sign-in flows, one inbox rule:** the portal's email/OTP flow sends real emails — locally those are **not delivered anywhere**; they land in **Mailpit at `http://localhost:54324`**. Open Mailpit, click the latest message, use the link/code. Password sign-in (where offered) works directly with the credentials above.
 
-**Creating additional test users** (e.g. to see the client-role experience):
+**Creating additional test users** (e.g. to see the member experience):
 
 1. Studio (`http://localhost:54323`) → **Authentication** → **Add user** → *Create new user*.
 2. Use any `@acme.test` address and a password; tick *Auto Confirm User*.
-3. Done — the `handle_new_user` trigger sees the whitelisted domain and creates a `profiles` row with `role = 'client'` attached to Acme Studio. Client-role users get the client portal; the **admin area will refuse them** ("restricted to DC Hub administrators") by design.
-4. To promote one to staff, Studio → **SQL Editor**:
+3. Done — the `handle_new_user` trigger sees the whitelisted domain and creates a `profiles` row with `role = 'member'` attached to Acme Studio. Members get the client portal; the **admin area refuses them** by design.
+4. Prefer promoting via web **Users** tab (`update_user_access`) on Staging/local once signed in as admin. SQL fallback:
 
    ```sql
-   update public.profiles set role = 'editor'   -- or 'admin'
+   update public.profiles set role = 'editor'   -- or 'admin' or 'member'
    where id = (select id from auth.users where email = 'me@acme.test');
    ```
 
@@ -80,7 +82,7 @@ Note that `db:reset` wipes users along with everything else — manually created
 
   Mode files override `.env.local` (Vite precedence) and contain only public values. Restart the dev server when changing env files — Vite reads them at startup.
 
-- **Desktop app** — environments are first-class: the login screen's *Configure server* (or Settings → Environment once signed in) holds each environment's URL and anon key — the desktop holds no privileged key; all sync runs as the signed-in user under RLS. After sign-in the app fetches that environment's **client list from the database** (assigned clients for editors, all for admins); folder paths and R2 credentials attach per `(environment, client)` on this machine. Switching environment in the client picker re-authenticates against the other backend, so mixing tiers is structurally impossible.
+- **Desktop app** — environments are first-class: *Configure server* / Settings → Environment holds each environment's URL and anon key. The desktop holds no service-role or permanent R2 keys; sync and grants run as the signed-in user under RLS. After sign-in it fetches that environment's **client list from the database** (editors: `client_members`; admins: all). Only **folder paths and OAuth tokens** attach per `(environment, client)` in `client-local.json`. Switching environment re-authenticates against the other backend.
 
 ### Troubleshooting
 
@@ -109,7 +111,7 @@ Note that `db:reset` wipes users along with everything else — manually created
 1. `supabase migration new <short_name>` — creates a timestamped file in `supabase/migrations/`.
 2. Write the SQL. `npm run db:reset` must succeed from zero.
 3. `npm run db:types` and commit the regenerated types with the migration.
-4. PR → CI validates the migrations replay. Merge → staging gets it. Release tag → production gets it.
+4. PR → CI validates migrations. Merge to **`staging`** → staging project. Merge to **`main`** → production (approval-gated).
 
 Never edit an already-merged migration; write a new one.
 
@@ -129,51 +131,34 @@ Two functions in the baseline (`get_all_profiles`, `update_user_role`) were reco
 
 `db.yml` needs, in the `staging` / `production` GitHub environments: `SUPABASE_ACCESS_TOKEN` (personal access token), `SUPABASE_STAGING_REF` / `SUPABASE_PROD_REF` (project refs), `SUPABASE_STAGING_DB_PASSWORD` / `SUPABASE_PROD_DB_PASSWORD`. Configure the `production` environment to require manual approval.
 
-## Storage tiers — setting up a staging/dev CDN bucket
+## Storage tiers — environment-level R2
 
-R2 buckets follow the same split as databases: the production bucket serves clients; a staging bucket absorbs test publishes. The desktop configures R2 per **(environment, client)** — machine-local, in the CDN card of Settings.
+R2 follows the same tiers as databases: one bucket + public domain **per environment**, stored as edge function secrets — **not** on `clients` rows. Object keys are prefixed `{client_id}/` (logos: `branding/{client_id}/`). Full operator steps: [R2 CDN publishing](/desktop/cdn).
 
-### One-time bucket setup (Cloudflare dashboard)
+### Provisioning secrets (per environment)
 
-1. **Create the bucket** — R2 → *Create bucket* (e.g. `dc-hub-staging`).
-2. **Enable public access** — bucket → **Settings** → *Public access* → enable the **r2.dev subdomain**. Cloudflare shows a URL like `https://pub-<hash>.r2.dev` — this is the bucket's public domain. (Production uses a custom domain instead, e.g. `cdn.disruptcollective.com`; either works, but each domain serves exactly ONE bucket.)
-3. **Add the CORS policy** — bucket → Settings → *CORS Policy*: allow methods `GET`, `HEAD` from origin `*`. Without it, the portal's blob-download path falls back to open-in-tab.
-4. **API token** — R2 → *Manage API tokens* → create a token scoped to this bucket with object read/write. This yields the Access Key ID + Secret for the desktop.
-
-### Client storage config (database — admins)
-
-The desktop holds **no R2 credentials**. A client's bucket and public domain live on its `clients` row (edited in the desktop's client form by admins), and each pipeline run requests a short-lived, client-scoped credential grant from the `r2-grant` edge function. The server decides bucket and public domain — a bucket/domain mismatch (uploads in one bucket, URLs pointing at another) is no longer possible to configure.
-
-| Field (client form → Storage) | Value |
-|---|---|
-| R2 bucket | e.g. `dc-hub-staging` |
-| Public domain | that bucket's public URL, e.g. `https://pub-<hash>.r2.dev` — lowercase `https://`, no trailing slash |
-
-### Provisioning the storage Control API (one-time, per environment)
-
-The `r2-grant` function needs three secrets to mint temporary credentials. **One R2 API token provides two of them** — no account-level token builder needed:
-
-1. Cloudflare dashboard → **R2** → **API** (top right) → **Manage API tokens** → *Create Account API token*.
-2. Permissions: **Admin Read & Write** (or *Object Read & Write* scoped to the relevant buckets — this token's scope bounds every temporary credential it mints).
-3. The creation screen shows three values. You need two:
-   - **Token value** → `CF_API_TOKEN` (the bearer for Cloudflare's REST API)
-   - **Access Key ID** → `R2_PARENT_ACCESS_KEY_ID`
-   - (the Secret Access Key is not needed by the grant function)
-4. **Account ID** → `CF_ACCOUNT_ID` — shown on the R2 overview page (also in the R2 endpoint URL: `https://<account-id>.r2.cloudflarestorage.com`).
+| Secret | Source |
+|--------|--------|
+| `R2_BUCKET` | Bucket name (e.g. `dc-hub-staging`) |
+| `R2_PUBLIC_DOMAIN` | Public origin, no trailing slash (r2.dev or custom domain) |
+| `CF_API_TOKEN` | R2 account API token value |
+| `CF_ACCOUNT_ID` | R2 account ID |
+| `R2_PARENT_ACCESS_KEY_ID` | Access Key ID from the same token create screen |
 
 ```bash
 supabase link --project-ref <env-ref>
-supabase secrets set CF_API_TOKEN=… CF_ACCOUNT_ID=… R2_PARENT_ACCESS_KEY_ID=…
+supabase secrets set R2_BUCKET=… R2_PUBLIC_DOMAIN=… CF_API_TOKEN=… CF_ACCOUNT_ID=… R2_PARENT_ACCESS_KEY_ID=…
+supabase functions deploy
 ```
 
-For the **local stack**, put the same three values in `supabase/functions/.env` (gitignored) and run `supabase functions serve r2-grant`. Until provisioned, pipeline runs log `CDN steps disabled — Storage grant refused (503)` and skip uploads; everything else still works.
+Local stack: `supabase/functions/.env` + `supabase functions serve r2-grant r2-branding-upload`. Until provisioned: `CDN steps disabled — Storage grant refused (503)`.
 
-Functions deploy through CI alongside migrations (merge → staging, tag → production).
+Functions deploy with CI on push to `staging` / `main`.
 
-### Fixing wrong URLs after a misconfiguration
+### Fixing wrong URLs
 
-Correct the client's Public domain (client form), then **run the pipeline once**. Files that are already uploaded skip, but the run rewrites every `thumbnail_url`/`download_url` with the corrected domain — no manual backfill.
+Update env `R2_PUBLIC_DOMAIN`, then run the pipeline once so URL columns are rewritten.
 
 ### End-to-end rehearsal
 
-Local DB + staging bucket + a small test source folder = a full publish rehearsal with zero contact with client-visible data. The seeded local client (`Acme Studio`) is flagged `identity_migrated`, so the rehearsal exercises the same stable-identity path as production ESS.
+Use **Staging Supabase + Staging R2** together ([Team staging setup](/getting-started/team-dev-setup)). Do **not** point a local database at a shared bucket — row URLs and objects will diverge across developers. Local DB without CDN is fine for schema/UI-only work.
