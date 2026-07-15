@@ -5,7 +5,7 @@ import { useClientStore } from '../../store/clientStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useAuthStore } from '../../store/authStore';
 import { useEnvironmentStore } from '../../store/environmentStore';
-import { saveEnvironments } from '../../services/environmentService';
+import { portalUrlForEnvironment, saveEnvironments } from '../../services/environmentService';
 import {
   saveActiveClient, loadClientsForEnvironment, exportClientBundle, importClientBundle,
 } from '../../services/clientService';
@@ -14,8 +14,6 @@ import { clientInitials, type Client } from '../../domain/client';
 import css from './ClientPickerModal.module.css';
 
 interface Props { onClose: () => void; }
-
-const PORTAL_BASE = 'http://localhost:5173';
 
 /** DB-first client picker — select client + environment. Identity edits live in the web portal. */
 export function ClientPickerModal({ onClose }: Props) {
@@ -27,6 +25,7 @@ export function ClientPickerModal({ onClose }: Props) {
 
   const isAdmin = profile?.role === 'admin';
   const env = environments.find(e => e.id === activeEnvId) ?? null;
+  const portalBase = portalUrlForEnvironment(env);
 
   function applyClient(client: Client) {
     store.setActiveClientId(client.id);
@@ -40,7 +39,7 @@ export function ClientPickerModal({ onClose }: Props) {
 
   async function openPortalAdmin() {
     try {
-      await open(PORTAL_BASE);
+      await open(portalBase);
     } catch (e) {
       alert(`Could not open portal: ${e}`);
     }
@@ -159,7 +158,7 @@ export function ClientPickerModal({ onClose }: Props) {
             Import…
           </button>
           {isAdmin && (
-            <button className={css.addBtn} onClick={openPortalAdmin}>
+            <button className={css.addBtn} onClick={openPortalAdmin} title={portalBase}>
               <ExternalLink size={14} />
               Manage in portal
             </button>

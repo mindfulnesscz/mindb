@@ -36,6 +36,7 @@ Schema-dependent UI: merge the migration first (or in the same merge — migrati
 - Git → **Production Branch: `main`**.
 - Domains → `hub.disruptcollective.com` → Production; `staging.hub.disruptcollective.com` → assign to branch `staging`. Create the CNAMEs Vercel shows in Cloudflare DNS.
 - Environment Variables → `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`: production values scoped to **Production**, staging values scoped to **Preview** (previews of every branch then run against staging — never against production data).
+- Builds use `npm run build:vercel`, which selects Vite `--mode staging` for every non-`main` branch (baked `.env.staging`) and `--mode production` only on `main`. Do not rely on a plain `vite build` — that always loads `.env.production` and makes staging.hub talk to **production** Auth (guest form skipped for known prod emails; magic links redirect to `hub.disruptcollective.com`).
 
 **Supabase Auth** (per project → Auth → URL Configuration):
 - Production project: Site URL `https://hub.disruptcollective.com`; redirect list adds the staging domain is NOT needed here.
@@ -82,9 +83,9 @@ After the script runs and the manual list is done, an editor adds the environmen
 `web/vercel.json` configures the build (workspace build command, `apps/client-hub/dist` output, SPA rewrites so client-side routes survive refresh). One-time setup:
 
 1. Vercel → **Add New Project** → import the `mindb` repo → set **Root Directory** to `web` (the rest is read from `vercel.json`).
-2. Environment variables: `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` (the production **publishable** key).
+2. Environment variables: `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` — production values for **Production**, staging values for **Preview**. Branch builds also bake `.env.staging` / `.env.production` via `build:vercel`.
 3. **Domains** → add the custom domain, create the CNAME it asks for in Cloudflare DNS.
-4. Supabase (production) → Auth → URL Configuration: set **Site URL** to the portal domain and add it to the redirect list — portal magic links land there.
+4. Supabase → Auth → URL Configuration: set **Site URL** to that environment's portal domain and add it to the redirect allow-list — otherwise magic links fall back to the wrong host (staging → prod).
 
 From then on every push to `main` redeploys the portal automatically, and pull requests get preview URLs. No GitHub Action is involved; Vercel's git integration is the pipeline.
 

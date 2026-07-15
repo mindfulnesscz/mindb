@@ -31,10 +31,53 @@ async function filePath(): Promise<string> {
   return await join(await appDataDir(), FILE);
 }
 
+const LOCAL_PORTAL = 'http://localhost:5173';
+const STAGING_PORTAL = 'https://staging.hub.disruptcollective.com';
+const PRODUCTION_PORTAL = 'https://hub.disruptcollective.com';
+
+/** Known Supabase project refs → hosted portal origins (deployment.mdx). */
+const PORTAL_BY_SUPABASE_REF: Record<string, string> = {
+  tvrxnwbhzborkkkdeyuk: STAGING_PORTAL,
+  knbxyaplaoenrxrpgwcg: PRODUCTION_PORTAL,
+};
+
+function supabaseProjectRef(url: string): string | null {
+  const raw = url.trim();
+  if (!raw) return null;
+  try {
+    const host = new URL(raw.includes('://') ? raw : `https://${raw}`).hostname.toLowerCase();
+    const m = host.match(/^([a-z0-9]+)\.supabase\.co$/i);
+    return m?.[1] ?? null;
+  } catch {
+    const m = raw.match(/([a-z0-9]+)\.supabase\.co/i);
+    return m?.[1]?.toLowerCase() ?? null;
+  }
+}
+
 function guessName(url: string): string {
   if (url.includes('127.0.0.1') || url.includes('localhost')) return 'Local';
-  const host = url.replace(/^https?:\/\//, '').split('.')[0];
-  return host ? `Production (${host.slice(0, 8)})` : 'Production';
+  const ref = supabaseProjectRef(url);
+  if (ref && PORTAL_BY_SUPABASE_REF[ref] === STAGING_PORTAL) return 'Staging';
+  if (ref && PORTAL_BY_SUPABASE_REF[ref] === PRODUCTION_PORTAL) return 'Production';
+  return ref ? `Environment (${ref.slice(0, 8)})` : 'Environment';
+}
+
+/** Portal origin for "Manage in portal" — follows the active Supabase environment. */
+export function portalUrlForEnvironment(env: Environment | null | undefined): string {
+  const url = (env?.supabaseUrl ?? '').trim();
+  if (!url || /127\.0\.0\.1|localhost/i.test(url)) return LOCAL_PORTAL;
+
+  // Prefer the project ref from the URL — never trust env display names alone.
+  // (Legacy migrations named every hosted env "Production (…)", which would otherwise open prod.)
+  const ref = supabaseProjectRef(url);
+  if (ref && PORTAL_BY_SUPABASE_REF[ref]) return PORTAL_BY_SUPABASE_REF[ref];
+
+  const name = (env?.name ?? '').trim().toLowerCase();
+  if (name.includes('staging') || /(^|\s)stage(\s|$)/.test(name)) return STAGING_PORTAL;
+  if (name === 'production' || name === 'prod') return PRODUCTION_PORTAL;
+
+  // Unknown hosted project — staging-first (safer than opening production admin).
+  return STAGING_PORTAL;
 }
 
 /** Guard the anon-key fields against privileged keys. The desktop must never
