@@ -118,20 +118,27 @@ try {
   sh(`supabase db push`, 'Push schema (all migrations)');
   sh(`supabase functions deploy`, 'Deploy edge functions');
 
-  // Cloudflare grant secrets — from the config, via a temp env-file we delete.
-  if (cfg.CF_API_TOKEN && cfg.CF_ACCOUNT_ID && cfg.R2_PARENT_ACCESS_KEY_ID) {
-    console.log('\n▸ Set function secrets (Cloudflare grant creds)');
+  // Function secrets: env-level R2 + Cloudflare grant creds.
+  if (cfg.CF_API_TOKEN && cfg.CF_ACCOUNT_ID && cfg.R2_PARENT_ACCESS_KEY_ID && cfg.R2_BUCKET && cfg.R2_PUBLIC_DOMAIN) {
+    console.log('\n▸ Set function secrets (R2 + Cloudflare grant)');
     if (!EXECUTE) {
       console.log('  [dry-run] supabase secrets set --env-file <temp>');
     } else {
       const tmp = join(tmpdir(), `dchub-cf-secrets-${ref}.env`);
-      writeFileSync(tmp, `CF_API_TOKEN=${cfg.CF_API_TOKEN}\nCF_ACCOUNT_ID=${cfg.CF_ACCOUNT_ID}\nR2_PARENT_ACCESS_KEY_ID=${cfg.R2_PARENT_ACCESS_KEY_ID}\n`, { mode: 0o600 });
+      writeFileSync(tmp, [
+        `R2_BUCKET=${cfg.R2_BUCKET}`,
+        `R2_PUBLIC_DOMAIN=${cfg.R2_PUBLIC_DOMAIN.replace(/\/+$/, '')}`,
+        `CF_API_TOKEN=${cfg.CF_API_TOKEN}`,
+        `CF_ACCOUNT_ID=${cfg.CF_ACCOUNT_ID}`,
+        `R2_PARENT_ACCESS_KEY_ID=${cfg.R2_PARENT_ACCESS_KEY_ID}`,
+        '',
+      ].join('\n'), { mode: 0o600 });
       try {
         execSync(`supabase secrets set --env-file ${tmp}`, { stdio: 'inherit', env: { ...process.env, SUPABASE_ACCESS_TOKEN: cfg.SUPABASE_ACCESS_TOKEN } });
       } finally { unlinkSync(tmp); }
     }
   } else {
-    console.log('\n▸ Function secrets — SKIPPED (CF_* not set in config; the r2-grant function will 503 until you set them)');
+    console.log('\n▸ Function secrets — SKIPPED (need R2_BUCKET, R2_PUBLIC_DOMAIN, and CF_* in config; logo upload / r2-grant will 503 until set)');
   }
 
   await api('Set Auth site URL + redirect allow-list',
