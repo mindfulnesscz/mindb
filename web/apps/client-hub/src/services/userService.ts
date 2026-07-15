@@ -66,6 +66,48 @@ export async function updateUserAccess(input: UpdateUserAccessInput): Promise<vo
   if (error) throw new Error(error.message)
 }
 
+export interface CreateUserInput {
+  email: string
+  name?: string
+  role: string
+  clientId?: string | null
+  memberClientIds?: string[]
+  sendInvitation: boolean
+}
+
+export async function createUser(input: CreateUserInput): Promise<{ id: string; invited: boolean }> {
+  if (!supabase) throw new Error('Supabase not configured')
+
+  const { data: session } = await supabase.auth.getSession()
+  const token = session.session?.access_token
+  if (!token) throw new Error('Not signed in')
+
+  const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/admin-create-user`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      email: input.email,
+      name: input.name,
+      role: input.role,
+      client_id: input.clientId ?? undefined,
+      member_client_ids: input.memberClientIds?.length ? input.memberClientIds : undefined,
+      send_invitation: input.sendInvitation,
+    }),
+  })
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { error?: string }
+    throw new Error(err.error ?? `Create user failed (${res.status})`)
+  }
+
+  const body = await res.json() as { id: string; invited: boolean }
+  return { id: body.id, invited: body.invited }
+}
+
 /** @deprecated Use updateUserAccess */
 export async function updateUserRole(userId: string, role: string): Promise<void> {
   return updateUserAccess({ userId, role })
