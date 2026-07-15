@@ -128,10 +128,14 @@ function ClientDrawer({ editing, onClose, onSaved }: {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!form.name.trim()) return
+    if (!form.slug.trim()) {
+      setError('Portal URL slug is required so the client can be opened.')
+      return
+    }
     setSaving(true); setError('')
     try {
       const payload = {
-        name: form.name.trim(), slug: form.slug.trim() || undefined,
+        name: form.name.trim(), slug: form.slug.trim(),
         initials: form.initials.trim() || getInitials(form.name), accent: form.accent,
         logoUrl: form.logoUrl.trim() || undefined, website: form.website.trim() || undefined,
         portalBg: form.portalBg.trim() || undefined, domainWhitelist: form.domainWhitelist,
@@ -218,12 +222,14 @@ function ClientDrawer({ editing, onClose, onSaved }: {
           </div>
 
           <div>
-            <label className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5">Portal URL slug</label>
+            <label className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5">
+              Portal URL slug <span className="text-signal-error">*</span>
+            </label>
             <div className="flex items-center border border-border rounded-sm overflow-hidden focus-within:border-cosmos-black transition-colors">
               <span className="px-3 py-2 text-sm font-sans text-text-muted bg-surface-sunken border-r border-border whitespace-nowrap">/</span>
-              <input type="text" value={form.slug} onChange={e => set('slug', e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} placeholder="acme-corp" className="flex-1 px-3 py-2 text-sm font-mono bg-bg placeholder:text-text-subtle focus:outline-none" />
+              <input type="text" value={form.slug} onChange={e => set('slug', e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} placeholder="acme-corp" required className="flex-1 px-3 py-2 text-sm font-mono bg-bg placeholder:text-text-subtle focus:outline-none" />
             </div>
-            <p className="text-[11px] font-sans text-text-subtle mt-1">Share this URL with clients for their branded sign-in page.</p>
+            <p className="text-[11px] font-sans text-text-subtle mt-1">Required — share this URL with clients for their branded sign-in page.</p>
           </div>
 
           <div>
@@ -669,7 +675,14 @@ function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
                     key={client.id}
                     client={client}
                     canEdit={manageClients}
-                    onNavigate={() => client.slug && navigate(`/${client.slug}`)}
+                    onNavigate={() => {
+                      if (client.slug) {
+                        navigate(`/${client.slug}`)
+                        return
+                      }
+                      // No portal slug → open edit so admins can set one (click used to no-op).
+                      if (manageClients) openEdit(client)
+                    }}
                     onEdit={() => openEdit(client)}
                   />
                 ))}
