@@ -10,7 +10,7 @@ import { tokenStatus, cloudToken } from '../../domain/client';
 import type { CloudDestination, LocalDestConfig } from '../../domain/client';
 import { runPipeline, scanVersionMap, type RunContext } from '../../services/pipelineService';
 import type { CloudUrlEntry } from '../../services/pipelineService';
-import { exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary, fetchClientInventory, requestR2Grant } from '../../services/supabaseService';
+import { exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary, fetchClientInventory, requestR2Grant, processRenameTasks } from '../../services/supabaseService';
 import { deleteCdnObjects } from '../../services/pipelineService';
 import { saveClients, pushCloudDestinations } from '../../services/clientService';
 import { notifyRunComplete } from '../../services/notifyService';
@@ -350,6 +350,7 @@ function ConfigSidebar() {
           sessionToken: grant.sessionToken,
           bucket:       grant.bucket,
           publicDomain: grant.publicDomain,
+          keyPrefix:    grant.keyPrefix,
         };
         log('dim', `  Storage grant issued for "${activeClient!.name}" (bucket ${grant.bucket}, expires ${new Date(grant.expiresAt).toLocaleTimeString()})`);
       } catch (e) {
@@ -431,6 +432,7 @@ function ConfigSidebar() {
         }
 
         // Sync vocabulary tag groups so the web portal can show collapsible subcategories
+        await processRenameTasks(sbConfig, clientId, log);
         await syncTagsFromVocabulary(vocabData, clientId, sbConfig, log);
       }
 

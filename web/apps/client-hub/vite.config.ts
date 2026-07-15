@@ -9,6 +9,8 @@ export default defineConfig({
     tailwindcss(),
   ],
   resolve: {
+    // Prefer TypeScript sources — stale compiled .js files must not shadow .tsx.
+    extensions: ['.tsx', '.ts', '.jsx', '.js', '.mjs', '.mts', '.json'],
     alias: {
       '@dc-hub/asset-library': resolve(__dirname, '../../packages/asset-library/src/index.ts'),
     },

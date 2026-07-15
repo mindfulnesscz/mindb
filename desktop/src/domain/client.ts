@@ -59,44 +59,35 @@ export interface CloudDestination {
 export interface Client {
   id:                string;
   name:              string;
-  logoDataUrl:       string | null;
+  slug?:             string;
+  logoUrl?:          string | null;
   brandColor:        string;
   sourceFolder:      string;
   targetFolder:      string;
   vaultFolder:       string;
   cloudDestinations: CloudDestination[];
-  // Supabase DAM sync
-  supabaseUrl:        string;  // https://<project>.supabase.co
-  supabaseServiceKey: string;  // service_role key — used by pipeline (bypasses RLS)
-  supabaseAnonKey:    string;  // anon key — used by the web portal
-  // Cloudflare R2 CDN — DB-owned (clients.r2_bucket / r2_public_domain);
-  // credentials come per-run from the r2-grant Control API, never stored here.
-  r2Bucket:          string;
-  r2PublicDomain:    string;
-  // Folder-based stable identity migration — false until the one-time migration script
-  // has been run and verified for this client; gates stable_id-based matching in the pipeline.
+  supabaseUrl:        string;
+  supabaseAnonKey:    string;
   identityMigrated:  boolean;
-  // Asset creation flow (Task 6) — remembers the last folder a new asset was scaffolded into.
   lastCreationFolder: string;
+  dimensionLabels?:  { entity: string; angle: string; format: string };
 }
 
 export function makeClient(partial: Partial<Client> = {}): Client {
   return {
     id:                crypto.randomUUID(),
     name:              '',
-    logoDataUrl:       null,
+    logoUrl:           null,
     brandColor:        '#161616',
     sourceFolder:      '',
     targetFolder:      '',
     vaultFolder:       '',
     cloudDestinations:  [],
     supabaseUrl:        '',
-    supabaseServiceKey: '',
     supabaseAnonKey:    '',
-    r2Bucket:          '',
-    r2PublicDomain:    '',
     identityMigrated:  false,
     lastCreationFolder: '',
+    dimensionLabels:   { entity: 'Entity', angle: 'Angle', format: 'Format' },
     ...partial,
   };
 }

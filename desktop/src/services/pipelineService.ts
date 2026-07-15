@@ -20,6 +20,7 @@ import { uploadDropboxFile, uploadOneDriveFile, uploadGDriveFile } from './cloud
 import type { CloudDestination } from '../domain/client';
 import { stripStableId } from '../domain/stableId';
 import { resolveCdnIdentity } from './supabaseService';
+import { storageKey } from './pipeline/storageKey';
 
 export interface CloudUrlEntry {
   provider: string;  // 'dropbox' | 'onedrive' | 'gdrive'
@@ -31,9 +32,10 @@ export interface R2Config {
   endpoint:     string;
   accessKeyId:  string;
   secretKey:    string;
-  sessionToken: string;  // short-lived grant credentials (Control API) — always present
+  sessionToken: string;
   bucket:       string;
   publicDomain: string;
+  keyPrefix:    string;  // e.g. "{client_id}/" — prepended to all object keys
 }
 
 export interface RunContext {
@@ -50,8 +52,9 @@ export interface RunContext {
   originalUrls?:     Map<string, string>;                  // stem → public CDN URL of the original file (version-stable key)
   cloudUrls?:        Map<string, CloudUrlEntry[]>;         // stem → cloud sharing URLs, populated by cloud export
   cloudDestinations?: CloudDestination[];                  // active cloud destinations to export to
-  identityMigrated?: boolean;                              // client.identityMigrated — gates stable-identity CDN keying
-  cdnIdentity?:      Map<string, { stableId: string; childId: string }>; // stem → rename-proof identity, populated pre-CDN-upload
+  identityMigrated?: boolean;
+  cdnIdentity?:      Map<string, { stableId: string; childId: string }>;
+  storageKeyPrefix?: string;  // mirrors r2.keyPrefix when CDN enabled
 }
 
 /* ── Naming helpers ─────────────────────────────────────────────────────── */
@@ -788,7 +791,7 @@ async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<void> {
 
   const r2Cache = await loadR2Cache();
   let r2CacheDirty = false;
-  const remoteKeys = await fetchR2KeyManifest(r2, 'thumbnails/', appendLog);
+  const remoteKeys = await fetchR2KeyManifest(r2, storageKey(r2.keyPrefix, 'thumbnails/'), appendLog);
 
   const CONCURRENCY = 8;
   for (let i = 0; i < thumbFiles.length; i += CONCURRENCY) {
@@ -810,9 +813,12 @@ async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<void> {
       const fileName = thumbPath.split('/').pop()!;
       const identity = ctx.cdnIdentity?.get(stem);
       // Stable-identity key when resolved (rename-proof) — else today's filename-based key.
-      const objectKey = identity
-        ? `thumbnails/${identity.stableId}/${identity.childId}.webp`
-        : `thumbnails/${fileName}`;
+      const objectKey = storageKey(
+        r2.keyPrefix,
+        identity
+          ? `thumbnails/${identity.stableId}/${identity.childId}.webp`
+          : `thumbnails/${fileName}`,
+      );
 
       // Cheap local check (mtime+size, no file read/hash/network) before the real thing.
       // A manifest that says the key is gone from R2 overrides the cache — re-upload.
@@ -920,14 +926,15 @@ async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promise<void
 
   const r2Cache = await loadR2Cache();
   let r2CacheDirty = false;
-  const remoteKeys = await fetchR2KeyManifest(r2, 'originals/', appendLog);
+  const remoteKeys = await fetchR2KeyManifest(r2, storageKey(r2.keyPrefix, 'originals/'), appendLog);
 
   // Identity by full filename first — extension-only variants (foo.pdf + foo.webp)
   // share a stem but carry distinct child ids in the manifest. Falling back to the
   // stem covers files scanned before per-file resolution existed.
   const withKeys = files.map(f => {
     const identity  = ctx.cdnIdentity?.get(`${f.stem}${f.ext}`) ?? ctx.cdnIdentity?.get(f.stem);
-    const keyPrefix = identity ? `originals/${identity.stableId}/${identity.childId}` : `originals/${f.shortcode}`;
+    const rel = identity ? `originals/${identity.stableId}/${identity.childId}` : `originals/${f.shortcode}`;
+    const keyPrefix = storageKey(r2.keyPrefix, rel);
     return { ...f, keyPrefix, objectKey: `${keyPrefix}${f.ext}` };
   });
   // Keys claimed by any file this run — the stale-sibling cleanup must never delete
@@ -1051,9 +1058,12 @@ export async function reconcileCdn(ctx: RunContext, stats: RunStats): Promise<vo
       const fileName = srcPath.split('/').pop()!;
       const stem     = fileName.substring(0, fileName.lastIndexOf('.'));
       const identity = ctx.cdnIdentity?.get(stem);
-      return identity
-        ? `thumbnails/${identity.stableId}/${identity.childId}.webp`
-        : `thumbnails/${stem}-thumb.webp`;
+      return storageKey(
+        r2.keyPrefix,
+        identity
+          ? `thumbnails/${identity.stableId}/${identity.childId}.webp`
+          : `thumbnails/${stem}-thumb.webp`,
+      );
     }),
   );
 
@@ -1065,7 +1075,7 @@ export async function reconcileCdn(ctx: RunContext, stats: RunStats): Promise<vo
       accessKeyId:  r2.accessKeyId,
       secretKey:    r2.secretKey,
           sessionToken: r2.sessionToken,
-      prefix:       'thumbnails/',
+      prefix:       storageKey(r2.keyPrefix, 'thumbnails/'),
     });
   } catch (e) {
     appendLog('error', `  ✕  Could not list R2 objects: ${e}`);

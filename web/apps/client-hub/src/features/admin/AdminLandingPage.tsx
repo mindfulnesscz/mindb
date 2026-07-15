@@ -1,10 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Client } from '@dc-hub/asset-library'
+import { canManageClients } from '@dc-hub/asset-library'
 import { useAuth } from '../../context/AuthContext'
 import { useClients } from '../../hooks/useClients'
 import { createClient, updateClient } from '../../services/clientService'
-import { fetchAllUsers, updateUserRole, type UserProfile } from '../../services/userService'
+import { uploadClientLogo } from '../../services/brandingService'
+import { TagsAdmin } from './TagsAdmin'
+import { fetchAllUsers, updateUserAccess, normalizeRole, type UserProfile } from '../../services/userService'
 import { isConfigured } from '../../lib/supabase'
 
 // ── DC logo mark ──────────────────────────────────────────────
@@ -77,10 +80,14 @@ function toSlug(name: string): string {
 interface ClientFormState {
   name: string; slug: string; initials: string; accent: string
   logoUrl: string; website: string; portalBg: string; domainWhitelist: string[]
+  dimEntity: string; dimAngle: string; dimFormat: string
 }
 
 function emptyForm(): ClientFormState {
-  return { name: '', slug: '', initials: '', accent: '#161616', logoUrl: '', website: '', portalBg: '', domainWhitelist: [] }
+  return {
+    name: '', slug: '', initials: '', accent: '#161616', logoUrl: '', website: '', portalBg: '',
+    domainWhitelist: [], dimEntity: 'Entity', dimAngle: 'Angle', dimFormat: 'Format',
+  }
 }
 
 function clientToForm(c: Client): ClientFormState {
@@ -88,6 +95,9 @@ function clientToForm(c: Client): ClientFormState {
     name: c.name, slug: c.slug ?? '', initials: c.initials, accent: c.accent,
     logoUrl: c.logoUrl ?? '', website: c.website ?? '', portalBg: c.portalBg ?? '',
     domainWhitelist: c.domainWhitelist ?? [],
+    dimEntity: c.dimensionLabels?.entity ?? 'Entity',
+    dimAngle:  c.dimensionLabels?.angle  ?? 'Angle',
+    dimFormat: c.dimensionLabels?.format ?? 'Format',
   }
 }
 
@@ -103,6 +113,7 @@ function ClientDrawer({ editing, onClose, onSaved }: {
   const [form, setForm] = useState<ClientFormState>(editing ? clientToForm(editing) : emptyForm())
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [logoFile, setLogoFile] = useState<File | null>(null)
 
   useEffect(() => { setForm(editing ? clientToForm(editing) : emptyForm()); setError('') }, [editing])
 
@@ -124,8 +135,15 @@ function ClientDrawer({ editing, onClose, onSaved }: {
         initials: form.initials.trim() || getInitials(form.name), accent: form.accent,
         logoUrl: form.logoUrl.trim() || undefined, website: form.website.trim() || undefined,
         portalBg: form.portalBg.trim() || undefined, domainWhitelist: form.domainWhitelist,
+        dimensionLabels: { entity: form.dimEntity.trim(), angle: form.dimAngle.trim(), format: form.dimFormat.trim() },
       }
-      editing ? await updateClient(editing.id, payload) : await createClient(payload)
+      const saved = editing
+        ? await updateClient(editing.id, payload)
+        : await createClient(payload)
+      if (logoFile && saved.id) {
+        const url = await uploadClientLogo(saved.id, logoFile)
+        await updateClient(saved.id, { logoUrl: url })
+      }
       onSaved()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -179,8 +197,19 @@ function ClientDrawer({ editing, onClose, onSaved }: {
           </div>
 
           <div>
-            <label className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5">Logo URL</label>
-            <input type="url" value={form.logoUrl} onChange={e => set('logoUrl', e.target.value)} placeholder="https://acme.com/logo.png" className={`${inputCls} font-mono`} />
+            <label className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5">Logo</label>
+            <input type="file" accept="image/*" onChange={e => setLogoFile(e.target.files?.[0] ?? null)} className="text-sm font-sans w-full" />
+            <input type="url" value={form.logoUrl} onChange={e => set('logoUrl', e.target.value)} placeholder="Or paste CDN URL…" className={`${inputCls} font-mono mt-2`} />
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5">Taxonomy labels (display only)</label>
+            <div className="grid grid-cols-3 gap-2">
+              <input type="text" value={form.dimEntity} onChange={e => set('dimEntity', e.target.value)} placeholder="Entity" className={inputCls} />
+              <input type="text" value={form.dimAngle} onChange={e => set('dimAngle', e.target.value)} placeholder="Angle" className={inputCls} />
+              <input type="text" value={form.dimFormat} onChange={e => set('dimFormat', e.target.value)} placeholder="Format" className={inputCls} />
+            </div>
+            <p className="text-[11px] font-sans text-text-subtle mt-1">Internal keys stay entity/angle/format — these are per-client display names (e.g. WHY / HOW / WHAT).</p>
           </div>
 
           <div>
@@ -209,6 +238,13 @@ function ClientDrawer({ editing, onClose, onSaved }: {
             <p className="text-[11px] font-sans text-text-subtle mt-1">Users with matching email domains are auto-assigned to this client. Press Enter or comma to add.</p>
           </div>
 
+          {editing && (
+            <div className="pt-4 border-t border-border">
+              <p className="text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-3">Tags (source of truth)</p>
+              <TagsAdmin client={editing} />
+            </div>
+          )}
+
           {error && <p className="text-[11px] font-sans text-signal-error">{error}</p>}
         </form>
 
@@ -231,22 +267,25 @@ function ClientDrawer({ editing, onClose, onSaved }: {
 
 // ── Admin client card ─────────────────────────────────────────
 
-function AdminClientCard({ client, onNavigate, onEdit }: {
+function AdminClientCard({ client, onNavigate, onEdit, canEdit }: {
   client: Client
   onNavigate: () => void
   onEdit: () => void
+  canEdit: boolean
 }) {
   return (
     <div
       className="relative group p-5 bg-surface border border-border hover:border-cosmos-black rounded-sm transition-colors cursor-pointer"
       onClick={onNavigate}
     >
+      {canEdit && (
       <button
         onClick={e => { e.stopPropagation(); onEdit() }}
         className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 text-[11px] font-sans text-text-muted hover:text-cosmos-black transition-all px-2 py-1 rounded-chip border border-transparent hover:border-border"
       >
         Edit
       </button>
+      )}
 
       {client.logoUrl ? (
         <img src={client.logoUrl} alt={client.name} className="w-10 h-10 rounded-[28%_38%] object-cover mb-3" />
@@ -389,30 +428,57 @@ const ROLE_LABELS: Record<string, string> = {
 
 function UsersView({ isAdmin }: { isAdmin: boolean }) {
   const { profile: self } = useAuth()
+  const { clients } = useClients()
   const [users, setUsers] = useState<UserProfile[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState<string | null>(null)
+  const [draftClient, setDraftClient] = useState<Record<string, string>>({})
+  const [draftMembers, setDraftMembers] = useState<Record<string, string[]>>({})
 
   const load = useCallback(async () => {
     setLoading(true); setError('')
-    try { setUsers(await fetchAllUsers()) }
+    try {
+      const list = await fetchAllUsers()
+      setUsers(list)
+      const clientDraft: Record<string, string> = {}
+      const memberDraft: Record<string, string[]> = {}
+      for (const u of list) {
+        if (u.clientId) clientDraft[u.id] = u.clientId
+        if (u.memberClientIds?.length) memberDraft[u.id] = u.memberClientIds
+      }
+      setDraftClient(clientDraft)
+      setDraftMembers(memberDraft)
+    }
     catch (e) { setError(e instanceof Error ? e.message : String(e)) }
     finally { setLoading(false) }
   }, [])
 
   useEffect(() => { load() }, [load])
 
-  async function handleRoleChange(userId: string, role: string) {
-    setSaving(userId)
+  async function saveAccess(user: UserProfile) {
+    const role = user.role
+    setSaving(user.id)
     try {
-      await updateUserRole(userId, role)
-      setUsers(u => u.map(p => p.id === userId ? { ...p, role } : p))
+      await updateUserAccess({
+        userId: user.id,
+        role,
+        clientId: role === 'member' ? (draftClient[user.id] ?? null) : null,
+        memberClientIds: role === 'editor' ? (draftMembers[user.id] ?? []) : undefined,
+      })
+      await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setSaving(null)
     }
+  }
+
+  async function handleRoleChange(userId: string, role: string) {
+    setUsers(u => u.map(p => p.id === userId ? { ...p, role } : p))
+    const user = users.find(u => u.id === userId)
+    if (!user) return
+    await saveAccess({ ...user, role })
   }
 
   if (loading) return (
@@ -430,7 +496,7 @@ function UsersView({ isAdmin }: { isAdmin: boolean }) {
           <tr className="border-b border-border bg-surface-sunken">
             <th className="text-left text-[10px] font-bold uppercase tracking-label text-text-muted px-4 py-3">User</th>
             <th className="text-left text-[10px] font-bold uppercase tracking-label text-text-muted px-4 py-3">Email</th>
-            <th className="text-left text-[10px] font-bold uppercase tracking-label text-text-muted px-4 py-3">Client</th>
+            <th className="text-left text-[10px] font-bold uppercase tracking-label text-text-muted px-4 py-3">Access</th>
             <th className="text-left text-[10px] font-bold uppercase tracking-label text-text-muted px-4 py-3">Role</th>
           </tr>
         </thead>
@@ -446,7 +512,49 @@ function UsersView({ isAdmin }: { isAdmin: boolean }) {
                 </div>
               </td>
               <td className="px-4 py-3 font-mono text-text-muted text-[11px]">{u.email}</td>
-              <td className="px-4 py-3 text-text-muted">{u.clientName ?? '—'}</td>
+              <td className="px-4 py-3 text-text-muted min-w-[180px]">
+                {isAdmin && u.id !== self?.id && u.role === 'member' ? (
+                  <select
+                    value={draftClient[u.id] ?? u.clientId ?? ''}
+                    disabled={saving === u.id}
+                    onChange={e => {
+                      const clientId = e.target.value
+                      setDraftClient(prev => ({ ...prev, [u.id]: clientId }))
+                      void saveAccess({ ...u, role: 'member', clientId: clientId || null })
+                    }}
+                    className="text-sm font-sans border border-border rounded-sm px-2 py-1 bg-bg w-full"
+                  >
+                    <option value="">Select client…</option>
+                    {clients.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                ) : isAdmin && u.id !== self?.id && u.role === 'editor' ? (
+                  <div className="flex flex-wrap gap-1">
+                    {clients.map(c => {
+                      const checked = (draftMembers[u.id] ?? u.memberClientIds ?? []).includes(c.id)
+                      return (
+                        <label key={c.id} className="flex items-center gap-1 text-[11px] cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={saving === u.id}
+                            onChange={() => {
+                              const cur = draftMembers[u.id] ?? u.memberClientIds ?? []
+                              const ids = cur.includes(c.id) ? cur.filter(id => id !== c.id) : [...cur, c.id]
+                              setDraftMembers(prev => ({ ...prev, [u.id]: ids }))
+                              void saveAccess({ ...u, role: 'editor', memberClientIds: ids })
+                            }}
+                          />
+                          {c.name}
+                        </label>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <span>{u.clientName ?? (u.memberClientIds?.length ? `${u.memberClientIds.length} client(s)` : '—')}</span>
+                )}
+              </td>
               <td className="px-4 py-3">
                 {isAdmin && u.id !== self?.id ? (
                   <select
@@ -482,6 +590,8 @@ function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
   const [tab, setTab] = useState<'clients' | 'users'>('clients')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [editingClient, setEditingClient] = useState<Client | null>(null)
+  const role = normalizeRole(profile?.role ?? 'public')
+  const manageClients = canManageClients(role)
 
   function openCreate() { setEditingClient(null); setDrawerOpen(true) }
   function openEdit(client: Client) { setEditingClient(client); setDrawerOpen(true) }
@@ -523,7 +633,7 @@ function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
           <>
             <div className="flex items-center justify-between mb-8">
               <h1 className="font-serif text-2xl font-medium text-cosmos-black">Clients</h1>
-              {!usingMock && (
+              {!usingMock && manageClients && (
                 <button
                   onClick={openCreate}
                   className="text-sm font-sans font-semibold border-2 border-cosmos-black px-4 py-2 rounded-sm bg-bg text-cosmos-black hover:bg-cosmos-black hover:text-clear-white transition-colors"
@@ -546,7 +656,7 @@ function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
               <div className="py-20 text-center">
                 <p className="font-serif text-lg font-medium text-cosmos-black mb-2">No clients yet</p>
                 <p className="font-sans text-sm text-text-muted mb-6">Create your first client to get started.</p>
-                {!usingMock && (
+                {!usingMock && manageClients && (
                   <button onClick={openCreate} className="text-sm font-sans font-semibold border-2 border-cosmos-black px-6 py-2.5 rounded-sm hover:bg-cosmos-black hover:text-clear-white transition-colors">
                     + New client
                   </button>
@@ -558,6 +668,7 @@ function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
                   <AdminClientCard
                     key={client.id}
                     client={client}
+                    canEdit={manageClients}
                     onNavigate={() => client.slug && navigate(`/${client.slug}`)}
                     onEdit={() => openEdit(client)}
                   />
@@ -627,8 +738,8 @@ export default function AdminLandingPage() {
 
   if (!session) return <AdminSignIn />
 
-  if (profile?.role === 'admin') return <AdminDashboard isAdmin />
-  if (profile?.role === 'editor') return <EditorRouter />
+  if (profile && normalizeRole(profile.role) === 'admin') return <AdminDashboard isAdmin />
+  if (profile && normalizeRole(profile.role) === 'editor') return <EditorRouter />
 
   if (profile) {
     return (

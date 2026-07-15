@@ -1,4 +1,3 @@
-import { invoke } from '@tauri-apps/api/core';
 import { readFile, readTextFile, writeTextFile, exists as fsExists } from '@tauri-apps/plugin-fs';
 import { parseFilename, buildVocabContext } from '../domain/filenameTranslator';
 import type { CloudDestination } from '../domain/client';
@@ -7,16 +6,15 @@ import { filterHighestVersions, parseVersion, compareVersions } from '../domain/
 import type { VocabularyData } from '../domain/vocabulary';
 import type { GalleryGroup } from '../domain/assetGrouping';
 import type { AssetVersions, CloudUrlEntry } from './pipelineService';
-import { getCurrentAccessToken } from './authService';
 import { writeReadme } from './readmeService';
 import type { AssetStatsSnapshot } from './readmeService';
+import type { SupabaseConfig } from './supabase/rest';
+import { makeHeaders, sbFetch, fetchAllForClient } from './supabase/rest';
+export type { SupabaseConfig } from './supabase/rest';
+export { requestR2Grant, type R2Grant } from './supabase/r2Grant';
+export { processRenameTasks } from './supabase/renameTasks';
 
 /* ── Types ───────────────────────────────────────────────────────────────── */
-
-export interface SupabaseConfig {
-  url:     string; // https://<project>.supabase.co
-  anonKey: string; // public API key — requests authenticate as the signed-in user
-}
 
 export interface SupabaseExportResult {
   created:        number;
@@ -116,72 +114,10 @@ export async function fetchAssetStats(
   return result;
 }
 
-/* ── Internal fetch helpers ──────────────────────────────────────────────── */
+/* fetch helpers live in supabase/rest.ts */
 
-/** Requests run as the signed-in user: the anon key identifies the project,
- * the session JWT authorizes — RLS staff policies are the write boundary.
- * The service-role key no longer exists desktop-side (authentication-plan
- * Phase 3). Throws when signed out: privileged sync fails closed. */
-function makeHeaders(anonKey: string): Record<string, string> {
-  const token = getCurrentAccessToken();
-  if (!token) throw new Error('Not signed in — Supabase sync requires an active session.');
-  return {
-    apikey:         anonKey,
-    Authorization:  `Bearer ${token}`,
-    'Content-Type': 'application/json',
-  };
-}
+/* ── Version history pagination ──────────────────────────────────────────── */
 
-interface SbRustResponse { status: number; ok: boolean; body: string }
-
-/** Proxy fetch through Rust — native networking, no webview CORS surface. */
-async function sbFetch(
-  url:     string,
-  options: { method?: string; headers: Record<string, string>; body?: string },
-): Promise<{ ok: boolean; status: number; text(): Promise<string>; json<T>(): Promise<T> }> {
-  const r = await invoke<SbRustResponse>('supabase_request', {
-    url,
-    method:  options.method ?? 'GET',
-    headers: options.headers,
-    body:    options.body,
-  });
-  return {
-    ok:     r.ok,
-    status: r.status,
-    text:   async () => r.body,
-    json:   async <T>() => JSON.parse(r.body) as T,
-  };
-}
-
-/**
- * Paginated GET for a single table. `path` is the table name optionally with
- * extra PostgREST filters already appended, e.g. 'assets?status=neq.archived'.
- * client_id, select, limit, offset are always appended.
- */
-async function fetchAllForClient<T>(
-  base:     string,
-  path:     string,
-  clientId: string,
-  select:   string,
-  headers:  Record<string, string>,
-): Promise<T[]> {
-  const PAGE = 1000;
-  const rows: T[] = [];
-  let page = 0;
-  const sep = path.includes('?') ? '&' : '?';
-  while (true) {
-    const url = `${base}/${path}${sep}client_id=eq.${clientId}&select=${select}&limit=${PAGE}&offset=${page * PAGE}`;
-    const res = await sbFetch(url, { headers });
-    if (!res.ok) throw new Error(await res.text());
-    const batch = await res.json() as T[];
-    rows.push(...batch);
-    if (batch.length < PAGE) break;
-    page++;
-  }
-  return rows;
-}
-
-/** Paginated GET for version_history rows belonging to a set of asset UUIDs. */
 async function fetchVHForAssets(
   base:     string,
   assetIds: string[],
@@ -209,41 +145,6 @@ async function fetchVHForAssets(
 }
 
 /* ── Client ID resolution ────────────────────────────────────────────────── */
-
-/**
- * Looks up the Supabase clients.id by name. Creates the row on first run,
- * making the pipeline self-bootstrapping — no manual Supabase setup needed.
- */
-
-/* ── Storage grants — the Control API (authentication-plan Phase 3) ───────
-   The desktop holds no permanent R2 credentials. Each pipeline run requests
-   a short-lived, client-scoped grant from the r2-grant edge function, which
-   validates the session, the role, and the client assignment server-side. */
-
-export interface R2Grant {
-  endpoint:        string;
-  bucket:          string;
-  publicDomain:    string;
-  accessKeyId:     string;
-  secretAccessKey: string;
-  sessionToken:    string;
-  expiresAt:       number;
-}
-
-export async function requestR2Grant(config: SupabaseConfig, clientId: string): Promise<R2Grant> {
-  const res = await sbFetch(`${config.url}/functions/v1/r2-grant`, {
-    method:  'POST',
-    headers: makeHeaders(config.anonKey),
-    body:    JSON.stringify({ client_id: clientId }),
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    let msg = body;
-    try { msg = (JSON.parse(body) as { error?: string }).error ?? body; } catch { /* raw body */ }
-    throw new Error(`Storage grant refused (${res.status}): ${msg}`);
-  }
-  return await res.json<R2Grant>();
-}
 
 /* resolveClientId (lookup-or-create by name) is gone: clients are DB-first —
    the desktop picks a client the database already knows, so its UUID is the
@@ -1254,130 +1155,13 @@ export async function exportAssetsToSupabase(
 
 /* ── Tag hierarchy sync ──────────────────────────────────────────────────── */
 
-const SUBTYPE_LABELS: Record<string, string> = {
-  company:     'Company',
-  product:     'Product',
-  customer:    'Customer',
-  partner:     'Partner',
-  event:       'Event',
-  'sales-mktg': 'Sales & Marketing',
-  content:     'Content',
-  context:     'Context',
-  document:    'Document',
-  media:       'Media',
-  asset:       'Asset',
-};
-
-const SLOT_SUBTYPE_ORDER: Record<string, string[]> = {
-  entity: ['company', 'product', 'customer', 'partner', 'event'],
-  angle:  ['sales-mktg', 'content', 'context'],
-  format: ['document', 'media', 'asset'],
-};
-
-/**
- * Syncs vocabulary tag groups to the Supabase tags table.
- * Creates subtype group headers as parent tags (Company / Product / Customer …)
- * and links every leaf vocab tag to its parent. Idempotent — safe to call on
- * every pipeline run.
- */
 export async function syncTagsFromVocabulary(
-  vocab:     VocabularyData,
-  clientId:  string,
-  config:    SupabaseConfig,
+  _vocab:     VocabularyData,
+  _clientId:  string,
+  _config:    SupabaseConfig,
   appendLog: (type: string, msg: string) => void,
 ): Promise<void> {
-  appendLog('section', '━━━ TAG SYNC ━━━');
-  const base    = `${config.url}/rest/v1`;
-  const headers = makeHeaders(config.anonKey);
-
-  type TagRow = { id: string; name: string; dimension: string; parent_id: string | null };
-
-  // Fetch all existing tags for this client
-  let existing: TagRow[] = [];
-  try {
-    const res = await sbFetch(
-      `${base}/tags?client_id=eq.${clientId}&select=id,name,dimension,parent_id&order=sort_order`,
-      { headers },
-    );
-    if (res.ok) existing = await res.json<TagRow[]>();
-    else { appendLog('error', `  ✕  Could not fetch tags: ${await res.text()}`); return; }
-  } catch (e) {
-    appendLog('error', `  ✕  Tag fetch error: ${e}`); return;
-  }
-
-  const byKey = new Map<string, TagRow>(); // "dimension::name" → row
-  for (const r of existing) byKey.set(`${r.dimension}::${r.name}`, r);
-
-  const slots: Array<'entity' | 'format' | 'angle'> = ['entity', 'format', 'angle'];
-  const parentIdMap = new Map<string, string>(); // "dimension::subtype" → id
-  let parentCreated = 0, leafCreated = 0, leafUpdated = 0;
-
-  // Pass 1 — ensure group header (parent) tags exist
-  for (const slot of slots) {
-    const slotVocabTags = vocab.tags.filter(t => t.slot === slot);
-    const usedSubtypes  = [...new Set(slotVocabTags.map(t => t.subtype))];
-    const ordered       = (SLOT_SUBTYPE_ORDER[slot] ?? []).filter(s => usedSubtypes.includes(s as never));
-
-    for (let i = 0; i < ordered.length; i++) {
-      const subtype = ordered[i];
-      const label   = SUBTYPE_LABELS[subtype] ?? subtype;
-      const key     = `${slot}::${label}`;
-
-      if (byKey.has(key)) {
-        parentIdMap.set(`${slot}::${subtype}`, byKey.get(key)!.id);
-        continue;
-      }
-      try {
-        const res = await sbFetch(`${base}/tags`, {
-          method:  'POST',
-          headers: { ...headers, Prefer: 'return=representation' },
-          body:    JSON.stringify({ client_id: clientId, name: label, dimension: slot, parent_id: null, sort_order: (i + 1) * 1000 }),
-        });
-        if (res.ok) {
-          const rows = await res.json<TagRow[]>();
-          if (rows[0]?.id) { parentIdMap.set(`${slot}::${subtype}`, rows[0].id); parentCreated++; }
-        } else appendLog('error', `  ✕  Group "${label}": ${await res.text()}`);
-      } catch (e) { appendLog('error', `  ✕  Group "${label}": ${e}`); }
-    }
-  }
-
-  // Pass 2 — ensure leaf tags exist and point to the correct parent
-  for (const slot of slots) {
-    const slotVocabTags = vocab.tags.filter(t => t.slot === slot);
-    for (let i = 0; i < slotVocabTags.length; i++) {
-      const tag      = slotVocabTags[i];
-      const parentId = parentIdMap.get(`${slot}::${tag.subtype}`) ?? null;
-      const key      = `${slot}::${tag.label}`;
-      const row      = byKey.get(key);
-
-      if (row) {
-        if (row.parent_id !== parentId) {
-          try {
-            await sbFetch(`${base}/tags?id=eq.${row.id}`, {
-              method:  'PATCH',
-              headers: { ...headers, Prefer: 'return=minimal' },
-              body:    JSON.stringify({ parent_id: parentId, sort_order: i }),
-            });
-            leafUpdated++;
-          } catch { /* ignore */ }
-        }
-        continue;
-      }
-
-      try {
-        const res = await sbFetch(`${base}/tags`, {
-          method:  'POST',
-          headers: { ...headers, Prefer: 'return=minimal' },
-          body:    JSON.stringify({ client_id: clientId, name: tag.label, dimension: slot, parent_id: parentId, sort_order: i }),
-        });
-        if (res.ok) leafCreated++;
-        else appendLog('error', `  ✕  Leaf "${tag.label}": ${await res.text()}`);
-      } catch { /* ignore */ }
-    }
-  }
-
-  appendLog('dim', `  ${parentCreated} groups created · ${leafCreated} leaf tags added · ${leafUpdated} updated`);
-  appendLog('section', `━━━ TAG SYNC DONE ━━━`);
+  appendLog('dim', '  Tags managed in portal — skipping vocab→DB sync');
 }
 
 /* ── Version History sync ────────────────────────────────────────────────── */

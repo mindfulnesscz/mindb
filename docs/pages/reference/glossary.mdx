@@ -1,13 +1,18 @@
 # Glossary
 
 - **Asset** — one Supabase delivery record, sometimes a primary with children/variants.
-- **CDN** — R2 public delivery layer for previews and current originals.
+- **CDN** — R2 public delivery layer for previews and current originals (environment bucket, keys under `{client_id}/`).
 - **Child ID** — stable per-file identity within a migrated package.
+- **Dimension labels** — per-client display names for entity / angle / format.
 - **Disconnected** — known database record no longer represented by current source scan.
 - **Destination role** — `internal` or `client`; controls whether collected provider links enter client metadata.
+- **Environment** — desktop connection to a Supabase project (Production / Staging / Local): URL + anon key.
+- **Grant** — short-lived R2 credentials from `r2-grant` for one pipeline run.
 - **OUT** — named source directory whose descendants are publish candidates.
 - **Package** — source grouping folder used by collection and, after migration, stable identity.
-- **Shortcode** — legacy version-stripped filename identity.
+- **Platform division** — web vs desktop field ownership; one admin surface per field group.
+- **Rename task** — DB queue row telling the desktop to apply a filesystem rename after a web tag change.
+- **Shortcode** — tag/token used in filenames; also a column on `tags`.
 - **Sidecar thumbnail** — local `-thumb.webp` beside its source.
 - **Stable ID** — persistent package identity stored in folder suffix/manifest.
 - **Variant** — non-primary sibling linked by `variant_of`; distinct from legacy `parent_id` child.

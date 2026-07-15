@@ -12,8 +12,8 @@ admin
 | Role | Who | Description |
 |---|---|---|
 | `admin` | DC Collective — owners | Full access. Can manage clients, users, assets, and promote/demote any role. |
-| `editor` | DC Collective — creatives | Can manage clients and assets. Can navigate any client portal as staff. Cannot manage admin accounts. |
-| `member` | Approved client contacts | Can browse all approved/published assets for their client portal. Can rate and comment. |
+| `editor` | DC Collective — creatives | Runs desktop pipeline on assigned clients; browses portals as staff. Client/identity CRUD is admin on web. |
+| `member` | Approved client contacts | Portal gallery for their client; rate and comment. **No desktop access.** |
 | `public` | Unauthenticated visitors | Can view only assets marked `perm: 'public'`. No rating, no comments, no download. |
 
 ## Role type (code)
@@ -47,16 +47,18 @@ Note: the `perm` field uses the string `'client'` (not `'member'`) — this is i
 | Rate assets | — | ✓ | ✓ | ✓ |
 | Comment | — | ✓ | ✓ | ✓ |
 | See view/download counts | — | — | ✓ | ✓ |
-| Manage clients | — | — | ✓ | ✓ |
-| Manage domain whitelist | — | — | ✓ | ✓ |
+| Manage clients (web admin) | — | — | — | ✓ |
+| Manage domain whitelist | — | — | — | ✓ |
 | View all users | — | — | ✓ | ✓ |
-| Change user roles | — | — | — | ✓ |
+| Change user roles / access | — | — | — | ✓ |
+| Desktop pipeline | — | — | ✓ | ✓ |
 
 ## Where roles are stored
 
 Roles are stored in `profiles.role` — a `text` column in Supabase (Postgres).
 
-To manually promote a user:
+Prefer promoting via the web **Users** tab (`update_user_access`: role, member client, editor checkboxes). SQL fallback:
+
 ```sql
 UPDATE profiles SET role = 'editor' WHERE id = '<user-uuid>';
 ```
@@ -65,9 +67,9 @@ UPDATE profiles SET role = 'editor' WHERE id = '<user-uuid>';
 
 There is no self-service sign-up for `editor` or `admin`. The flow is:
 
-1. The person signs in via the root `/` admin page
-2. A profile is auto-created with `role = 'public'`
-3. An admin promotes them via the **Users** tab in the admin dashboard (or via SQL above)
+1. The person signs in via the root `/` admin page (or portal → admin if already staff).
+2. A profile is auto-created, often as `public` (or `member` when OTP carries portal `client_id` / domain whitelist).
+3. An admin promotes and assigns access on the **Users** tab.
 
 ## Editor portal access
 

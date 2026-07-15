@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase'
-import type { Asset, FilterState, Role } from '@dc-hub/asset-library'
+import type { Asset, FilterState, Role, AssetStatus, AssetPerm } from '@dc-hub/asset-library'
 import type { AssetRow, AssetStats } from '../lib/database.types'
 
 type AssetRowWithStats = AssetRow & { stats: AssetStats | AssetStats[] | null }
@@ -45,8 +45,8 @@ function toAsset(row: AssetRowWithStats): Asset {
     parentId: row.parent_id ?? null,
     childCount: 0,                      // enriched after fetch
     variantOf: row.variant_of ?? null,
-    status: row.status,
-    perm: row.perm,
+    status: row.status as AssetStatus,
+    perm: row.perm as AssetPerm,
     version: row.version,
     latest: row.latest,
     avg: Number(stats?.avg_rating ?? 0),

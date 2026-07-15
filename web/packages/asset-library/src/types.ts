@@ -15,6 +15,7 @@ export interface Client {
   website?: string
   portalBg?: string
   domainWhitelist?: string[]
+  dimensionLabels?: { entity: string; angle: string; format: string }
 }
 
 export interface Asset {

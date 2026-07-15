@@ -15,7 +15,7 @@ The desktop uses fixed port 1420, docs uses 3001, and the web portal normally us
 
 | Branch | Portal (Vercel) | Database + functions (CI) | Purpose |
 |---|---|---|---|
-| `dev` | ephemeral preview URLs | checks only (version, migration replay on PRs) | day-to-day integration; backend testing happens on the LOCAL stack |
+| `dev` | ephemeral preview URLs | checks only (version, migration replay on PRs) | integration branch; day-to-day **backend** testing is **shared Staging**, not the local stack |
 | `staging` | `staging.hub.disruptcollective.com` (branch domain) | pushed to the **staging** Supabase project | rehearsal against hosted infra |
 | `main` | `hub.disruptcollective.com` (production) | pushed to **production**, approval-gated | what clients and editors use |
 
@@ -42,7 +42,7 @@ Schema-dependent UI: merge the migration first (or in the same merge — migrati
 - Staging project: Site URL `https://staging.hub.disruptcollective.com`; add `https://*.vercel.app/**` to redirects so ephemeral previews can sign in.
 - Both: keep `http://localhost:7623/auth-callback` for desktop sign-in.
 
-**Supabase function secrets** (per project, once): `supabase secrets set CF_API_TOKEN=… CF_ACCOUNT_ID=… R2_PARENT_ACCESS_KEY_ID=…` — see [Database environments](/operations/database-environments#provisioning-the-storage-control-api-one-time-per-environment).
+**Supabase function secrets** (per project, once): `R2_BUCKET`, `R2_PUBLIC_DOMAIN`, `CF_API_TOKEN`, `CF_ACCOUNT_ID`, `R2_PARENT_ACCESS_KEY_ID` — see [Database environments](/operations/database-environments#storage-tiers--environment-level-r2) and [Team staging setup](/getting-started/team-dev-setup).
 
 ## Standing up a new environment
 
@@ -100,7 +100,7 @@ The web app reads Supabase URL/anon key from environment (Vercel env vars in pro
 
 Desktop workstations need filesystem permissions plus native dependencies for requested thumbnail formats. Port 7623 must be available for OAuth and sign-in callbacks. OneDrive device flow needs outbound HTTPS but no callback listener.
 
-R2 storage is server-authoritative: bucket and public domain live on the client row; credentials are minted per run by the `r2-grant` function (see [Database environments](/operations/database-environments#provisioning-the-storage-control-api-one-time-per-environment)). Deploy database migrations/RLS/RPC changes before UI features that depend on them, and regenerate database types when schema changes.
+R2 storage is **environment-level**: bucket and public domain are edge secrets (`R2_BUCKET`, `R2_PUBLIC_DOMAIN`); object keys are prefixed `{client_id}/`. Credentials are minted per run by `r2-grant` (see [R2 CDN](/desktop/cdn)). Deploy migrations before UI that depends on them; regenerate types with `npm run db:types` into `@dc-hub/database`.
 
 ## Release artifacts
 

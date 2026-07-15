@@ -1,12 +1,8 @@
 # Desktop authentication and secret-management plan
 
-> **Status: Phase 2 (desktop identity) and DB-first client management shipped 2026-07-12; Phases 1, 3, and 4 outstanding.** Clients are no longer created or stored by the desktop: the app signs into an **environment** (connection config in `environments.json` — Production/Staging/Local), fetches the client list from that database (membership-filtered via `client_members`; admins see all), and keeps only machine-local operational config (folder paths, R2 credentials, OAuth tokens, logo) per `(environment, client)` in `client-local.json`. Client create/edit happens through the signed-in user's session under RLS — no service key involved. Legacy `clients.json` migrates automatically, including re-keying per-client vocabulary files to database uuids. The desktop now requires a staff (editor/admin) magic-link sign-in before any operational UI renders: email → `check_email_auth` → Supabase OTP with PKCE → system browser → loopback callback on `:7623` → code exchange in the app. The auth server (URL + anon key) is configured once on the sign-in screen and stored in `auth-server.json`; sessions persist and auto-refresh; sign-out lives in the nav rail. Groundwork shipped alongside it: `clients.identity_migrated` and the `client_members` assignment table (migration `20260712000000`).
+> **Status (2026-07):** Phase 2 (desktop identity), DB-first clients, Phase 3 (no service-role; `r2-grant`), and secret-free exports are **shipped**. Client admin, logos, tags, and users live on the **web** ([Platform division](/getting-started/platform-division)). Storage is **environment-level** (`R2_BUCKET` / `R2_PUBLIC_DOMAIN` secrets — not `clients` row fields). Machine-local config (`client-local.json`) holds **folder paths and OAuth tokens** only.
 >
-> **Phase 3 (Supabase) + Phase 1 (exports) shipped 2026-07-12.** The Supabase **service-role key no longer exists in the desktop**: every sync operation runs as the signed-in user under RLS (verified for both admin and editor roles; editors are correctly denied the admin-only clients-row write). Sync fails closed when signed out. Client exports are secret-free (`_version: 2.0`); importing an old secret-bearing bundle strips the credentials and warns to rotate them. Environments hold only URL + anon key, and legacy `serviceKey` fields scrub from disk on load.
->
-> **Phase 3's R2 half shipped 2026-07-12**: the `r2-grant` edge function (the first Control API endpoint) validates session → role → client assignment and issues **short-lived scoped credentials** via Cloudflare's temporary-access API; bucket + public domain are server-authoritative on the `clients` row; the desktop signs requests with the grant's session token and stores no R2 credentials at all (legacy ones scrub from `client-local.json` on load). Verified: 401/403/400 authorization chain, hard fail-closed when unprovisioned.
->
-> **Still outstanding**: per-user OAuth tokens remain in plain local config until protected storage lands (Phase 1's storage half); provider OAuth standardization is Phase 4; rotate the old permanent R2 keys once each environment's Control API is provisioned. **After deploying this build, rotate the Supabase service-role key** — it lived in plaintext config and old exports. The one-time `migrate-identity.ts` script still needs a service key; paste a fresh one ad hoc when running it. Hosted environments must allowlist `http://localhost:7623/auth-callback` under Auth → URL Configuration for desktop sign-in to work.
+> **Still outstanding:** protected local storage for OAuth tokens (Phase 1 storage half); provider OAuth standardization (Phase 4). Fully local S3 sandbox is deferred. Hosted Auth must allowlist `http://localhost:7623/auth-callback`. Team day-to-day backend: [Team staging setup](/getting-started/team-dev-setup).
 
 ## Objective
 
@@ -16,17 +12,16 @@ The target rule is:
 
 > Authentication tells the desktop who the user is; the backend decides what that user may do. Permanent service credentials never cross into the desktop process.
 
-## Current risk to remove
+## Residual risk (current)
 
-The current `clients.json` model can contain:
+Already removed from the desktop: Supabase service-role key, permanent R2 parent keys, secret-bearing client exports.
 
-- the Supabase service-role key;
-- the R2 access key and secret;
-- Dropbox access and refresh tokens;
-- Google Drive access and refresh tokens plus client secret;
-- OneDrive access and refresh tokens.
+Still machine-local in plain config:
 
-Client export currently serializes the full client model, which can also place these values into an exported JSON file. Local application data, backups, exports, malware, and shared OS accounts therefore have a large credential blast radius. The Supabase service-role key is the highest-risk item because it bypasses Row Level Security.
+- Dropbox / Google Drive / OneDrive access and refresh tokens;
+- Google Drive client secret where used.
+
+Treat OS backups and shared accounts accordingly until protected storage lands.
 
 ## Target architecture
 

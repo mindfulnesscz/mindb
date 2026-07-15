@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useEnvironmentStore } from '../../store/environmentStore';
-import { useAuthStore } from '../../store/authStore';
+import { useClientStore } from '../../store/clientStore';
 import { saveEnvironments, makeEnvironment, validateAnonKey } from '../../services/environmentService';
 import { checkSupabaseConnection } from '../../services/supabaseService';
 import { CloudDestinations } from '../cloud/CloudDestinations';
@@ -129,10 +129,9 @@ function EnvironmentSettings() {
   async function activate(envId: string) {
     if (envId === activeEnvId) return;
     setActiveEnvId(envId);
+    useClientStore.getState().setClients([]);
+    useClientStore.getState().setActiveClientId(null);
     await saveEnvironments({ activeId: envId, list: environments }).catch(console.error);
-    // App.tsx re-authenticates against the new environment; with no cached
-    // session for it, the login gate appears — that's expected.
-    useAuthStore.getState().setStatus('booting');
   }
 
   async function addEnvironment() {

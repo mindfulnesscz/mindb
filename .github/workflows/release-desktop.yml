@@ -22,10 +22,11 @@ jobs:
           workspaces: desktop/src-tauri
       - run: npm ci
         working-directory: desktop
+      - run: npm run check
       - run: npm run version:check
       # Unsigned build — editors right-click → Open on first launch.
-      # Signing/notarization lands with an Apple Developer ID (see
-      # docs: desktop/authentication-plan + operations/deployment).
+      # Set TAURI_SIGNING_PRIVATE_KEY + TAURI_SIGNING_PRIVATE_KEY_PASSWORD for signed builds.
+      # Set UPDATER_PUBKEY in tauri.conf.json when enabling auto-update.
       - run: npm run tauri build
         working-directory: desktop
       - name: Publish release with artifacts

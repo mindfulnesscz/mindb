@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import type { Database } from './database.types'
+import type { Database } from '@dc-hub/database'
 
 const LS_URL = 'dc_hub_supabase_url'
 const LS_KEY = 'dc_hub_supabase_anon_key'

@@ -41,6 +41,15 @@
   "plugins": {
     "fs": {
       "requireLiteralLeadingDot": false
+    },
+    "updater": {
+      "pubkey": "sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH",
+      "endpoints": [
+        "https://github.com/mindfulnesscz/mindb/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }
