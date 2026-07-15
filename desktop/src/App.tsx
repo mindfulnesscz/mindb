@@ -45,20 +45,30 @@ export default function App() {
     if (!envsLoaded.current || !activeEnvId) return;
     const env = environments.find(e => e.id === activeEnvId) ?? null;
     if (!env || !env.supabaseUrl || !env.anonKey) { setAuthStatus('unconfigured'); return; }
+
+    let cancelled = false;
     (async () => {
+      setAuthStatus('booting');
+      setProfile(null);
       setServer({ url: env.supabaseUrl, anonKey: env.anonKey });
       initAuthClient({ url: env.supabaseUrl, anonKey: env.anonKey });
       try {
         const session = await getSession();
+        if (cancelled) return;
         if (!session) { setAuthStatus('signedOut'); return; }
         const profile = await loadProfile();
+        if (cancelled) return;
         if (!DESKTOP_ROLES.includes(profile.role)) { setAuthStatus('denied'); return; }
         setProfile(profile);
         setAuthStatus('signedIn');
-      } catch {
+      } catch (e) {
+        if (cancelled) return;
+        console.error('Auth failed for environment:', e);
         setAuthStatus('signedOut');
       }
-    })().catch(() => setAuthStatus('signedOut'));
+    })();
+
+    return () => { cancelled = true; };
   }, [activeEnvId, environments]);
 
   /* Boot: settings are auth-independent */
@@ -67,12 +77,11 @@ export default function App() {
   }, []);
 
   /* Clients are DB-first: fetched per environment once signed in, filtered by
-     membership (admins see all), merged with this machine's local config.
-     The env's connection values are part of the deps: editing them in
-     Settings must re-merge, or the pipeline would run on stale values. */
+     membership (admins see all), merged with this machine's local config. */
   const activeEnv = environments.find(e => e.id === activeEnvId) ?? null;
   useEffect(() => {
     if (authStatus !== 'signedIn' || !profile || !activeEnv) return;
+    useClientStore.getState().setLoadError(null);
     loadClientsForEnvironment(activeEnv, profile.role, environments)
       .then(({ clients, activeClientId }) => {
         setClients(clients);

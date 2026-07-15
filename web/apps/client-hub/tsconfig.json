@@ -3,7 +3,8 @@
   "compilerOptions": {
     "types": ["node", "vite/client"],
     "paths": {
-      "@dc-hub/asset-library": ["../../packages/asset-library/src/index.ts"]
+      "@dc-hub/asset-library": ["../../packages/asset-library/src/index.ts"],
+      "@dc-hub/database": ["../../packages/database/src/index.ts"]
     }
   },
   "include": ["src", "vite.config.ts"]

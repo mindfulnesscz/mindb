@@ -24,6 +24,23 @@ export const DESKTOP_ROLES = ['editor', 'admin'];
 
 export const AUTH_CALLBACK_URL = 'http://localhost:7623/auth-callback';
 
+const AUTH_TIMEOUT_MS = 12_000;
+
+/** Reject when a Supabase auth/network call stalls (common on env switch to an
+ * unreachable or misconfigured production URL — without this the boot gate
+ * shows "Connecting…" forever). */
+export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(
+        () => reject(new Error(`${label} timed out — check the environment URL, anon key, and network.`)),
+        ms,
+      );
+    }),
+  ]);
+}
+
 let client: SupabaseClient | null = null;
 let clientKey = '';
 let authSubscription: { unsubscribe: () => void } | null = null;
@@ -140,26 +157,35 @@ export async function waitForMagicLink(): Promise<Session> {
 
 export async function getSession(): Promise<Session | null> {
   if (!client) return null;
-  // Belt and braces: never let a wedged storage/lock state hang the boot.
-  // Timing out reads as "no session" — the login screen, which can recover.
-  const result = await Promise.race([
-    client.auth.getSession(),
-    new Promise<null>(resolve => setTimeout(() => resolve(null), 5000)),
-  ]);
-  return result ? result.data.session : null;
+  try {
+    const { data, error } = await withTimeout(client.auth.getSession(), AUTH_TIMEOUT_MS, 'Session lookup');
+    if (error) return null;
+    return data.session;
+  } catch {
+    return null;
+  }
 }
 
 /** The authoritative role check — the profile row, read under the user's own
  * JWT (RLS: own row readable). check_email_auth is only the pre-flight. */
 export async function loadProfile(): Promise<AuthProfile> {
   if (!client) throw new Error('Auth client not initialized');
-  const { data: userData, error: userErr } = await client.auth.getUser();
+  const { data: userData, error: userErr } = await withTimeout(
+    client.auth.getUser(),
+    AUTH_TIMEOUT_MS,
+    'User lookup',
+  );
   if (userErr || !userData.user) throw new Error(userErr?.message ?? 'No user');
-  const { data, error } = await client
+  const profileQuery = client
     .from('profiles')
     .select('id,name,role')
     .eq('id', userData.user.id)
     .single();
+  const { data, error } = await withTimeout(
+    Promise.resolve(profileQuery),
+    AUTH_TIMEOUT_MS,
+    'Profile lookup',
+  );
   if (error) throw new Error(error.message);
   return data as AuthProfile;
 }
