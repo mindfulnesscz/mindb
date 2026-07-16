@@ -69,7 +69,7 @@ export function GeneratorView() {
         <div className={css.dimPanels}>
           {SLOTS.map(slot => {
             const slotTags = tags.filter(t => t.slot === slot);
-            const groups = parentGroupsForSlot(slotTags, slot);
+            const groups = parentGroupsForSlot(slotTags, slot, data?.parentGroups);
 
             return (
               <div key={slot} className={css.dimPanel}>

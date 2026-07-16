@@ -428,6 +428,7 @@ function DimColumn({
   slot, allTags, selected, searchQuery, collapsedGroups,
   onToggleGroup, onToggleTag, onAdd, onEdit, onDelete,
 }: DimColProps) {
+  const portalGroups = useVocabularyStore(s => s.data?.parentGroups);
   const slotTags  = allTags.filter(t => t.slot === slot);
   const searching = searchQuery.length > 0;
 
@@ -435,6 +436,8 @@ function DimColumn({
     !searching ||
     tag.label.toLowerCase().includes(searchQuery) ||
     tag.shortcode.toLowerCase().includes(searchQuery);
+
+  const groupNames = parentGroupsForSlot(slotTags, slot, portalGroups);
 
   return (
     <div className={css.dimCol}>
@@ -446,12 +449,15 @@ function DimColumn({
       </div>
 
       <div className={css.dimColScroll}>
-        {parentGroupsForSlot(slotTags, slot).map(groupName => {
+        {groupNames.map(groupName => {
           const group = slotTags.filter(t =>
             matches(t) &&
             (groupName === 'Ungrouped' ? !t.parentGroup : t.parentGroup === groupName)
           );
-          if (!group.length) return null;
+          const isPortalGroup = groupName !== 'Ungrouped'
+            && (portalGroups ?? []).some(g => g.slot === slot && g.name === groupName);
+          if (!group.length && !isPortalGroup) return null;
+          if (!group.length && searching) return null;
 
           const groupKey = `${slot}-${groupName}`;
           const isOpen   = searching || !collapsedGroups.has(groupKey);

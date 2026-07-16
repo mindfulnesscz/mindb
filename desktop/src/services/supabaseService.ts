@@ -1177,10 +1177,8 @@ function parentKeyForLeaf(tag: { key: string; slot: string; parentGroup: string 
   return `${tag.slot}.${slugifyKeyPart(tag.parentGroup)}`;
 }
 
-/**
- * Publish local vocabulary → public.tags for a client.
- * Upserts parent groups + shortcoded leaves (matched by key, then shortcode / name).
- * Removes DB shortcoded leaves that are no longer in local vocab.
+/** Publish local leaf vocabulary → public.tags.
+ * Parent groups are portal-managed — this only upserts/deletes shortcoded leaves.
  * Requires a signed-in staff session (RLS).
  */
 export async function syncTagsFromVocabulary(
@@ -1208,11 +1206,9 @@ export async function syncTagsFromVocabulary(
 
   const byKey = new Map<string, DbTagSyncRow>();
   const byShortcode = new Map<string, DbTagSyncRow>();
-  const byDimNameRoot = new Map<string, DbTagSyncRow>(); // dimension::name for root groups
   for (const r of existing) {
     if (r.key) byKey.set(r.key, r);
     if (r.shortcode) byShortcode.set(r.shortcode, r);
-    if (!r.parent_id && !r.shortcode) byDimNameRoot.set(`${r.dimension}::${r.name}`, r);
   }
 
   const slots: Array<'entity' | 'angle' | 'format'> = ['entity', 'angle', 'format'];
@@ -1247,66 +1243,31 @@ export async function syncTagsFromVocabulary(
     return true;
   }
 
-  // Pass 1 — parent groups referenced by local leaves
+  // Pass 1 — resolve existing portal parent groups (never create/edit groups from desktop)
   const parentIdByGroupKey = new Map<string, string>(); // `${slot}::${parentGroupName}` → id
-  const groupMeta = new Map<string, { slot: string; name: string; key: string; sort: number }>();
+
+  for (const row of existing) {
+    const isRootGroup = !row.parent_id && !(row.shortcode ?? '').trim();
+    if (!isRootGroup) continue;
+    parentIdByGroupKey.set(`${row.dimension}::${row.name}`, row.id);
+  }
 
   for (const slot of slots) {
-    const leaves = vocab.tags.filter(t => t.slot === slot && t.parentGroup);
-    const seen = new Set<string>();
-    let sort = 0;
-    for (const leaf of leaves) {
+    for (const leaf of vocab.tags.filter(t => t.slot === slot && t.parentGroup)) {
       const name = leaf.parentGroup!.trim();
-      if (!name || seen.has(name)) continue;
-      seen.add(name);
-      sort += 1;
-      const gKey = parentKeyForLeaf(leaf) ?? `${slot}.${slugifyKeyPart(name)}`;
-      groupMeta.set(`${slot}::${name}`, { slot, name, key: gKey, sort });
-    }
-  }
-
-  for (const [mapKey, g] of groupMeta) {
-    const existingGroup =
-      byKey.get(g.key) ??
-      byDimNameRoot.get(`${g.slot}::${g.name}`) ??
-      null;
-
-    if (existingGroup) {
-      parentIdByGroupKey.set(mapKey, existingGroup.id);
-      const patch: Record<string, unknown> = {};
-      if (existingGroup.name !== g.name) patch.name = g.name;
-      if ((existingGroup.key ?? null) !== g.key) patch.key = g.key;
-      if (existingGroup.parent_id !== null) patch.parent_id = null;
-      if (existingGroup.shortcode) patch.shortcode = null;
-      if (Object.keys(patch).length) {
-        if (await patchTag(existingGroup.id, patch)) {
-          updated++;
-          Object.assign(existingGroup, patch);
-          if (patch.key) byKey.set(g.key, existingGroup);
-        }
+      const mapKey = `${slot}::${name}`;
+      if (parentIdByGroupKey.has(mapKey)) continue;
+      // Try match by derived key from leaf path
+      const gKey = parentKeyForLeaf(leaf);
+      if (gKey && byKey.get(gKey)) {
+        parentIdByGroupKey.set(mapKey, byKey.get(gKey)!.id);
+        continue;
       }
-      continue;
-    }
-
-    const row = await insertTag({
-      client_id:  clientId,
-      name:       g.name,
-      key:        g.key,
-      dimension:  g.slot,
-      parent_id:  null,
-      shortcode:  null,
-      sort_order: g.sort * 1000,
-    });
-    if (row) {
-      created++;
-      parentIdByGroupKey.set(mapKey, row.id);
-      byKey.set(g.key, row);
-      byDimNameRoot.set(`${g.slot}::${g.name}`, row);
-      existing.push(row);
+      appendLog('dim', `  ⚠  Parent group "${name}" (${slot}) not in portal — leaf "${leaf.shortcode}" will be ungrouped`);
     }
   }
 
-  // Pass 2 — shortcoded leaves
+  // Pass 2 — shortcoded leaves only (groups stay portal-managed)
   const desiredShortcodes = new Set<string>();
   const desiredKeys = new Set<string>();
 

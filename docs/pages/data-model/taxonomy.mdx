@@ -22,8 +22,10 @@ Sample file: [`/taxonomy.sample.json`](/taxonomy.sample.json) in the portal app 
 ```
 
 - **`key`** — stable identity; also used as the Obsidian tag on desktop export
-- **`parent_key`** — tree grouping (replaces legacy desktop subtypes); groups have no shortcode, leaves do
+- **`parent_key`** — tree grouping: nodes **without** `shortcode` are **parent groups** (portal-managed); leaves have a `shortcode`
 - **`shortcode`** — filename token (leaves only)
+
+**Ownership:** parent groups are created/edited only in the admin portal. Leaf tags can be added in the portal or on desktop (desktop selects an existing group). Desktop Publish upserts leaves only.
 
 Parse/validate/import: `taxonomyImport.ts` (`parseAndValidateTaxonomyJson`, `importTaxonomyToClient`). Desktop loads shortcoded tags from the DB for filename parsing and groups them by parent.
 

@@ -13,10 +13,19 @@ export interface VocabTag {
   icon: string;
 }
 
+/** Portal-managed parent group (no shortcode). Desktop selects these; does not create them. */
+export interface VocabParentGroup {
+  name: string;
+  key: string;
+  slot: Slot;
+}
+
 export interface VocabularyData {
   _schema_version: string;
   _comment: string;
   tags: VocabTag[];
+  /** Parent groups from DB — portal-only structure. */
+  parentGroups?: VocabParentGroup[];
   legacy_aliases?: Record<string, string>;
   /** Set on local cache when there are unpublished edits (survives client switch). */
   _unpublished?: boolean;
@@ -34,10 +43,21 @@ export const SLOT_DESCRIPTIONS: Record<Slot, string> = {
   format: "Tags that answer 'What kind of file is it?'",
 };
 
-/** Unique parent group labels for a slot, in first-seen order (plus Ungrouped last if needed). */
-export function parentGroupsForSlot(tags: VocabTag[], slot: Slot): string[] {
+/** Unique parent group labels for a slot from portal groups + any leaf parentGroup values. */
+export function parentGroupsForSlot(
+  tags: VocabTag[],
+  slot: Slot,
+  portalGroups?: VocabParentGroup[],
+): string[] {
   const seen = new Set<string>();
   const groups: string[] = [];
+  for (const g of portalGroups ?? []) {
+    if (g.slot !== slot) continue;
+    if (!seen.has(g.name)) {
+      seen.add(g.name);
+      groups.push(g.name);
+    }
+  }
   let hasUngrouped = false;
   for (const t of tags) {
     if (t.slot !== slot) continue;

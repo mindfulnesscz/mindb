@@ -1,9 +1,6 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
-import {
-  type Slot, type VocabTag,
-  parentGroupsForSlot,
-} from '../../domain/vocabulary';
+import { type Slot, type VocabTag } from '../../domain/vocabulary';
 import { useVocabularyStore } from '../../store/vocabularyStore';
 import css from './TagModal.module.css';
 
@@ -16,20 +13,32 @@ interface Props {
 export function TagModal({ slot, editIndex, onClose }: Props) {
   const { data, addTag, updateTag } = useVocabularyStore();
   const editing = editIndex !== undefined ? data?.tags[editIndex] : undefined;
-  const allTags = data?.tags ?? [];
-  const existingGroups = parentGroupsForSlot(allTags, slot).filter(g => g !== 'Ungrouped');
+  const portalGroups = (data?.parentGroups ?? [])
+    .filter(g => g.slot === slot)
+    .map(g => g.name);
+  // Keep current parent if editing even if somehow missing from portal list
+  const groupOptions = [...portalGroups];
+  if (editing?.parentGroup && !groupOptions.includes(editing.parentGroup)) {
+    groupOptions.unshift(editing.parentGroup);
+  }
 
-  const [parentGroup, setParentGroup] = useState(editing?.parentGroup ?? existingGroups[0] ?? '');
-  const [shortcode, setShortcode]     = useState(editing?.shortcode ?? '');
-  const [label, setLabel]             = useState(editing?.label ?? '');
-  const [key, setKey]                 = useState(editing?.key ?? '');
-  const [icon, setIcon]               = useState(editing?.icon ?? '');
-  const [errMsg, setErrMsg]           = useState('');
+  const [parentGroup, setParentGroup] = useState(
+    editing?.parentGroup ?? (groupOptions[0] ?? ''),
+  );
+  const [shortcode, setShortcode] = useState(editing?.shortcode ?? '');
+  const [label, setLabel]         = useState(editing?.label ?? '');
+  const [key, setKey]             = useState(editing?.key ?? '');
+  const [icon, setIcon]           = useState(editing?.icon ?? '');
+  const [errMsg, setErrMsg]       = useState('');
 
   function validate(): boolean {
     if (!shortcode.trim()) { setErrMsg('Shortcode is required.'); return false; }
     if (!label.trim())     { setErrMsg('Label is required.'); return false; }
     if (!key.trim())       { setErrMsg('Key is required (used as Obsidian tag).'); return false; }
+    if (parentGroup && !groupOptions.includes(parentGroup)) {
+      setErrMsg('Choose a parent group from the portal list (groups are managed in admin).');
+      return false;
+    }
 
     const dup = data?.tags.find((t, i) => t.shortcode === shortcode.trim() && i !== editIndex);
     if (dup) { setErrMsg(`Shortcode "${shortcode.trim()}" already exists.`); return false; }
@@ -69,18 +78,21 @@ export function TagModal({ slot, editIndex, onClose }: Props) {
         <div className={css.modalBody}>
           <div className={css.field}>
             <span className={css.fieldLabel}>Parent group</span>
-            <input
+            <select
               className={css.input}
-              list={`parent-groups-${slot}`}
               value={parentGroup}
               onChange={e => setParentGroup(e.target.value)}
-              placeholder="Optional — matches portal parent tag name"
-            />
-            <datalist id={`parent-groups-${slot}`}>
-              {existingGroups.map(g => <option key={g} value={g} />)}
-            </datalist>
+              disabled={groupOptions.length === 0}
+            >
+              <option value="">Ungrouped</option>
+              {groupOptions.map(g => (
+                <option key={g} value={g}>{g}</option>
+              ))}
+            </select>
             <span className={css.fieldHint}>
-              Groups come from the portal tag tree (`parent_key`). Leave empty for ungrouped.
+              {groupOptions.length === 0
+                ? 'No parent groups in the portal yet — create them in admin Tags, then Reload.'
+                : 'Groups are managed in the admin portal. Pick one, or leave Ungrouped.'}
             </span>
           </div>
 

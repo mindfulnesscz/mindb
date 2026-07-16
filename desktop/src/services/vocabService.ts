@@ -65,13 +65,24 @@ interface DbTagRow {
 export function tagsToVocabulary(rows: DbTagRow[]): VocabularyData {
   const byId = new Map(rows.map(r => [r.id, r]));
   const tags: VocabTag[] = [];
+  const parentGroups: VocabularyData['parentGroups'] = [];
 
   for (const row of rows) {
-    const shortcode = (row.shortcode ?? '').trim();
-    if (!shortcode) continue; // groups / labels without filename codes stay portal-only
-
     const slot = row.dimension as Slot;
     if (!['entity', 'angle', 'format'].includes(slot)) continue;
+
+    const shortcode = (row.shortcode ?? '').trim();
+    // Parent groups: top-level, no shortcode (portal-managed)
+    if (!row.parent_id && !shortcode) {
+      parentGroups.push({
+        name: row.name,
+        key: (row.key ?? '').trim() || row.name.toLowerCase().replace(/\s+/g, '-'),
+        slot,
+      });
+      continue;
+    }
+
+    if (!shortcode) continue; // nested non-leaf nodes unused for now
 
     const parent = row.parent_id ? byId.get(row.parent_id) : undefined;
     const key = (row.key ?? '').trim() || row.name.toLowerCase().replace(/\s+/g, '-');
@@ -92,10 +103,13 @@ export function tagsToVocabulary(rows: DbTagRow[]): VocabularyData {
     return a.shortcode.localeCompare(b.shortcode);
   });
 
+  parentGroups.sort((a, b) => a.slot.localeCompare(b.slot) || a.name.localeCompare(b.name));
+
   return {
     _schema_version: '4.0.0',
-    _comment: `Synced from public.tags (${rows.length} rows, ${tags.length} with shortcodes). Parent groups without shortcodes are portal-only.`,
+    _comment: `Synced from public.tags (${rows.length} rows, ${parentGroups.length} groups, ${tags.length} leaves).`,
     tags,
+    parentGroups,
     legacy_aliases: {},
   };
 }
