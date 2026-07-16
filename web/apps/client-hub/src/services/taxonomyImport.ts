@@ -17,7 +17,6 @@ export interface TaxonomyNodeInput {
   parent_key?: string | null
   shortcode?: string | null
   sort_order?: number
-  meta?: Record<string, unknown>
 }
 
 export interface TaxonomyDocument {
@@ -144,11 +143,9 @@ export function validateTaxonomyDocument(raw: unknown): TaxonomyValidationResult
       }
     }
 
-    const meta = item.meta === undefined
-      ? undefined
-      : isPlainObject(item.meta)
-        ? item.meta
-        : (() => { errors.push(`${path}.meta must be an object`); return undefined })()
+    if (item.meta !== undefined) {
+      warnings.push(`${path}.meta is ignored — use parent_key for grouping and key as the Obsidian tag`)
+    }
 
     if (key && name && dimension && DIMENSIONS.includes(dimension)) {
       nodes.push({
@@ -158,7 +155,6 @@ export function validateTaxonomyDocument(raw: unknown): TaxonomyValidationResult
         parent_key,
         shortcode,
         sort_order,
-        meta,
       })
     }
   })
@@ -277,6 +273,7 @@ export async function importTaxonomyToClient(
 
       const created = await createTag({
         name: node.name,
+        key: node.key,
         shortcode: node.shortcode ?? null,
         dimension: node.dimension,
         parentId: parentKey ? idByKey.get(parentKey)! : null,

@@ -564,6 +564,7 @@ export type Database = {
           created_at: string
           dimension: string
           id: string
+          key: string | null
           name: string
           parent_id: string | null
           shortcode: string | null
@@ -574,6 +575,7 @@ export type Database = {
           created_at?: string
           dimension: string
           id?: string
+          key?: string | null
           name: string
           parent_id?: string | null
           shortcode?: string | null
@@ -584,6 +586,7 @@ export type Database = {
           created_at?: string
           dimension?: string
           id?: string
+          key?: string | null
           name?: string
           parent_id?: string | null
           shortcode?: string | null

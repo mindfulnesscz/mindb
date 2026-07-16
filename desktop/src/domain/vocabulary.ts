@@ -2,62 +2,54 @@
 
 export type Slot = 'entity' | 'angle' | 'format';
 
-export type EntitySubtype = 'company' | 'product' | 'customer' | 'partner' | 'event';
-export type AngleSubtype  = 'sales-mktg' | 'content' | 'context';
-export type FormatSubtype = 'document' | 'media' | 'asset';
-export type Subtype = EntitySubtype | AngleSubtype | FormatSubtype;
-
 export interface VocabTag {
-  shortcode:    string;
-  slot:         Slot;
-  subtype:      Subtype;
-  label:        string;
-  obsidian_tag: string; // space-separated
-  icon:         string;
+  shortcode: string;
+  slot: Slot;
+  /** Display name of the parent group (from parent_id); null = ungrouped root leaf. */
+  parentGroup: string | null;
+  label: string;
+  /** Stable taxonomy key — used as the Obsidian tag on export. */
+  key: string;
+  icon: string;
 }
 
 export interface VocabularyData {
-  _schema_version:  string;
-  _comment:         string;
-  tags:             VocabTag[];
-  legacy_aliases?:  Record<string, string>;
+  _schema_version: string;
+  _comment: string;
+  tags: VocabTag[];
+  legacy_aliases?: Record<string, string>;
 }
-
-/* Prefix rules for Entity subtypes */
-export const ENTITY_PREFIXES: Record<EntitySubtype, string> = {
-  company:  '',
-  product:  'p-',
-  customer: 'c-',
-  partner:  'x-',
-  event:    'e-',
-};
-
-export const SUBTYPES: Record<Slot, Subtype[]> = {
-  entity: ['company', 'product', 'customer', 'partner', 'event'],
-  angle:  ['sales-mktg', 'content', 'context'],
-  format: ['document', 'media', 'asset'],
-};
 
 export const SLOT_LABELS: Record<Slot, string> = {
   entity: 'Entity',
-  angle:  'Angle',
+  angle: 'Angle',
   format: 'Format',
 };
 
 export const SLOT_DESCRIPTIONS: Record<Slot, string> = {
   entity: "Tags that answer 'Who or what is this about?'",
-  angle:  "Tags that answer 'What is the purpose or angle?'",
+  angle: "Tags that answer 'What is the purpose or angle?'",
   format: "Tags that answer 'What kind of file is it?'",
 };
 
-export function prefixForSubtype(slot: Slot, subtype: Subtype): string {
-  if (slot !== 'entity') return '';
-  return ENTITY_PREFIXES[subtype as EntitySubtype] ?? '';
-}
-
-export function buildShortcode(slot: Slot, subtype: Subtype, distinctive: string): string {
-  const prefix = prefixForSubtype(slot, subtype);
-  return prefix + distinctive;
+/** Unique parent group labels for a slot, in first-seen order (plus Ungrouped last if needed). */
+export function parentGroupsForSlot(tags: VocabTag[], slot: Slot): string[] {
+  const seen = new Set<string>();
+  const groups: string[] = [];
+  let hasUngrouped = false;
+  for (const t of tags) {
+    if (t.slot !== slot) continue;
+    if (!t.parentGroup) {
+      hasUngrouped = true;
+      continue;
+    }
+    if (!seen.has(t.parentGroup)) {
+      seen.add(t.parentGroup);
+      groups.push(t.parentGroup);
+    }
+  }
+  if (hasUngrouped) groups.push('Ungrouped');
+  return groups;
 }
 
 /* Given selected tags (by shortcode), produce the full filename shortcode string */
@@ -75,13 +67,15 @@ export function buildFilenameCode(
   return result;
 }
 
-/* Collect all Obsidian tags from a selection, de-duplicated, always ending with 'dam' */
+/** Collect Obsidian tags from selection — each tag's `key`, de-duplicated, always ending with `dam`. */
 export function buildObsidianTags(selected: VocabTag[]): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
   for (const tag of selected) {
-    for (const t of tag.obsidian_tag.split(' ').filter(Boolean)) {
-      if (!seen.has(t)) { seen.add(t); result.push(t); }
+    const k = tag.key.trim();
+    if (k && !seen.has(k)) {
+      seen.add(k);
+      result.push(k);
     }
   }
   if (!seen.has('dam')) result.push('dam');

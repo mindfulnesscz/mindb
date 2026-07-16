@@ -1,6 +1,6 @@
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { appDataDir, join } from '@tauri-apps/api/path';
-import type { VocabularyData, VocabTag, Slot, Subtype } from '../domain/vocabulary';
+import type { VocabularyData, VocabTag, Slot } from '../domain/vocabulary';
 import { activeEnvironment } from '../store/environmentStore';
 import { makeHeaders, sbFetch } from './supabase/rest';
 
@@ -18,15 +18,26 @@ async function getVocabPath(clientId: string | null): Promise<string> {
 
 function emptyVocab(comment: string): VocabularyData {
   return {
-    _schema_version: '3.0.0',
+    _schema_version: '4.0.0',
     _comment: comment,
     tags: [],
     legacy_aliases: {},
   };
 }
 
+/** Migrate legacy local-cache shapes (subtype / obsidian_tag) → parentGroup / key. */
 function migrateTags(tags: VocabTag[]): VocabTag[] {
-  return tags.map(t => t.subtype === ('image-var' as string) ? { ...t, subtype: 'asset' as VocabTag['subtype'] } : t);
+  return tags.map(t => {
+    const legacy = t as VocabTag & { subtype?: string; obsidian_tag?: string };
+    return {
+      shortcode: legacy.shortcode,
+      slot: legacy.slot,
+      parentGroup: legacy.parentGroup ?? (legacy.subtype ?? null),
+      label: legacy.label,
+      key: legacy.key || legacy.obsidian_tag || legacy.label.toLowerCase().replace(/\s+/g, '-'),
+      icon: legacy.icon ?? '',
+    };
+  });
 }
 
 function parseSafe(text: string): VocabularyData | null {
@@ -40,55 +51,49 @@ function parseSafe(text: string): VocabularyData | null {
   return null;
 }
 
-function inferSubtype(dimension: string, shortcode: string, metaSubtype?: string): Subtype {
-  if (metaSubtype) return metaSubtype as Subtype;
-  if (dimension === 'entity') {
-    if (shortcode.startsWith('p-')) return 'product';
-    if (shortcode.startsWith('c-')) return 'customer';
-    if (shortcode.startsWith('x-')) return 'partner';
-    if (shortcode.startsWith('e-')) return 'event';
-    return 'company';
-  }
-  if (dimension === 'angle') return 'content';
-  return 'document';
-}
-
 interface DbTagRow {
   id: string;
   name: string;
+  key: string | null;
   dimension: string;
   parent_id: string | null;
   shortcode: string | null;
   sort_order: number;
-  meta: Record<string, unknown> | null;
 }
 
 /** Map DB tags → flat vocabulary used by filenameTranslator (shortcoded leaves). */
 export function tagsToVocabulary(rows: DbTagRow[]): VocabularyData {
+  const byId = new Map(rows.map(r => [r.id, r]));
   const tags: VocabTag[] = [];
 
   for (const row of rows) {
     const shortcode = (row.shortcode ?? '').trim();
     if (!shortcode) continue; // groups / labels without filename codes stay portal-only
 
-    const meta = row.meta ?? {};
     const slot = row.dimension as Slot;
     if (!['entity', 'angle', 'format'].includes(slot)) continue;
+
+    const parent = row.parent_id ? byId.get(row.parent_id) : undefined;
+    const key = (row.key ?? '').trim() || row.name.toLowerCase().replace(/\s+/g, '-');
 
     tags.push({
       shortcode,
       slot,
-      subtype: inferSubtype(slot, shortcode, typeof meta.subtype === 'string' ? meta.subtype : undefined),
+      parentGroup: parent?.name ?? null,
       label: row.name,
-      obsidian_tag: typeof meta.obsidian_tag === 'string' ? meta.obsidian_tag : row.name.toLowerCase().replace(/\s+/g, '-'),
-      icon: typeof meta.icon === 'string' ? meta.icon : '',
+      key,
+      icon: '',
     });
   }
 
-  tags.sort((a, b) => a.shortcode.localeCompare(b.shortcode));
+  tags.sort((a, b) => {
+    const g = (a.parentGroup ?? '').localeCompare(b.parentGroup ?? '');
+    if (g !== 0) return g;
+    return a.shortcode.localeCompare(b.shortcode);
+  });
 
   return {
-    _schema_version: '3.0.0',
+    _schema_version: '4.0.0',
     _comment: `Synced from public.tags (${rows.length} rows, ${tags.length} with shortcodes). Parent groups without shortcodes are portal-only.`,
     tags,
     legacy_aliases: {},
@@ -103,7 +108,7 @@ async function fetchTagsFromDb(clientId: string): Promise<VocabularyData | null>
     const headers = makeHeaders(env.anonKey);
     const url =
       `${env.supabaseUrl.replace(/\/+$/, '')}/rest/v1/tags` +
-      `?client_id=eq.${clientId}&select=id,name,dimension,parent_id,shortcode,sort_order,meta&order=sort_order.asc`;
+      `?client_id=eq.${clientId}&select=id,name,key,dimension,parent_id,shortcode,sort_order&order=sort_order.asc`;
     const res = await sbFetch(url, { headers });
     if (!res.ok) {
       console.warn('tags fetch failed', res.status, await res.text());
@@ -139,7 +144,7 @@ export async function loadVocabulary(clientId: string | null): Promise<Vocabular
 
   return emptyVocab(
     clientId
-      ? 'No tags in database yet — create a client with a taxonomy template (or edit tags in the portal).'
+      ? 'No tags in database yet — import a taxonomy JSON in the portal (or edit tags there).'
       : 'Select a client to load taxonomy from the database.',
   );
 }
@@ -160,7 +165,7 @@ async function saveVocabularyCache(data: VocabularyData, clientId: string | null
   }
 }
 
-/** @deprecated Bundled JSON is no longer the client seed — use DB templates. */
+/** @deprecated Bundled JSON is no longer the client seed — use portal taxonomy import. */
 export function getSeedVocabulary(): VocabularyData {
-  return emptyVocab('Deprecated — use taxonomy templates in Supabase.');
+  return emptyVocab('Deprecated — import taxonomy JSON in the portal.');
 }

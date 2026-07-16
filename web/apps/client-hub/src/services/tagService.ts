@@ -4,6 +4,7 @@ import type { TagRow, TablesUpdate, Json } from '../lib/database.types'
 export interface Tag {
   id: string
   name: string
+  key: string | null
   shortcode: string | null
   dimension: 'entity' | 'format' | 'angle'
   parentId: string | null
@@ -20,10 +21,11 @@ export interface TagNode extends Tag {
   children: TagNode[]
 }
 
-function toTag(row: TagRow & { shortcode?: string | null }): Tag {
+function toTag(row: TagRow & { shortcode?: string | null; key?: string | null }): Tag {
   return {
     id: row.id,
     name: row.name,
+    key: row.key ?? null,
     shortcode: row.shortcode ?? null,
     dimension: row.dimension as Tag['dimension'],
     parentId: row.parent_id,
@@ -77,6 +79,7 @@ export async function createTag(input: Omit<Tag, 'id'>): Promise<Tag> {
     .from('tags')
     .insert({
       name: input.name,
+      key: input.key,
       shortcode: input.shortcode,
       dimension: input.dimension,
       parent_id: input.parentId,
@@ -87,7 +90,7 @@ export async function createTag(input: Omit<Tag, 'id'>): Promise<Tag> {
     .single()
 
   if (error || !data) throw new Error(error?.message ?? 'No data returned')
-  return toTag(data as TagRow & { shortcode?: string | null })
+  return toTag(data as TagRow & { shortcode?: string | null; key?: string | null })
 }
 
 export async function updateTag(id: string, input: Partial<Omit<Tag, 'id'>>): Promise<Tag> {
@@ -98,6 +101,7 @@ export async function updateTag(id: string, input: Partial<Omit<Tag, 'id'>>): Pr
 
   const patch: TablesUpdate<'tags'> = {}
   if (input.name !== undefined) patch.name = input.name
+  if (input.key !== undefined) patch.key = input.key
   if (input.shortcode !== undefined) patch.shortcode = input.shortcode
   if (input.dimension !== undefined) patch.dimension = input.dimension
   if (input.parentId !== undefined) patch.parent_id = input.parentId
@@ -111,7 +115,7 @@ export async function updateTag(id: string, input: Partial<Omit<Tag, 'id'>>): Pr
     .single()
 
   if (error || !data) throw new Error(error?.message ?? 'No data returned')
-  const tag = toTag(data as TagRow & { shortcode?: string | null })
+  const tag = toTag(data as TagRow & { shortcode?: string | null; key?: string | null })
 
   if (input.shortcode !== undefined && input.shortcode !== prevShortcode && tag.clientId) {
     await enqueueRenameTask({

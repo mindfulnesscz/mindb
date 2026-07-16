@@ -21,6 +21,10 @@ Sample file: [`/taxonomy.sample.json`](/taxonomy.sample.json) in the portal app 
 }
 ```
 
-Parse/validate/import: `taxonomyImport.ts` (`parseAndValidateTaxonomyJson`, `importTaxonomyToClient`). Desktop loads shortcoded tags from the DB for filename parsing.
+- **`key`** — stable identity; also used as the Obsidian tag on desktop export
+- **`parent_key`** — tree grouping (replaces legacy desktop subtypes); groups have no shortcode, leaves do
+- **`shortcode`** — filename token (leaves only)
+
+Parse/validate/import: `taxonomyImport.ts` (`parseAndValidateTaxonomyJson`, `importTaxonomyToClient`). Desktop loads shortcoded tags from the DB for filename parsing and groups them by parent.
 
 See [Platform division](/getting-started/platform-division) and [Naming and vocabulary](/desktop/naming).

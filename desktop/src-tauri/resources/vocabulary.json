@@ -1,725 +1,725 @@
 {
-  "_schema_version": "2.1.0",
-  "_comment": "Canonical tag vocabulary for dc-hub. Three tag dimensions (entity, angle, format) -- any number of tags per dimension are allowed. obsidian_tag may contain space-separated values: the note inherits ALL of them as Obsidian tags. Shortcode prefix rules -- Entity: ESS (company-wide), p- (product), c- (customer), x- (partner), e- (event). Angle and Format use plain CamelCase codes.",
+  "_schema_version": "4.0.0",
+  "_comment": "Legacy bundled seed (deprecated). Prefer portal taxonomy JSON import. parentGroup replaces subtype; key replaces obsidian_tag.",
   "tags": [
     {
       "shortcode": "ESS",
       "slot": "entity",
-      "subtype": "company",
+      "parentGroup": "company",
       "label": "ESS",
-      "obsidian_tag": "ess",
+      "key": "ess",
       "icon": ""
     },
     {
       "shortcode": "p-Rns",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "Rinsing",
-      "obsidian_tag": "rinsing",
+      "key": "rinsing",
       "icon": ""
     },
     {
       "shortcode": "p-DpP",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "Dip Paint",
-      "obsidian_tag": "dip-paint",
+      "key": "dip-paint",
       "icon": ""
     },
     {
       "shortcode": "p-ECt",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "E-Coating",
-      "obsidian_tag": "e-coating",
+      "key": "e-coating",
       "icon": ""
     },
     {
       "shortcode": "p-Ovn",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "Oven",
-      "obsidian_tag": "oven",
+      "key": "oven",
       "icon": ""
     },
     {
       "shortcode": "p-Sln",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "Sealing",
-      "obsidian_tag": "sealing",
+      "key": "sealing",
       "icon": ""
     },
     {
       "shortcode": "p-SIQ",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "SealingIQ",
-      "obsidian_tag": "sealing-iq",
+      "key": "sealing-iq",
       "icon": ""
     },
     {
       "shortcode": "p-Wax",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "Waxing",
-      "obsidian_tag": "waxing",
+      "key": "waxing",
       "icon": ""
     },
     {
       "shortcode": "p-SpW",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "Spray Waxing",
-      "obsidian_tag": "spray-waxing",
+      "key": "spray-waxing",
       "icon": ""
     },
     {
       "shortcode": "p-TpC",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "Top Coating",
-      "obsidian_tag": "top-coating",
+      "key": "top-coating",
       "icon": ""
     },
     {
       "shortcode": "p-PwC",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "Powder Coating",
-      "obsidian_tag": "powder-coating",
+      "key": "powder-coating",
       "icon": ""
     },
     {
       "shortcode": "p-And",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "Anodizing",
-      "obsidian_tag": "anodizing",
+      "key": "anodizing",
       "icon": ""
     },
     {
       "shortcode": "p-Cld",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "Cloud",
-      "obsidian_tag": "cloud",
+      "key": "cloud",
       "icon": ""
     },
     {
       "shortcode": "p-AIQ",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "AnodeIQ",
-      "obsidian_tag": "anode-iq",
+      "key": "anode-iq",
       "icon": ""
     },
     {
       "shortcode": "p-BlB",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "Black Box",
-      "obsidian_tag": "black-box",
+      "key": "black-box",
       "icon": ""
     },
     {
       "shortcode": "p-PIQ",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "PaintIQ",
-      "obsidian_tag": "paint-iq",
+      "key": "paint-iq",
       "icon": ""
     },
     {
       "shortcode": "p-AtR",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "Automate Reporting",
-      "obsidian_tag": "automate-reporting",
+      "key": "automate-reporting",
       "icon": ""
     },
     {
       "shortcode": "p-Mrg",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "Merge",
-      "obsidian_tag": "merge",
+      "key": "merge",
       "icon": ""
     },
     {
       "shortcode": "p-Als",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "Alsim",
-      "obsidian_tag": "alsim",
+      "key": "alsim",
       "icon": ""
     },
     {
       "shortcode": "p-EnO",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "Encapsulated Oven",
-      "obsidian_tag": "encapsulated-oven",
+      "key": "encapsulated-oven",
       "icon": ""
     },
     {
       "shortcode": "p-EnP",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "Encapsulated Paint Shop",
-      "obsidian_tag": "encapsulated-paintshop",
+      "key": "encapsulated-paintshop",
       "icon": ""
     },
     {
       "shortcode": "c-ABB",
       "slot": "entity",
-      "subtype": "customer",
+      "parentGroup": "customer",
       "label": "ABB",
-      "obsidian_tag": "abb",
+      "key": "abb",
       "icon": ""
     },
     {
       "shortcode": "c-AUD",
       "slot": "entity",
-      "subtype": "customer",
+      "parentGroup": "customer",
       "label": "Audi",
-      "obsidian_tag": "audi",
+      "key": "audi",
       "icon": ""
     },
     {
       "shortcode": "c-BMW",
       "slot": "entity",
-      "subtype": "customer",
+      "parentGroup": "customer",
       "label": "BMW",
-      "obsidian_tag": "bmw",
+      "key": "bmw",
       "icon": ""
     },
     {
       "shortcode": "c-CEE",
       "slot": "entity",
-      "subtype": "customer",
+      "parentGroup": "customer",
       "label": "CEE",
-      "obsidian_tag": "cee",
+      "key": "cee",
       "icon": ""
     },
     {
       "shortcode": "c-EBZ",
       "slot": "entity",
-      "subtype": "customer",
+      "parentGroup": "customer",
       "label": "EBZ",
-      "obsidian_tag": "ebz",
+      "key": "ebz",
       "icon": ""
     },
     {
       "shortcode": "c-GM",
       "slot": "entity",
-      "subtype": "customer",
+      "parentGroup": "customer",
       "label": "GM",
-      "obsidian_tag": "gm",
+      "key": "gm",
       "icon": ""
     },
     {
       "shortcode": "c-INE",
       "slot": "entity",
-      "subtype": "customer",
+      "parentGroup": "customer",
       "label": "INEOS",
-      "obsidian_tag": "ineos",
+      "key": "ineos",
       "icon": ""
     },
     {
       "shortcode": "c-JLR",
       "slot": "entity",
-      "subtype": "customer",
+      "parentGroup": "customer",
       "label": "JLR",
-      "obsidian_tag": "jlr",
+      "key": "jlr",
       "icon": ""
     },
     {
       "shortcode": "c-MRC",
       "slot": "entity",
-      "subtype": "customer",
+      "parentGroup": "customer",
       "label": "MRC",
-      "obsidian_tag": "mrc",
+      "key": "mrc",
       "icon": ""
     },
     {
       "shortcode": "c-MTS",
       "slot": "entity",
-      "subtype": "customer",
+      "parentGroup": "customer",
       "label": "MTS",
-      "obsidian_tag": "mts",
+      "key": "mts",
       "icon": ""
     },
     {
       "shortcode": "c-SKD",
       "slot": "entity",
-      "subtype": "customer",
+      "parentGroup": "customer",
       "label": "Skoda",
-      "obsidian_tag": "skoda",
+      "key": "skoda",
       "icon": ""
     },
     {
       "shortcode": "c-STE",
       "slot": "entity",
-      "subtype": "customer",
+      "parentGroup": "customer",
       "label": "Stellantis",
-      "obsidian_tag": "stellantis",
+      "key": "stellantis",
       "icon": ""
     },
     {
       "shortcode": "c-COA",
       "slot": "entity",
-      "subtype": "customer",
+      "parentGroup": "customer",
       "label": "COA-CFD",
-      "obsidian_tag": "coa-cfd",
+      "key": "coa-cfd",
       "icon": ""
     },
     {
       "shortcode": "c-GUI",
       "slot": "entity",
-      "subtype": "customer",
+      "parentGroup": "customer",
       "label": "GUI",
-      "obsidian_tag": "gui",
+      "key": "gui",
       "icon": ""
     },
     {
       "shortcode": "x-AuF",
       "slot": "entity",
-      "subtype": "partner",
+      "parentGroup": "partner",
       "label": "Autoform",
-      "obsidian_tag": "autoform",
+      "key": "autoform",
       "icon": ""
     },
     {
       "shortcode": "x-JJ",
       "slot": "entity",
-      "subtype": "partner",
+      "parentGroup": "partner",
       "label": "JJ",
-      "obsidian_tag": "jj",
+      "key": "jj",
       "icon": ""
     },
     {
       "shortcode": "e-PEX",
       "slot": "entity",
-      "subtype": "event",
+      "parentGroup": "event",
       "label": "Paint Expo",
-      "obsidian_tag": "paint-expo",
+      "key": "paint-expo",
       "icon": "🎪"
     },
     {
       "shortcode": "e-PS30",
       "slot": "entity",
-      "subtype": "event",
+      "parentGroup": "event",
       "label": "PS-2030",
-      "obsidian_tag": "ps-2030",
+      "key": "ps-2030",
       "icon": "🎪"
     },
     {
       "shortcode": "e-PSD",
       "slot": "entity",
-      "subtype": "event",
+      "parentGroup": "event",
       "label": "PS-D",
-      "obsidian_tag": "ps-d",
+      "key": "ps-d",
       "icon": "🎪"
     },
     {
       "shortcode": "e-ICS",
       "slot": "entity",
-      "subtype": "event",
+      "parentGroup": "event",
       "label": "ICS",
-      "obsidian_tag": "ics",
+      "key": "ics",
       "icon": ""
     },
     {
       "shortcode": "e-SRC",
       "slot": "entity",
-      "subtype": "event",
+      "parentGroup": "event",
       "label": "SRC",
-      "obsidian_tag": "src",
+      "key": "src",
       "icon": ""
     },
     {
       "shortcode": "e-SAE",
       "slot": "entity",
-      "subtype": "event",
+      "parentGroup": "event",
       "label": "SAE",
-      "obsidian_tag": "sae",
+      "key": "sae",
       "icon": ""
     },
     {
       "shortcode": "e-Wbn",
       "slot": "entity",
-      "subtype": "event",
+      "parentGroup": "event",
       "label": "Webinar",
-      "obsidian_tag": "webinar",
+      "key": "webinar",
       "icon": "🎓"
     },
     {
       "shortcode": "SAL",
       "slot": "angle",
-      "subtype": "sales-mktg",
+      "parentGroup": "sales-mktg",
       "label": "Sales",
-      "obsidian_tag": "sales",
+      "key": "sales",
       "icon": ""
     },
     {
       "shortcode": "TEC",
       "slot": "angle",
-      "subtype": "sales-mktg",
+      "parentGroup": "sales-mktg",
       "label": "Technical",
-      "obsidian_tag": "technical",
+      "key": "technical",
       "icon": ""
     },
     {
       "shortcode": "OVR",
       "slot": "angle",
-      "subtype": "sales-mktg",
+      "parentGroup": "sales-mktg",
       "label": "Overview",
-      "obsidian_tag": "overview",
+      "key": "overview",
       "icon": ""
     },
     {
       "shortcode": "BCS",
       "slot": "angle",
-      "subtype": "sales-mktg",
+      "parentGroup": "sales-mktg",
       "label": "Business Case",
-      "obsidian_tag": "business-case",
+      "key": "business-case",
       "icon": ""
     },
     {
       "shortcode": "ABM",
       "slot": "angle",
-      "subtype": "sales-mktg",
+      "parentGroup": "sales-mktg",
       "label": "Account-Based",
-      "obsidian_tag": "account-based",
+      "key": "account-based",
       "icon": ""
     },
     {
       "shortcode": "TST",
       "slot": "angle",
-      "subtype": "sales-mktg",
+      "parentGroup": "sales-mktg",
       "label": "Testimonial",
-      "obsidian_tag": "testimonial",
+      "key": "testimonial",
       "icon": ""
     },
     {
       "shortcode": "CSS",
       "slot": "angle",
-      "subtype": "sales-mktg",
+      "parentGroup": "sales-mktg",
       "label": "Case Study",
-      "obsidian_tag": "case-study",
+      "key": "case-study",
       "icon": ""
     },
     {
       "shortcode": "SUC",
       "slot": "angle",
-      "subtype": "sales-mktg",
+      "parentGroup": "sales-mktg",
       "label": "Success Story",
-      "obsidian_tag": "success-story",
+      "key": "success-story",
       "icon": ""
     },
     {
       "shortcode": "UC",
       "slot": "angle",
-      "subtype": "sales-mktg",
+      "parentGroup": "sales-mktg",
       "label": "Use Case",
-      "obsidian_tag": "use-case",
+      "key": "use-case",
       "icon": ""
     },
     {
       "shortcode": "PPT",
       "slot": "angle",
-      "subtype": "sales-mktg",
+      "parentGroup": "sales-mktg",
       "label": "Pain Point",
-      "obsidian_tag": "pain-point",
+      "key": "pain-point",
       "icon": ""
     },
     {
       "shortcode": "SML",
       "slot": "angle",
-      "subtype": "sales-mktg",
+      "parentGroup": "sales-mktg",
       "label": "Simulation",
-      "obsidian_tag": "simulation",
+      "key": "simulation",
       "icon": ""
     },
     {
       "shortcode": "CMP",
       "slot": "angle",
-      "subtype": "content",
+      "parentGroup": "content",
       "label": "Campaign",
-      "obsidian_tag": "campaign",
+      "key": "campaign",
       "icon": ""
     },
     {
       "shortcode": "REL",
       "slot": "angle",
-      "subtype": "content",
+      "parentGroup": "content",
       "label": "Product Release",
-      "obsidian_tag": "product-release",
+      "key": "product-release",
       "icon": ""
     },
     {
       "shortcode": "SM",
       "slot": "angle",
-      "subtype": "content",
+      "parentGroup": "content",
       "label": "Social Media",
-      "obsidian_tag": "social-media",
+      "key": "social-media",
       "icon": ""
     },
     {
       "shortcode": "TRN",
       "slot": "angle",
-      "subtype": "content",
+      "parentGroup": "content",
       "label": "Training",
-      "obsidian_tag": "training",
+      "key": "training",
       "icon": ""
     },
     {
       "shortcode": "SUS",
       "slot": "angle",
-      "subtype": "content",
+      "parentGroup": "content",
       "label": "Sustainability",
-      "obsidian_tag": "sustainability",
+      "key": "sustainability",
       "icon": ""
     },
     {
       "shortcode": "HRE",
       "slot": "angle",
-      "subtype": "content",
+      "parentGroup": "content",
       "label": "Hiring",
-      "obsidian_tag": "hiring",
+      "key": "hiring",
       "icon": ""
     },
     {
       "shortcode": "ILL",
       "slot": "angle",
-      "subtype": "content",
+      "parentGroup": "content",
       "label": "Illustration",
-      "obsidian_tag": "illustration",
+      "key": "illustration",
       "icon": ""
     },
     {
       "shortcode": "3D",
       "slot": "angle",
-      "subtype": "content",
+      "parentGroup": "content",
       "label": "3D",
-      "obsidian_tag": "3d",
+      "key": "3d",
       "icon": ""
     },
     {
       "shortcode": "BRD",
       "slot": "angle",
-      "subtype": "context",
+      "parentGroup": "context",
       "label": "Brand",
-      "obsidian_tag": "brand",
+      "key": "brand",
       "icon": ""
     },
     {
       "shortcode": "CRP",
       "slot": "angle",
-      "subtype": "context",
+      "parentGroup": "context",
       "label": "Corporate",
-      "obsidian_tag": "corporate",
+      "key": "corporate",
       "icon": ""
     },
     {
       "shortcode": "EVT",
       "slot": "angle",
-      "subtype": "context",
+      "parentGroup": "context",
       "label": "Event",
-      "obsidian_tag": "event",
+      "key": "event",
       "icon": ""
     },
     {
       "shortcode": "PTN",
       "slot": "angle",
-      "subtype": "context",
+      "parentGroup": "context",
       "label": "Partner",
-      "obsidian_tag": "partner",
+      "key": "partner",
       "icon": ""
     },
     {
       "shortcode": "ADD",
       "slot": "angle",
-      "subtype": "context",
+      "parentGroup": "context",
       "label": "Add-On",
-      "obsidian_tag": "add-on",
+      "key": "add-on",
       "icon": ""
     },
     {
       "shortcode": "SlD",
       "slot": "format",
-      "subtype": "document",
+      "parentGroup": "document",
       "label": "Slide Deck",
-      "obsidian_tag": "deck document",
+      "key": "deck",
       "icon": "🗂️"
     },
     {
       "shortcode": "PDF",
       "slot": "format",
-      "subtype": "document",
+      "parentGroup": "document",
       "label": "PDF",
-      "obsidian_tag": "pdf document",
+      "key": "pdf",
       "icon": "📄"
     },
     {
       "shortcode": "Dcm",
       "slot": "format",
-      "subtype": "document",
+      "parentGroup": "document",
       "label": "Word Document",
-      "obsidian_tag": "doc document",
+      "key": "doc",
       "icon": "📝"
     },
     {
       "shortcode": "1Pg",
       "slot": "format",
-      "subtype": "document",
+      "parentGroup": "document",
       "label": "One-Pager",
-      "obsidian_tag": "onepager document",
+      "key": "onepager",
       "icon": "📋"
     },
     {
       "shortcode": "Hnd",
       "slot": "format",
-      "subtype": "document",
+      "parentGroup": "document",
       "label": "Handover",
-      "obsidian_tag": "handover document",
+      "key": "handover",
       "icon": "🤝"
     },
     {
       "shortcode": "Mnl",
       "slot": "format",
-      "subtype": "document",
+      "parentGroup": "document",
       "label": "Manual",
-      "obsidian_tag": "manual document",
+      "key": "manual",
       "icon": "📖"
     },
     {
       "shortcode": "Art",
       "slot": "format",
-      "subtype": "document",
+      "parentGroup": "document",
       "label": "Article",
-      "obsidian_tag": "article document",
+      "key": "article",
       "icon": "✍️"
     },
     {
       "shortcode": "Vid",
       "slot": "format",
-      "subtype": "media",
+      "parentGroup": "media",
       "label": "Video",
-      "obsidian_tag": "video",
+      "key": "video",
       "icon": "🎬"
     },
     {
       "shortcode": "Img",
       "slot": "format",
-      "subtype": "media",
+      "parentGroup": "media",
       "label": "Static Image",
-      "obsidian_tag": "image",
+      "key": "image",
       "icon": "🖼️"
     },
     {
       "shortcode": "Crs",
       "slot": "format",
-      "subtype": "media",
+      "parentGroup": "media",
       "label": "Carousel",
-      "obsidian_tag": "carousel social-media",
+      "key": "carousel",
       "icon": "🎠"
     },
     {
       "shortcode": "Bnn",
       "slot": "format",
-      "subtype": "media",
+      "parentGroup": "media",
       "label": "Banner",
-      "obsidian_tag": "banner print",
+      "key": "banner",
       "icon": ""
     },
     {
       "shortcode": "Prn",
       "slot": "format",
-      "subtype": "media",
+      "parentGroup": "media",
       "label": "Print",
-      "obsidian_tag": "print",
+      "key": "print",
       "icon": "🖨️"
     },
     {
       "shortcode": "Web",
       "slot": "format",
-      "subtype": "media",
+      "parentGroup": "media",
       "label": "Web Asset",
-      "obsidian_tag": "web",
+      "key": "web",
       "icon": "🌐"
     },
     {
       "shortcode": "Gdy",
       "slot": "format",
-      "subtype": "media",
+      "parentGroup": "media",
       "label": "Goodie",
-      "obsidian_tag": "goodie print",
+      "key": "goodie",
       "icon": "🎁"
     },
     {
       "shortcode": "PrP",
       "slot": "format",
-      "subtype": "media",
+      "parentGroup": "media",
       "label": "Profile Picture",
-      "obsidian_tag": "profile-picture social-media",
+      "key": "profile-picture",
       "icon": ""
     },
     {
       "shortcode": "Gll",
       "slot": "format",
-      "subtype": "media",
+      "parentGroup": "media",
       "label": "Gallery",
-      "obsidian_tag": "gallery image",
+      "key": "gallery",
       "icon": "🖼️"
     },
     {
       "shortcode": "WhtB",
       "slot": "format",
-      "subtype": "image-var",
+      "parentGroup": "image-var",
       "label": "White Background",
-      "obsidian_tag": "white-bkg image",
+      "key": "white-bkg",
       "icon": ""
     },
     {
       "shortcode": "GryB",
       "slot": "format",
-      "subtype": "image-var",
+      "parentGroup": "image-var",
       "label": "Gray Background",
-      "obsidian_tag": "gray-bkg image",
+      "key": "gray-bkg",
       "icon": ""
     },
     {
       "shortcode": "TrpB",
       "slot": "format",
-      "subtype": "image-var",
+      "parentGroup": "image-var",
       "label": "Transparent Bkg",
-      "obsidian_tag": "transp-bkg image",
+      "key": "transp-bkg",
       "icon": ""
     },
     {
       "shortcode": "e-CBP26",
       "slot": "entity",
-      "subtype": "event",
+      "parentGroup": "event",
       "label": "cbp26-event",
-      "obsidian_tag": "event cbp26",
+      "key": "event",
       "icon": "🎪"
     },
     {
       "shortcode": "p-CrP",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "Corrosion",
-      "obsidian_tag": "corrosion-protection",
+      "key": "corrosion-protection",
       "icon": ""
     },
     {
       "shortcode": "e-ISCS26",
       "slot": "entity",
-      "subtype": "event",
+      "parentGroup": "event",
       "label": "ISCS26",
-      "obsidian_tag": "event iscs",
+      "key": "event",
       "icon": "🇮🇳"
     }
   ],

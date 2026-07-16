@@ -211,9 +211,8 @@ function makeNote(
 
   const obsTags: string[] = [];
   for (const t of p.tags) {
-    for (const tag of t.obsidian_tag.split(' ').filter(Boolean)) {
-      if (!obsTags.includes(tag)) obsTags.push(tag);
-    }
+    const tag = t.key.trim();
+    if (tag && !obsTags.includes(tag)) obsTags.push(tag);
   }
   obsTags.push('dam');
   if (p.error || p.unknownTags.length) obsTags.push('dam/incomplete');

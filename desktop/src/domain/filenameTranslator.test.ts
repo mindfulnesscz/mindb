@@ -4,11 +4,12 @@ import { buildFilenameCode } from './vocabulary';
 import type { VocabularyData } from './vocabulary';
 
 const vocab: VocabularyData = {
-  _schema_version: '2.2.0',
+  _schema_version: '4.0.0',
+  _comment: 'test',
   tags: [
-    { shortcode: 'PRD', slot: 'entity', subtype: 'product', label: 'Product', obsidian_tag: 'product', icon: '' },
-    { shortcode: 'SAL', slot: 'angle', subtype: 'sales-mktg', label: 'Sales', obsidian_tag: 'sales', icon: '' },
-    { shortcode: 'SlD', slot: 'format', subtype: 'document', label: 'Slides', obsidian_tag: 'slides', icon: '' },
+    { shortcode: 'PRD', slot: 'entity', parentGroup: 'Product', label: 'Product', key: 'entity.product.product', icon: '' },
+    { shortcode: 'SAL', slot: 'angle', parentGroup: 'Sales', label: 'Sales', key: 'angle.sales.sales', icon: '' },
+    { shortcode: 'SlD', slot: 'format', parentGroup: 'Document', label: 'Slides', key: 'format.document.slides', icon: '' },
   ],
 };
 

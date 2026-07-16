@@ -59,9 +59,13 @@ export function TagsAdmin({
     const name = window.prompt('Tag name?')
     if (!name?.trim()) return
     const shortcode = window.prompt('Shortcode (3 chars)?')?.trim().slice(0, 8) ?? ''
+    const slug = name.trim().toLowerCase().replace(/\s+/g, '-')
+    const parent = parentId ? tags.find(t => t.id === parentId) : null
+    const key = parent?.key ? `${parent.key}.${slug}` : `${dim}.${slug}`
     try {
       await createTag({
         name: name.trim(),
+        key,
         shortcode: shortcode || null,
         dimension: dim,
         parentId,

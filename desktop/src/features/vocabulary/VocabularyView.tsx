@@ -4,7 +4,7 @@ import { mkdir, writeTextFile } from '@tauri-apps/plugin-fs';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import {
   type Slot, type VocabTag,
-  SUBTYPES, SLOT_LABELS, ENTITY_PREFIXES,
+  SLOT_LABELS, parentGroupsForSlot,
   buildFilenameCode, buildObsidianTags,
 } from '../../domain/vocabulary';
 import { generateStableId, appendStableId } from '../../domain/stableId';
@@ -361,15 +361,15 @@ function DimColumn({
       </div>
 
       <div className={css.dimColScroll}>
-        {SUBTYPES[slot].map(subtype => {
-          const group = slotTags.filter(t => t.subtype === subtype && matches(t));
+        {parentGroupsForSlot(slotTags, slot).map(groupName => {
+          const group = slotTags.filter(t =>
+            matches(t) &&
+            (groupName === 'Ungrouped' ? !t.parentGroup : t.parentGroup === groupName)
+          );
           if (!group.length) return null;
 
-          const groupKey = `${slot}-${subtype}`;
+          const groupKey = `${slot}-${groupName}`;
           const isOpen   = searching || !collapsedGroups.has(groupKey);
-          const prefix   = slot === 'entity'
-            ? (ENTITY_PREFIXES[subtype as keyof typeof ENTITY_PREFIXES] ?? '')
-            : '';
 
           return (
             <div key={groupKey}>
@@ -378,10 +378,7 @@ function DimColumn({
                   size={11}
                   className={`${css.subtypeCaret}${isOpen ? ` ${css.open}` : ''}`}
                 />
-                <span className={css.subtypeLabel}>{subtype}</span>
-                {slot === 'entity' && prefix && (
-                  <span className={css.subtypePrefix}>{prefix}</span>
-                )}
+                <span className={css.subtypeLabel}>{groupName}</span>
                 <span className={css.subtypeCount}>{group.length}</span>
               </div>
 

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Check } from 'lucide-react';
 import {
-  type Slot, SUBTYPES, SLOT_LABELS,
+  type Slot, SLOT_LABELS, parentGroupsForSlot,
   buildFilenameCode, buildObsidianTags,
   type VocabTag,
 } from '../../domain/vocabulary';
@@ -69,7 +69,7 @@ export function GeneratorView() {
         <div className={css.dimPanels}>
           {SLOTS.map(slot => {
             const slotTags = tags.filter(t => t.slot === slot);
-            const subtypes = SUBTYPES[slot];
+            const groups = parentGroupsForSlot(slotTags, slot);
 
             return (
               <div key={slot} className={css.dimPanel}>
@@ -77,12 +77,14 @@ export function GeneratorView() {
                   <span className={css.dimPanelLabel}>{SLOT_LABELS[slot]}</span>
                 </div>
                 <div className={css.dimPanelScroll}>
-                  {subtypes.map(sub => {
-                    const group = slotTags.filter(t => t.subtype === sub);
+                  {groups.map(groupName => {
+                    const group = slotTags.filter(t =>
+                      groupName === 'Ungrouped' ? !t.parentGroup : t.parentGroup === groupName
+                    );
                     if (!group.length) return null;
                     return (
-                      <div key={sub}>
-                        <div className={css.dimSubgroup}>{sub}</div>
+                      <div key={groupName}>
+                        <div className={css.dimSubgroup}>{groupName}</div>
                         {group.map(tag => {
                           const isSelected = selected.has(tag.shortcode);
                           return (
