@@ -37,7 +37,7 @@ function AssetCard({
 }) {
   const isMulti = (asset.childCount ?? 0) > 0
   const [pointerIn, setPointerIn] = useState(false)
-  const hovered = useDelayedHover(pointerIn, 380)
+  const hovered = useDelayedHover(pointerIn, 100)
   // Prefetch siblings for multi cards so a click (even before hover) can focus the first child.
   const { siblings, loading } = useSiblingPreviews(asset, isMulti)
   const restingThumb =

@@ -61,7 +61,7 @@ export function gridGeometry(count: number): { cols: number; className: string }
   return { cols: 4, className: 'grid-cols-4' }
 }
 
-const mosaicIn = { duration: 0.58, ease: [0.22, 1, 0.36, 1] as const }
+const mosaicIn = { duration: 0.87, ease: [0.65, 0, 0.35, 1] as const } // easeInOutCubic
 const mosaicOut = { duration: 0.36, ease: [0.4, 0, 1, 1] as const }
 const tileStart = 0.58
 
@@ -227,7 +227,7 @@ export function useSiblingPreviews(primary: Asset, enabled: boolean) {
 }
 
 /** Debounced hover so quick mouse passes don't flash the overlay. */
-export function useDelayedHover(active: boolean, delayMs = 380): boolean {
+export function useDelayedHover(active: boolean, delayMs = 100): boolean {
   const [open, setOpen] = useState(false)
   useEffect(() => {
     if (!active) {
