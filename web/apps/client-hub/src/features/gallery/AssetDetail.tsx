@@ -70,6 +70,8 @@ interface Props {
   activeFacets?: { entities?: string[]; formats?: string[]; angles?: string[] }
   /** When opening from a hover tile, focus this child/variant id inside the detail. */
   focusAssetId?: string
+  /** Also open the lightbox on the focused child (gallery tile click). */
+  autoOpenLightbox?: boolean
 }
 
 function matchesActiveFacets(a: Asset, facets?: Props['activeFacets']): boolean {
@@ -112,7 +114,7 @@ function StarRating({ value, onChange }: { value: number; onChange?: (v: number)
 }
 
 
-export default function AssetDetail({ asset, onClose, mount, onStatusChange, activeFacets, focusAssetId }: Props) {
+export default function AssetDetail({ asset, onClose, mount, onStatusChange, activeFacets, focusAssetId, autoOpenLightbox }: Props) {
   const { role, activeClient } = useRole()
   const { session } = useAuth()
   const userId = session?.user?.id ?? null
@@ -219,20 +221,32 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
             setChildView('carousel')
             setCarouselIdx(childIdx)
             setSelectedVariantId(asset.id)
+            if (autoOpenLightbox) {
+              const withSrc = kids.filter(c => c.thumbnailUrl || c.downloadUrl)
+              const lbIdx = withSrc.findIndex(c => c.id === focusAssetId)
+              if (lbIdx >= 0) setLightboxIndex(lbIdx)
+            }
             return
           }
           if (vars.some(v => v.id === focusAssetId) || focusAssetId === asset.id) {
             setSelectedVariantId(focusAssetId)
           }
         }
+        if (autoOpenLightbox && kids.length === 0) {
+          // Single / variant focus — open lightbox on the selected asset when it has media
+          if (asset.thumbnailUrl || asset.downloadUrl) setLightboxIndex(0)
+        }
       })
     } else {
       setChildren([])
       setVariants([])
+      if (autoOpenLightbox && (asset.thumbnailUrl || asset.downloadUrl)) {
+        setLightboxIndex(0)
+      }
     }
     setCarouselIdx(0)
     setSelectedVariantId(focusAssetId && focusAssetId !== asset.id ? focusAssetId : asset.id)
-  }, [asset.id, asset.childCount, focusAssetId])
+  }, [asset.id, asset.childCount, focusAssetId, autoOpenLightbox])
 
   // Reset local status/perm when asset changes
   useEffect(() => {
@@ -498,15 +512,40 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
           <ImageLightbox
             items={(children.length > 0 ? children : [selectedAsset])
               .filter(a => a.thumbnailUrl || a.downloadUrl)
-              .map(a => ({
-                src: a.downloadUrl || a.thumbnailUrl || '',
-                alt: a.name,
-                title: a.name,
-              }))
+              .map(a => {
+                const urls = a.downloadUrls ?? []
+                const links = urls.filter(link => {
+                  const dest = visibleDests.find(d =>
+                    (link.destId && d.id === link.destId) || d.name === link.name,
+                  )
+                  if (!dest) return isStaff
+                  return true
+                })
+                return {
+                  src: a.downloadUrl || a.thumbnailUrl || '',
+                  alt: a.name,
+                  title: a.name,
+                  downloadUrl: canDownload(role, asset) ? a.downloadUrl : undefined,
+                  cloudLinks: links.map(l => ({
+                    label: l.name || l.provider || 'Cloud',
+                    url: l.url,
+                  })),
+                  assetId: a.id,
+                }
+              })
               .filter(i => i.src)}
             index={lightboxIndex}
             onClose={() => setLightboxIndex(null)}
             onIndexChange={setLightboxIndex}
+            onDownload={item => {
+              const pool = children.length > 0 ? children : [selectedAsset]
+              const target = pool.find(a => a.id === item.assetId)
+                ?? pool.find(a => a.downloadUrl === item.downloadUrl)
+                ?? selectedAsset
+              trackEvent(target.id, 'download', userId, role).catch(() => {})
+              setEventCounts(c => ({ ...c, downloads: c.downloads + 1 }))
+              webAssetActions.download?.(target)
+            }}
           />
         )}
 

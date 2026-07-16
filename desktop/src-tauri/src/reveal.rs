@@ -216,28 +216,46 @@ fn find_stable_dir(dir: &Path, stable_id: &str, depth: u32) -> Option<PathBuf> {
 }
 
 fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
+    // Package dirs: open *inside* the folder. Files: select in the parent.
     #[cfg(target_os = "macos")]
     {
-        Command::new("open")
-            .args(["-R", &path.to_string_lossy()])
-            .status()
-            .map_err(|e| e.to_string())?;
+        if path.is_dir() {
+            Command::new("open")
+                .arg(path)
+                .status()
+                .map_err(|e| e.to_string())?;
+        } else {
+            Command::new("open")
+                .args(["-R", &path.to_string_lossy()])
+                .status()
+                .map_err(|e| e.to_string())?;
+        }
         return Ok(());
     }
     #[cfg(target_os = "windows")]
     {
-        Command::new("explorer")
-            .arg(format!("/select,{}", path.to_string_lossy()))
-            .status()
-            .map_err(|e| e.to_string())?;
+        if path.is_dir() {
+            Command::new("explorer")
+                .arg(path)
+                .status()
+                .map_err(|e| e.to_string())?;
+        } else {
+            Command::new("explorer")
+                .arg(format!("/select,{}", path.to_string_lossy()))
+                .status()
+                .map_err(|e| e.to_string())?;
+        }
         return Ok(());
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        // Linux: open the containing directory
-        let parent = path.parent().unwrap_or(path);
+        let target = if path.is_dir() {
+            path
+        } else {
+            path.parent().unwrap_or(path)
+        };
         Command::new("xdg-open")
-            .arg(parent)
+            .arg(target)
             .status()
             .map_err(|e| e.to_string())?;
         Ok(())

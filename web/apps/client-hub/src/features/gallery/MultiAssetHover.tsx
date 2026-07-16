@@ -112,10 +112,7 @@ export function MultiAssetHoverGrid({
       {open && (
         <motion.div
           className="absolute inset-0 z-10 flex items-center justify-center p-2"
-          style={{
-            background: 'rgba(22,22,22,0.18)',
-            perspective: 900,
-          }}
+          style={{ perspective: 900 }}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0, transition: { duration: 0.15 } }}
@@ -205,7 +202,7 @@ export function MultiAssetHoverGrid({
                         referrerPolicy="no-referrer"
                         src={s.thumbnailUrl}
                         alt={s.name}
-                        className="w-full h-full object-cover pointer-events-none"
+                        className="w-full h-full object-contain pointer-events-none"
                         draggable={false}
                       />
                     ) : (
@@ -214,13 +211,12 @@ export function MultiAssetHoverGrid({
                       </div>
                     )}
 
-                    {s.isGalleryChild && !isLastOverflow && (
-                      <span className="absolute top-1 left-1 z-[1] w-3.5 h-3.5 rounded-[2px] border border-white/50 bg-cosmos-black/35 shadow-[2px_2px_0_rgba(0,0,0,0.25)] pointer-events-none" />
-                    )}
-
                     {isLastOverflow && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-cosmos-black/45">
-                        <span className="text-sm font-sans font-semibold text-clear-white">
+                      <div
+                        className="absolute inset-0 flex items-center justify-center"
+                        style={{ backgroundColor: letterbox }}
+                      >
+                        <span className="text-sm font-sans font-semibold text-clear-white drop-shadow">
                           +{overflow}
                         </span>
                       </div>

@@ -57,14 +57,18 @@ function AssetCard({
   accent,
 }: {
   asset: Asset
-  onOpen: (focusId?: string) => void
+  onOpen: (focusId?: string, opts?: { lightbox?: boolean }) => void
   role: string
   accent: string
 }) {
   const isMulti = (asset.childCount ?? 0) > 0
   const [pointerIn, setPointerIn] = useState(false)
   const hovered = useDelayedHover(pointerIn, 80)
-  const { siblings, loading } = useSiblingPreviews(asset, isMulti && hovered)
+  // Prefetch siblings when hovering, or immediately when the gallery shell has no thumb.
+  const needsRestingThumb = isMulti && !asset.thumbnailUrl
+  const { siblings, loading } = useSiblingPreviews(asset, isMulti && (hovered || needsRestingThumb))
+  const restingThumb =
+    asset.thumbnailUrl || siblings.find(s => s.thumbnailUrl)?.thumbnailUrl
   const showStack = isMulti
   const fileCount = siblings.length > 1
     ? siblings.length
@@ -74,7 +78,7 @@ function AssetCard({
   const letterbox = thumbLetterbox(accent)
 
   function handleSiblingSelect(s: SiblingPreview) {
-    onOpen(s.id)
+    onOpen(s.id, { lightbox: true })
   }
 
   return (
@@ -93,14 +97,14 @@ function AssetCard({
       >
         {showStack && !hovered && <StackBackdrop accent={accent} count={fileCount} />}
 
-        {asset.thumbnailUrl
+        {restingThumb
           ? (
             <img
               referrerPolicy="no-referrer"
-              src={asset.thumbnailUrl}
+              src={restingThumb}
               alt={asset.name}
-              className={`relative z-[1] w-full h-full object-contain transition-[transform,filter] duration-500 ease-out will-change-transform ${
-                isMulti && hovered ? 'scale-[1.02] brightness-[0.92]' : 'scale-100'
+              className={`relative z-[1] w-full h-full object-contain transition-transform duration-500 ease-out will-change-transform ${
+                isMulti && hovered ? 'scale-[1.02]' : 'scale-100'
               }`}
             />
           )
@@ -596,6 +600,7 @@ export default function GalleryView() {
   const [filters, setFilters] = useState<FilterState>(getDefaultFilters())
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [focusSiblingId, setFocusSiblingId] = useState<string | null>(null)
+  const [openLightboxOnFocus, setOpenLightboxOnFocus] = useState(false)
   const [resolvedDetail, setResolvedDetail] = useState<Asset | null>(null)
   const [railVisible, setRailVisible] = useState(true)
 
@@ -651,10 +656,12 @@ export default function GalleryView() {
     : null
 
   /** Open a top-level card, or a hover-tile sibling (child/variant) focused inside the parent detail. */
-  async function openAsset(primary: Asset, focusId?: string) {
+  async function openAsset(primary: Asset, focusId?: string, opts?: { lightbox?: boolean }) {
+    const wantLightbox = !!opts?.lightbox
     const targetId = focusId && focusId !== primary.id ? focusId : primary.id
     if (targetId === primary.id) {
       setFocusSiblingId(null)
+      setOpenLightboxOnFocus(wantLightbox)
       setResolvedDetail(null)
       setSelectedId(primary.id)
       return
@@ -663,6 +670,7 @@ export default function GalleryView() {
     const row = await fetchAsset(targetId)
     if (!row) {
       setFocusSiblingId(null)
+      setOpenLightboxOnFocus(false)
       setResolvedDetail(null)
       setSelectedId(primary.id)
       return
@@ -672,12 +680,14 @@ export default function GalleryView() {
     if (parentInList) {
       setResolvedDetail(null)
       setFocusSiblingId(targetId)
+      setOpenLightboxOnFocus(wantLightbox)
       setSelectedId(parentInList.id)
       return
     }
     const parent = parentId === primary.id ? primary : await fetchAsset(parentId)
     setResolvedDetail(parent ?? primary)
     setFocusSiblingId(targetId)
+    setOpenLightboxOnFocus(wantLightbox)
     setSelectedId(parent?.id ?? primary.id)
   }
 
@@ -752,7 +762,7 @@ export default function GalleryView() {
                 <AssetCard
                   key={asset.id}
                   asset={asset}
-                  onOpen={focusId => { void openAsset(asset, focusId) }}
+                  onOpen={(focusId, opts) => { void openAsset(asset, focusId, opts) }}
                   role={role}
                   accent={accent}
                 />
@@ -769,12 +779,14 @@ export default function GalleryView() {
           onClose={() => {
             setSelectedId(null)
             setFocusSiblingId(null)
+            setOpenLightboxOnFocus(false)
             setResolvedDetail(null)
           }}
           mount="drawer"
           onStatusChange={() => reload()}
           activeFacets={{ entities: filters.entities, formats: filters.formats, angles: filters.angles }}
           focusAssetId={focusSiblingId ?? undefined}
+          autoOpenLightbox={openLightboxOnFocus}
         />
       )}
     </div>
