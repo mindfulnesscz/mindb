@@ -51,10 +51,12 @@ function AssetCard({
   asset,
   onOpen,
   role,
+  accent,
 }: {
   asset: Asset
   onOpen: (focusId?: string, opts?: { lightbox?: boolean }) => void
   role: string
+  accent: string
 }) {
   const isMulti = (asset.childCount ?? 0) > 0
   const [pointerIn, setPointerIn] = useState(false)
@@ -69,6 +71,8 @@ function AssetCard({
     : isMulti
       ? (asset.childCount ?? 0)
       : 1
+  // Client accent darkened ~90%, used only as a light hover veil (opacity 0.2).
+  const hoverVeil = `color-mix(in srgb, ${accent} 10%, #000)`
 
   function handleSiblingSelect(s: SiblingPreview) {
     // Lightbox only for true gallery children (folder-of-images), not format/size variants.
@@ -109,6 +113,15 @@ function AssetCard({
           )
           : <div className="relative z-[1] w-full h-full" />
         }
+
+        {/* Subtle accent veil on hover only — not a pale gray curtain. */}
+        {isMulti && hovered && (
+          <div
+            className="absolute inset-0 z-[2] pointer-events-none"
+            style={{ backgroundColor: hoverVeil, opacity: 0.2 }}
+            aria-hidden
+          />
+        )}
 
         {isMulti && (
           <MultiAssetHoverGrid
@@ -602,6 +615,7 @@ export default function GalleryView() {
 
   const isStaff = role === 'admin' || role === 'editor'
   const statusKeys = isStaff ? STATUS_KEYS_STAFF : STATUS_KEYS_CLIENT
+  const accent = activeClient?.accent ?? '#161616'
 
   const clientId = activeClient?.id
 
@@ -759,6 +773,7 @@ export default function GalleryView() {
                   asset={asset}
                   onOpen={(focusId, opts) => { void openAsset(asset, focusId, opts) }}
                   role={role}
+                  accent={accent}
                 />
               ))}
             </div>

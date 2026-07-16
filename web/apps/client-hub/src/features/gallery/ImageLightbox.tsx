@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react'
+import { useEffect, useCallback, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 
@@ -9,6 +9,8 @@ export interface LightboxCloudLink {
 
 export interface LightboxItem {
   src: string
+  /** Fast preview shown immediately; full `src` fades in once loaded. */
+  thumbSrc?: string
   alt?: string
   title?: string
   /** CDN original — enables download chip when present. */
@@ -17,6 +19,56 @@ export interface LightboxItem {
   cloudLinks?: LightboxCloudLink[]
   /** Asset id for download tracking / lookup. */
   assetId?: string
+}
+
+function ProgressiveSlide({
+  item,
+  reduceMotion,
+}: {
+  item: LightboxItem
+  reduceMotion: boolean | null
+}) {
+  const thumb = item.thumbSrc && item.thumbSrc !== item.src ? item.thumbSrc : undefined
+  const [fullReady, setFullReady] = useState(!thumb)
+
+  useEffect(() => {
+    setFullReady(!thumb)
+    if (!thumb) return
+    let cancelled = false
+    const img = new Image()
+    img.referrerPolicy = 'no-referrer'
+    img.onload = () => { if (!cancelled) setFullReady(true) }
+    img.onerror = () => { if (!cancelled) setFullReady(true) }
+    img.src = item.src
+    return () => { cancelled = true }
+  }, [item.src, thumb])
+
+  return (
+    <div
+      className="relative max-w-full max-h-full flex items-center justify-center"
+      onClick={e => e.stopPropagation()}
+    >
+      {thumb && (
+        <img
+          referrerPolicy="no-referrer"
+          src={thumb}
+          alt={item.alt ?? ''}
+          className="max-w-full max-h-full object-contain select-none"
+          draggable={false}
+        />
+      )}
+      <motion.img
+        referrerPolicy="no-referrer"
+        src={item.src}
+        alt={item.alt ?? ''}
+        className={`max-w-full max-h-full object-contain select-none ${thumb ? 'absolute inset-0 m-auto' : ''}`}
+        draggable={false}
+        initial={false}
+        animate={{ opacity: fullReady ? 1 : 0 }}
+        transition={{ duration: reduceMotion || !thumb ? 0 : 0.28, ease: 'easeOut' }}
+      />
+    </div>
+  )
 }
 
 /** Full-viewport lightbox for gallery images (lightGallery-style). */
@@ -107,19 +159,16 @@ export function ImageLightbox({
         )}
 
         <AnimatePresence mode="wait" initial={false}>
-          <motion.img
+          <motion.div
             key={current.src + String(safeIndex)}
-            referrerPolicy="no-referrer"
-            src={current.src}
-            alt={current.alt ?? ''}
-            className="max-w-full max-h-full object-contain select-none"
-            draggable={false}
-            onClick={e => e.stopPropagation()}
-            initial={reduceMotion ? false : { opacity: 0, scale: 0.985 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={reduceMotion ? undefined : { opacity: 0, scale: 0.985 }}
-            transition={{ duration: reduceMotion ? 0 : 0.22, ease: 'easeOut' }}
-          />
+            className="max-w-full max-h-full"
+            initial={reduceMotion ? false : { opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={reduceMotion ? undefined : { opacity: 0 }}
+            transition={{ duration: reduceMotion ? 0 : 0.15, ease: 'easeOut' }}
+          >
+            <ProgressiveSlide item={current} reduceMotion={reduceMotion} />
+          </motion.div>
         </AnimatePresence>
 
         {items.length > 1 && (

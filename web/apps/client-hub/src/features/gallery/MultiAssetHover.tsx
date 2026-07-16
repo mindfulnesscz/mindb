@@ -61,7 +61,8 @@ export function gridGeometry(count: number): { cols: number; className: string }
   return { cols: 4, className: 'grid-cols-4' }
 }
 
-const fadeIn = { duration: 0.16, ease: 'easeOut' as const }
+const fadeIn = { duration: 0.14, ease: 'easeOut' as const }
+const springHover = { type: 'spring' as const, stiffness: 460, damping: 24, mass: 0.55 }
 
 function ShimmerBlock() {
   return (
@@ -77,8 +78,8 @@ function ShimmerBlock() {
 }
 
 /**
- * Hover overlay: sibling thumbnails fan into an adaptive square mosaic.
- * Tile click opens that asset; download chip fetches CDN original without opening detail.
+ * Hover overlay: sibling thumbnails appear together in an adaptive mosaic.
+ * Tile click opens that asset. No pale curtain — mosaic floats over the resting thumb.
  */
 export function MultiAssetHoverGrid({
   open,
@@ -102,11 +103,11 @@ export function MultiAssetHoverGrid({
     <AnimatePresence>
       {open && (
         <motion.div
-          className="absolute inset-0 z-10 flex items-center justify-center p-2 bg-gray-150"
+          className="absolute inset-0 z-10 flex items-center justify-center p-2"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0, transition: { duration: 0.12 } }}
-          transition={{ duration: reduceMotion ? 0.01 : 0.16 }}
+          transition={{ duration: reduceMotion ? 0.01 : 0.14 }}
           onClick={e => e.stopPropagation()}
         >
           {showShimmer ? (
@@ -129,6 +130,16 @@ export function MultiAssetHoverGrid({
                     initial={reduceMotion ? false : { opacity: 0 }}
                     animate={{ opacity: 1 }}
                     transition={reduceMotion ? { duration: 0 } : fadeIn}
+                    whileHover={
+                      reduceMotion
+                        ? undefined
+                        : {
+                            scale: 1.08,
+                            zIndex: 3,
+                            boxShadow: '0 14px 28px rgba(0,0,0,0.35)',
+                            transition: springHover,
+                          }
+                    }
                     title={s.name}
                     onClick={e => {
                       e.stopPropagation()
@@ -151,7 +162,6 @@ export function MultiAssetHoverGrid({
                       </div>
                     )}
 
-                    {/* Inset hover ring — no scale (avoids colliding with enter fade). */}
                     <span
                       aria-hidden
                       className="pointer-events-none absolute inset-0 box-border border-2 border-transparent group-hover/tile:border-clear-white transition-colors duration-150"

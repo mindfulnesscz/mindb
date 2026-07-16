@@ -522,6 +522,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
                 })
                 return {
                   src: a.downloadUrl || a.thumbnailUrl || '',
+                  thumbSrc: a.thumbnailUrl,
                   alt: a.name,
                   title: a.name,
                   downloadUrl: canDownload(role, asset) ? a.downloadUrl : undefined,
