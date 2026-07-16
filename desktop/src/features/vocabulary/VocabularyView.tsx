@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronRight, Pencil, Trash2, Check, Plus, Search, X, FolderOpen } from 'lucide-react';
+import { ChevronRight, Pencil, Trash2, Check, Plus, Search, X, FolderOpen, Upload, Download } from 'lucide-react';
 import { mkdir, writeTextFile } from '@tauri-apps/plugin-fs';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import {
@@ -11,7 +11,8 @@ import { generateStableId, appendStableId } from '../../domain/stableId';
 import { useVocabularyStore } from '../../store/vocabularyStore';
 import { useClientStore } from '../../store/clientStore';
 import { saveClients } from '../../services/clientService';
-import { createDraftAsset, fetchExistingStableIds } from '../../services/supabaseService';
+import { createDraftAsset, fetchExistingStableIds, syncTagsFromVocabulary } from '../../services/supabaseService';
+import { loadVocabulary, saveVocabulary } from '../../services/vocabService';
 import { writeReadme, README_FILENAME } from '../../services/readmeService';
 import { FolderTargetPicker } from '../../components/FolderTargetPicker';
 import { TagModal } from './TagModal';
@@ -27,8 +28,9 @@ interface VersionState { major: string; minor: string; patch: string }
 const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
 export function VocabularyView() {
-  const { data, deleteTag } = useVocabularyStore();
+  const { data, deleteTag, setData, markClean } = useVocabularyStore();
   const allTags = data?.tags ?? [];
+  const dirty = useVocabularyStore(s => s.dirty);
 
   const { clients, activeClientId, updateClient } = useClientStore();
   const activeClient = clients.find(c => c.id === activeClientId) ?? null;
@@ -39,6 +41,10 @@ export function VocabularyView() {
   const [modalSlot,  setModalSlot]  = useState<Slot>('entity');
   const [editIndex,  setEditIndex]  = useState<number | undefined>(undefined);
   const [search,     setSearch]     = useState('');
+  const [publishing, setPublishing] = useState(false);
+  const [reloading,  setReloading]  = useState(false);
+  const [syncMsg,    setSyncMsg]    = useState<string | null>(null);
+  const [syncError,  setSyncError]  = useState<string | null>(null);
 
   /* Generator state */
   const [selected,     setSelected]     = useState<Map<string, VocabTag>>(new Map());
@@ -95,6 +101,59 @@ export function VocabularyView() {
     setSelected(new Map());
     setDescription('');
     setVersion({ major: '', minor: '', patch: '' });
+  }
+
+  async function handlePublish() {
+    if (!activeClient || !data) return;
+    if (!activeClient.supabaseUrl || !activeClient.supabaseAnonKey) {
+      setSyncError('Client has no Supabase connection.');
+      return;
+    }
+    if (!window.confirm(
+      `Publish ${data.tags.length} local tag(s) to the portal for "${activeClient.name}"?\n\n` +
+      'This upserts groups and leaves, and removes portal shortcoded tags that are no longer in your local vocabulary.',
+    )) return;
+
+    setPublishing(true);
+    setSyncMsg(null);
+    setSyncError(null);
+    const lines: string[] = [];
+    try {
+      const result = await syncTagsFromVocabulary(
+        data,
+        activeClient.id,
+        { url: activeClient.supabaseUrl, anonKey: activeClient.supabaseAnonKey },
+        (_type, msg) => { lines.push(msg); },
+      );
+      markClean();
+      await saveVocabulary({ ...data, _unpublished: false }, activeClient.id).catch(console.warn);
+      setSyncMsg(`Published: ${result.created} created · ${result.updated} updated · ${result.deleted} deleted`);
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : String(e));
+      if (lines.length) console.warn(lines.join('\n'));
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  async function handleReloadFromPortal() {
+    if (!activeClientId) return;
+    if (!window.confirm(
+      'Reload tags from the portal?\n\nThis replaces your local vocabulary cache for this client. Unpublished local edits will be lost.',
+    )) return;
+
+    setReloading(true);
+    setSyncMsg(null);
+    setSyncError(null);
+    try {
+      const fresh = await loadVocabulary(activeClientId, { forceFromDb: true });
+      setData(fresh, { dirty: false });
+      setSyncMsg(`Reloaded ${fresh.tags.length} tag(s) from portal`);
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReloading(false);
+    }
   }
 
   const q = search.trim().toLowerCase();
@@ -214,8 +273,34 @@ export function VocabularyView() {
               </button>
             )}
           </div>
+          <button
+            className={css.btnSync}
+            onClick={handleReloadFromPortal}
+            disabled={reloading || publishing || !activeClientId}
+            title="Replace local cache with portal tags"
+          >
+            <Download size={13} />
+            {reloading ? 'Reloading…' : 'Reload'}
+          </button>
+          <button
+            className={css.btnPublish}
+            onClick={handlePublish}
+            disabled={publishing || reloading || !activeClient?.supabaseUrl}
+            title="Push local vocabulary to portal (public.tags)"
+          >
+            <Upload size={13} />
+            {publishing ? 'Publishing…' : dirty ? 'Publish*' : 'Publish'}
+          </button>
         </div>
       </div>
+      {(syncMsg || syncError) && (
+        <div className={`${css.syncBanner}${syncError ? ` ${css.syncBannerError}` : ''}`}>
+          {syncError ?? syncMsg}
+          <button className={css.syncBannerDismiss} onClick={() => { setSyncMsg(null); setSyncError(null); }}>
+            <X size={12} />
+          </button>
+        </div>
+      )}
 
       {/* ── 4-column body ── */}
       <div className={css.body}>

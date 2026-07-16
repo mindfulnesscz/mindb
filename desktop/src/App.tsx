@@ -112,8 +112,17 @@ export default function App() {
 
     /* Reload vocabulary for this client (or the seed when no client selected) */
     if (vocabClientRef.current !== activeClientId) {
+      const prevDirty = useVocabularyStore.getState().dirty;
+      const prevId = vocabClientRef.current;
+      // Flush dirty edits for the client we're leaving before switching.
+      if (prevDirty && prevId && useVocabularyStore.getState().data) {
+        saveVocabulary(useVocabularyStore.getState().data!, prevId).catch(console.error);
+      }
       vocabClientRef.current = activeClientId;
-      loadVocabulary(activeClientId).then(setVocab).catch(console.error);
+      // Default: DB. Unpublished local cache (_unpublished) is kept by loadVocabulary.
+      loadVocabulary(activeClientId)
+        .then(d => setVocab(d, { dirty: !!d._unpublished }))
+        .catch(console.error);
     }
   }, [activeClientId, clients]);
 
@@ -134,15 +143,15 @@ export default function App() {
     }).catch(console.error);
   }, [activeClientId]);
 
-  /* Persist vocabulary on change — scoped to the currently active client.
-     Using the ref instead of the activeClientId closure avoids stale-capture
-     when the client changes while a vocab load is in flight. */
+  /* Persist vocabulary on change — only when dirty (user edits), never overwrite
+     the cache with the empty seed / a mid-load stale store while switching clients. */
   const vocabData = useVocabularyStore(s => s.data);
+  const vocabDirty = useVocabularyStore(s => s.dirty);
   useEffect(() => {
-    if (vocabData && vocabClientRef.current !== undefined) {
-      saveVocabulary(vocabData, vocabClientRef.current).catch(console.error);
+    if (vocabDirty && vocabData && vocabClientRef.current) {
+      saveVocabulary({ ...vocabData, _unpublished: true }, vocabClientRef.current).catch(console.error);
     }
-  }, [vocabData]);
+  }, [vocabData, vocabDirty]);
 
   /* Persist settings when dirty */
   const settings = useSettingsStore(s => s.settings);

@@ -18,6 +18,8 @@ export interface VocabularyData {
   _comment: string;
   tags: VocabTag[];
   legacy_aliases?: Record<string, string>;
+  /** Set on local cache when there are unpublished edits (survives client switch). */
+  _unpublished?: boolean;
 }
 
 export const SLOT_LABELS: Record<Slot, string> = {

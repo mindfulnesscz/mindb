@@ -54,7 +54,7 @@ function parseSafe(text: string): VocabularyData | null {
 interface DbTagRow {
   id: string;
   name: string;
-  key: string | null;
+  key?: string | null;
   dimension: string;
   parent_id: string | null;
   shortcode: string | null;
@@ -106,13 +106,29 @@ async function fetchTagsFromDb(clientId: string): Promise<VocabularyData | null>
 
   try {
     const headers = makeHeaders(env.anonKey);
-    const url =
+    const base =
       `${env.supabaseUrl.replace(/\/+$/, '')}/rest/v1/tags` +
-      `?client_id=eq.${clientId}&select=id,name,key,dimension,parent_id,shortcode,sort_order&order=sort_order.asc`;
-    const res = await sbFetch(url, { headers });
+      `?client_id=eq.${clientId}&order=sort_order.asc`;
+
+    // Prefer key column; fall back if migration not applied yet.
+    let res = await sbFetch(
+      `${base}&select=id,name,key,dimension,parent_id,shortcode,sort_order`,
+      { headers },
+    );
     if (!res.ok) {
-      console.warn('tags fetch failed', res.status, await res.text());
-      return null;
+      const errText = await res.text();
+      const missingKey = /column .*key.* does not exist/i.test(errText) || res.status === 400;
+      if (missingKey) {
+        console.warn('tags.key missing — fetching without key column');
+        res = await sbFetch(
+          `${base}&select=id,name,dimension,parent_id,shortcode,sort_order`,
+          { headers },
+        );
+      }
+      if (!res.ok) {
+        console.warn('tags fetch failed', res.status, missingKey ? await res.text() : errText);
+        return null;
+      }
     }
     const rows = await res.json<DbTagRow[]>();
     return tagsToVocabulary(rows);
@@ -122,34 +138,56 @@ async function fetchTagsFromDb(clientId: string): Promise<VocabularyData | null>
   }
 }
 
-/** Prefer DB tags for the active client; fall back to local cache. No bundled seed for clients. */
-export async function loadVocabulary(clientId: string | null): Promise<VocabularyData> {
+async function readLocalCache(clientId: string | null): Promise<VocabularyData | null> {
+  const path = await getVocabPath(clientId);
+  const fileExists = await exists(path).catch(() => false);
+  if (!fileExists) return null;
+  const text = await readTextFile(path).catch(() => null);
+  if (!text) return null;
+  return parseSafe(text);
+}
+
+/**
+ * Load vocabulary for a client.
+ * - Default: fetch from DB (portal is SoT), refresh local cache.
+ * - preferLocal: keep unpublished local edits (dirty cache with tags).
+ * - forceFromDb: always pull portal, ignore local.
+ */
+export async function loadVocabulary(
+  clientId: string | null,
+  opts: { forceFromDb?: boolean; preferLocal?: boolean } = {},
+): Promise<VocabularyData> {
+  const forceFromDb = opts.forceFromDb ?? false;
+  const preferLocal = opts.preferLocal ?? false;
+
+  if (clientId && !forceFromDb) {
+    const local = await readLocalCache(clientId);
+    // Keep unpublished local edits across reloads / client switches.
+    if (preferLocal || local?._unpublished) {
+      if (local && local.tags.length > 0) return local;
+    }
+  }
+
   if (clientId) {
     const fromDb = await fetchTagsFromDb(clientId);
     if (fromDb) {
-      await saveVocabularyCache(fromDb, clientId).catch(console.warn);
-      return fromDb;
+      await saveVocabularyCache({ ...fromDb, _unpublished: false }, clientId).catch(console.warn);
+      return { ...fromDb, _unpublished: false };
     }
   }
 
-  const path = await getVocabPath(clientId);
-  const fileExists = await exists(path).catch(() => false);
-  if (fileExists) {
-    const text = await readTextFile(path).catch(() => null);
-    if (text) {
-      const parsed = parseSafe(text);
-      if (parsed) return parsed;
-    }
-  }
+  // DB unavailable — fall back to any local cache (including empty).
+  const local = await readLocalCache(clientId);
+  if (local) return local;
 
   return emptyVocab(
     clientId
-      ? 'No tags in database yet — import a taxonomy JSON in the portal (or edit tags there).'
-      : 'Select a client to load taxonomy from the database.',
+      ? 'No tags yet — import taxonomy in the portal, or add tags here and Publish.'
+      : 'Select a client to load taxonomy.',
   );
 }
 
-/** Local cache only — source of truth is public.tags in Supabase (web TagsAdmin). */
+/** Local cache — Publish (syncTagsFromVocabulary) writes to public.tags. */
 export async function saveVocabulary(data: VocabularyData, clientId: string | null): Promise<void> {
   return saveVocabularyCache(data, clientId);
 }
