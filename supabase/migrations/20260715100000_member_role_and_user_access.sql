@@ -1,11 +1,16 @@
 -- Rename portal role 'client' → 'member'; fix signup client assignment;
 -- add admin-only update_user_access RPC with client_members management.
+--
+-- Constraint must be dropped BEFORE the data update: the baseline check only
+-- allows ('public','client','editor','admin'), so setting role='member' while
+-- that check is still in place fails on any real 'client' rows (prod).
 
--- ── 1. Data migration ───────────────────────────────────────────────────────
+-- ── 1. Role check constraint (widen first) ────────────────────────────────────
+alter table public.profiles drop constraint if exists profiles_role_check;
+
+-- ── 2. Data migration ───────────────────────────────────────────────────────
 update public.profiles set role = 'member' where role = 'client';
 
--- ── 2. Role check constraint ──────────────────────────────────────────────────
-alter table public.profiles drop constraint if exists profiles_role_check;
 alter table public.profiles
   add constraint profiles_role_check
   check (role in ('public', 'member', 'editor', 'admin'));
