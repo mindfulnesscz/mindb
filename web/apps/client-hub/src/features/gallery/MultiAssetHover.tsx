@@ -79,9 +79,8 @@ function ShimmerBlock() {
 }
 
 /**
- * Hover mosaic: all tiles fade+scale in together (no stagger, no per-tile hover scale).
+ * Hover mosaic: each tile scales from its own center (no whole-block scale).
  * Dark accent veil sits behind the tiles only while the mosaic is open.
- * Enter/exit scale lives on the mosaic root so hover-out animates reliably.
  */
 export function MultiAssetHoverGrid({
   open,
@@ -100,8 +99,8 @@ export function MultiAssetHoverGrid({
   const overflow = Math.max(0, siblings.length - MAX_HOVER_TILES)
   const visible = siblings.slice(0, MAX_HOVER_TILES)
   const n = visible.length
-  const { className: cols } = gridGeometry(Math.max(n, 1))
   const showShimmer = loading && n <= 1
+  const { className: cols } = gridGeometry(Math.max(showShimmer ? 4 : n, 1))
   // Client accent darkened ~90%, opacity 0.8 — only while mosaic is open.
   const veil = `color-mix(in srgb, ${accent} 10%, #000)`
   const tIn = reduceMotion ? { duration: 0 } : mosaicIn
@@ -124,76 +123,76 @@ export function MultiAssetHoverGrid({
         )}
       </AnimatePresence>
 
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            key="mosaic-grid"
-            className="absolute inset-0 z-[11] flex items-center justify-center p-2 origin-center"
-            initial={reduceMotion ? false : { opacity: 0, scale: tileStart }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: tileStart, transition: tOut }}
-            transition={tIn}
-            onClick={e => e.stopPropagation()}
-          >
-            {showShimmer ? (
-              <div className={`grid ${cols} gap-1.5 w-full place-items-center`}>
-                {Array.from({ length: 4 }).map((_, i) => (
-                  <div key={i} className="relative aspect-square w-full rounded-[2px] overflow-hidden bg-cosmos-black/40">
+      {/* Grid shell stays mounted so per-tile exit scales can finish. */}
+      <div
+        className={`absolute inset-0 z-[11] flex items-center justify-center p-2 ${open ? '' : 'pointer-events-none'}`}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className={`grid ${cols} gap-1.5 w-full ${n === 2 ? 'items-center' : ''}`}>
+          <AnimatePresence>
+            {open && showShimmer && Array.from({ length: 4 }).map((_, i) => (
+              <motion.div
+                key={`shimmer-${i}`}
+                className="relative aspect-square w-full rounded-[2px] overflow-hidden bg-cosmos-black/40 origin-center"
+                initial={reduceMotion ? false : { opacity: 0, scale: tileStart }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: tileStart, transition: tOut }}
+                transition={tIn}
+              >
+                <ShimmerBlock />
+              </motion.div>
+            ))}
+            {open && !showShimmer && visible.map((s, i) => {
+              const isLastOverflow = overflow > 0 && i === visible.length - 1
+              return (
+                <motion.button
+                  type="button"
+                  key={s.id}
+                  className="relative aspect-square rounded-[2px] overflow-hidden cursor-pointer ring-1 ring-black/10 text-left group/tile shadow-[0_6px_16px_rgba(0,0,0,0.22)] origin-center"
+                  initial={reduceMotion ? false : { opacity: 0, scale: tileStart }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: tileStart, transition: tOut }}
+                  transition={tIn}
+                  title={s.name}
+                  onClick={e => {
+                    e.stopPropagation()
+                    onSelect?.(s)
+                  }}
+                >
+                  {loading && !s.thumbnailUrl ? (
                     <ShimmerBlock />
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className={`grid ${cols} gap-1.5 w-full ${n === 2 ? 'items-center' : ''}`}>
-                {visible.map((s, i) => {
-                  const isLastOverflow = overflow > 0 && i === visible.length - 1
-                  return (
-                    <button
-                      type="button"
-                      key={s.id}
-                      className="relative aspect-square rounded-[2px] overflow-hidden cursor-pointer ring-1 ring-black/10 text-left group/tile shadow-[0_6px_16px_rgba(0,0,0,0.22)]"
-                      title={s.name}
-                      onClick={e => {
-                        e.stopPropagation()
-                        onSelect?.(s)
-                      }}
-                    >
-                      {loading && !s.thumbnailUrl ? (
-                        <ShimmerBlock />
-                      ) : s.thumbnailUrl ? (
-                        <img
-                          referrerPolicy="no-referrer"
-                          src={s.thumbnailUrl}
-                          alt={s.name}
-                          className="w-full h-full object-cover pointer-events-none"
-                          draggable={false}
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-[10px] font-sans text-clear-white/70 bg-cosmos-black/40">
-                          {i + 1}
-                        </div>
-                      )}
+                  ) : s.thumbnailUrl ? (
+                    <img
+                      referrerPolicy="no-referrer"
+                      src={s.thumbnailUrl}
+                      alt={s.name}
+                      className="w-full h-full object-cover pointer-events-none"
+                      draggable={false}
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-[10px] font-sans text-clear-white/70 bg-cosmos-black/40">
+                      {i + 1}
+                    </div>
+                  )}
 
-                      <span
-                        aria-hidden
-                        className="pointer-events-none absolute inset-0 box-border border-2 border-transparent group-hover/tile:border-clear-white transition-colors duration-150"
-                      />
+                  <span
+                    aria-hidden
+                    className="pointer-events-none absolute inset-0 box-border border-2 border-transparent group-hover/tile:border-clear-white transition-colors duration-150"
+                  />
 
-                      {isLastOverflow && (
-                        <div className="absolute inset-0 flex items-center justify-center bg-cosmos-black/55">
-                          <span className="text-sm font-sans font-semibold text-clear-white">
-                            +{overflow}
-                          </span>
-                        </div>
-                      )}
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
+                  {isLastOverflow && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-cosmos-black/55">
+                      <span className="text-sm font-sans font-semibold text-clear-white">
+                        +{overflow}
+                      </span>
+                    </div>
+                  )}
+                </motion.button>
+              )
+            })}
+          </AnimatePresence>
+        </div>
+      </div>
     </>
   )
 }
@@ -228,7 +227,7 @@ export function useSiblingPreviews(primary: Asset, enabled: boolean) {
 }
 
 /** Debounced hover so quick mouse passes don't flash the overlay. */
-export function useDelayedHover(active: boolean, delayMs = 90): boolean {
+export function useDelayedHover(active: boolean, delayMs = 500): boolean {
   const [open, setOpen] = useState(false)
   useEffect(() => {
     if (!active) {
