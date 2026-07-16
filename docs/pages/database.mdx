@@ -14,9 +14,11 @@ One row per client company.
 | `slug` | text | URL identifier, e.g. `ess` |
 | `accent` | text | Hex colour |
 | `initials` | text | 2–3 letter badge |
-| `logo_url` | text | Optional |
+| `logo_url` | text | Optional CDN URL (`branding/{client_id}/…`) |
 | `portal_bg` | text | Colour, gradient string, or image URL |
 | `domain_whitelist` | text[] | Email domains for auto-member assignment |
+| `dimension_labels` | jsonb | Display names for entity / angle / format |
+| `identity_migrated` | boolean | Stable-identity matching |
 | `created_at` | timestamptz | |
 
 ### `profiles`
@@ -130,6 +132,13 @@ Taxonomy used for filtering in the gallery.
 | `dimension` | text | `entity` \| `format` \| `angle` |
 | `parent_id` | uuid | Nullable — for hierarchical tags |
 | `sort_order` | int | |
+| `shortcode` | text | Nullable — filename shortcode for leaves |
+
+### `client_members`
+Editor ↔ client assignments (desktop filtering + grants).
+
+### `rename_tasks`
+Queue for taxonomy-driven filesystem updates (`tag_rename`, `tag_delete`, `asset_retag`).
 
 ## Database functions
 
@@ -137,15 +146,10 @@ Taxonomy used for filtering in the gallery.
 |---|---|---|
 | `check_email_auth(p_email)` | anon | Returns auth type for sign-in flow |
 | `get_client_portal(p_slug)` | anon | Returns client data for portal welcome screen |
-| `get_all_profiles()` | editor, admin | Returns all profiles joined with auth.users email |
-| `update_user_role(p_user_id, p_role)` | admin | Changes a user's role |
-| `handle_new_auth_user()` | trigger | Auto-creates profile on first sign-in |
+| `get_all_profiles()` | editor, admin | Profiles joined with auth email |
+| `update_user_access(...)` | admin | Role + member `client_id` + editor `client_members` |
+| `update_user_role(p_user_id, p_role)` | admin | Legacy role-only helper |
+| `get_user_client_members(p_user_id)` | authenticated | Editor memberships for admin UI |
+| `handle_new_user` / profile trigger | trigger | Auto-creates profile; portal OTP can set member `client_id` |
 
-## Pending migrations
-
-Run in Supabase SQL editor if not done:
-
-```sql
--- Rename role 'client' → 'member' in existing rows
-UPDATE profiles SET role = 'member' WHERE role = 'client';
-```
+Schema changes ship only via `supabase/migrations/` — see [Database environments](/operations/database-environments). The `client` → `member` role rename is already in migration history.

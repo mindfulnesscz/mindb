@@ -1,9 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { X } from 'lucide-react';
-import {
-  type Slot, type Subtype, type VocabTag,
-  SUBTYPES, ENTITY_PREFIXES, prefixForSubtype,
-} from '../../domain/vocabulary';
+import { type Slot, type VocabTag } from '../../domain/vocabulary';
 import { useVocabularyStore } from '../../store/vocabularyStore';
 import css from './TagModal.module.css';
 
@@ -13,45 +10,41 @@ interface Props {
   onClose:    () => void;
 }
 
-function prefixLabel(subtype: string): string {
-  const p = ENTITY_PREFIXES[subtype as keyof typeof ENTITY_PREFIXES];
-  if (p === undefined) return '';
-  return p === '' ? 'no prefix' : p;
-}
-
 export function TagModal({ slot, editIndex, onClose }: Props) {
   const { data, addTag, updateTag } = useVocabularyStore();
   const editing = editIndex !== undefined ? data?.tags[editIndex] : undefined;
+  const portalGroups = (data?.parentGroups ?? [])
+    .filter(g => g.slot === slot)
+    .map(g => g.name);
+  // Keep current parent if editing even if somehow missing from portal list
+  const groupOptions = [...portalGroups];
+  if (editing?.parentGroup && !groupOptions.includes(editing.parentGroup)) {
+    groupOptions.unshift(editing.parentGroup);
+  }
 
-  const subtypes = SUBTYPES[slot];
-  const [subtype,   setSubtype]   = useState<Subtype>(editing?.subtype ?? subtypes[0]);
-  const [distinctive, setDistinct] = useState<string>(() => {
-    if (!editing) return '';
-    const prefix = prefixForSubtype(slot, editing.subtype);
-    return editing.shortcode.startsWith(prefix) ? editing.shortcode.slice(prefix.length) : editing.shortcode;
-  });
-  const [label,     setLabel]     = useState(editing?.label ?? '');
-  const [icon,      setIcon]      = useState(editing?.icon  ?? '');
-  const [obsidian,  setObsidian]  = useState(editing?.obsidian_tag ?? '');
-  const [errMsg,    setErrMsg]    = useState('');
-
-  /* Reset distinctive part when subtype changes (prefix may change) */
-  useEffect(() => {
-    if (!editing) setDistinct('');
-  }, [subtype]);
-
-  const prefix     = prefixForSubtype(slot, subtype);
-  const fullCode   = prefix + distinctive.trim();
-  const isEntityDim = slot === 'entity';
+  const [parentGroup, setParentGroup] = useState(
+    editing?.parentGroup ?? (groupOptions[0] ?? ''),
+  );
+  const [shortcode, setShortcode] = useState(editing?.shortcode ?? '');
+  const [label, setLabel]         = useState(editing?.label ?? '');
+  const [key, setKey]             = useState(editing?.key ?? '');
+  const [icon, setIcon]           = useState(editing?.icon ?? '');
+  const [errMsg, setErrMsg]       = useState('');
 
   function validate(): boolean {
-    if (!distinctive.trim()) { setErrMsg('Shortcode is required.'); return false; }
-    if (!label.trim())       { setErrMsg('Label is required.'); return false; }
-    if (!obsidian.trim())    { setErrMsg('Obsidian tag is required.'); return false; }
+    if (!shortcode.trim()) { setErrMsg('Shortcode is required.'); return false; }
+    if (!label.trim())     { setErrMsg('Label is required.'); return false; }
+    if (!key.trim())       { setErrMsg('Key is required (used as Obsidian tag).'); return false; }
+    if (parentGroup && !groupOptions.includes(parentGroup)) {
+      setErrMsg('Choose a parent group from the portal list (groups are managed in admin).');
+      return false;
+    }
 
-    /* Duplicate check */
-    const dup = data?.tags.find((t, i) => t.shortcode === fullCode && i !== editIndex);
-    if (dup) { setErrMsg(`Shortcode "${fullCode}" already exists.`); return false; }
+    const dup = data?.tags.find((t, i) => t.shortcode === shortcode.trim() && i !== editIndex);
+    if (dup) { setErrMsg(`Shortcode "${shortcode.trim()}" already exists.`); return false; }
+
+    const keyDup = data?.tags.find((t, i) => t.key === key.trim() && i !== editIndex);
+    if (keyDup) { setErrMsg(`Key "${key.trim()}" already exists.`); return false; }
 
     setErrMsg('');
     return true;
@@ -60,12 +53,12 @@ export function TagModal({ slot, editIndex, onClose }: Props) {
   function handleSave() {
     if (!validate()) return;
     const tag: VocabTag = {
-      shortcode: fullCode,
+      shortcode: shortcode.trim(),
       slot,
-      subtype,
-      label:        label.trim(),
-      icon:         icon.trim(),
-      obsidian_tag: obsidian.trim(),
+      parentGroup: parentGroup.trim() || null,
+      label: label.trim(),
+      key: key.trim(),
+      icon: icon.trim(),
     };
     if (editIndex !== undefined) updateTag(editIndex, tag);
     else addTag(tag);
@@ -83,57 +76,37 @@ export function TagModal({ slot, editIndex, onClose }: Props) {
         </div>
 
         <div className={css.modalBody}>
-          {/* Subtype selector */}
           <div className={css.field}>
-            <span className={css.fieldLabel}>Subtype</span>
-            <div className={css.subtypePills}>
-              {subtypes.map(st => (
-                <button
-                  key={st}
-                  className={`${css.subtypePill}${subtype === st ? ` ${css.active}` : ''}`}
-                  onClick={() => setSubtype(st)}
-                >
-                  {st}
-                  {isEntityDim && (
-                    <span className={css.pillPrefix}>{prefixLabel(st)}</span>
-                  )}
-                </button>
+            <span className={css.fieldLabel}>Parent group</span>
+            <select
+              className={css.input}
+              value={parentGroup}
+              onChange={e => setParentGroup(e.target.value)}
+              disabled={groupOptions.length === 0}
+            >
+              <option value="">Ungrouped</option>
+              {groupOptions.map(g => (
+                <option key={g} value={g}>{g}</option>
               ))}
-            </div>
+            </select>
+            <span className={css.fieldHint}>
+              {groupOptions.length === 0
+                ? 'No parent groups in the portal yet — create them in admin Tags, then Reload.'
+                : 'Groups are managed in the admin portal. Pick one, or leave Ungrouped.'}
+            </span>
           </div>
 
-          {/* Shortcode field */}
           <div className={css.field}>
             <span className={css.fieldLabel}>Shortcode</span>
-            <div className={css.fieldRow}>
-              {isEntityDim && prefix && (
-                <div className={css.prefixLock}>{prefix}</div>
-              )}
-              <input
-                className={`${css.input}${isEntityDim && prefix ? ` ${css.inputWithPrefix}` : ''}`}
-                value={distinctive}
-                onChange={e => setDistinct(e.target.value)}
-                placeholder={isEntityDim ? 'Sln' : 'e.g. Ovw'}
-              />
-            </div>
-            {isEntityDim && (
-              <>
-                <span className={css.prefixResult}>
-                  Result: <span className={css.prefixResultCode}>{fullCode || '—'}</span>
-                </span>
-                <span className={css.fieldHint}>
-                  {prefix
-                    ? `Prefix "${prefix}" is derived from subtype "${subtype}" and is locked.`
-                    : 'Company subtype — no prefix. Type the full shortcode.'}
-                </span>
-              </>
-            )}
-            {!isEntityDim && (
-              <span className={css.fieldHint}>Use CamelCase, 2–5 chars.</span>
-            )}
+            <input
+              className={css.input}
+              value={shortcode}
+              onChange={e => setShortcode(e.target.value)}
+              placeholder="e.g. p-Sln or Ovw"
+            />
+            <span className={css.fieldHint}>Filename token. Use any prefix convention you need (e.g. p-, c-).</span>
           </div>
 
-          {/* Icon + Label */}
           <div style={{ display: 'flex', gap: 12 }}>
             <div className={css.field} style={{ width: 80, flexShrink: 0 }}>
               <span className={css.fieldLabel}>Icon</span>
@@ -156,17 +129,16 @@ export function TagModal({ slot, editIndex, onClose }: Props) {
             </div>
           </div>
 
-          {/* Obsidian tags */}
           <div className={css.field}>
-            <span className={css.fieldLabel}>Obsidian tags</span>
+            <span className={css.fieldLabel}>Key (Obsidian tag)</span>
             <input
               className={css.input}
-              value={obsidian}
-              onChange={e => setObsidian(e.target.value)}
-              placeholder="e.g. sealing  (space-separated)"
+              value={key}
+              onChange={e => setKey(e.target.value)}
+              placeholder="e.g. entity.product.sealing"
             />
             <span className={css.fieldHint}>
-              Space-separated. First = most specific. Example: "banner print" → #banner + #print
+              Stable taxonomy key. Written as a single Obsidian tag on export.
             </span>
           </div>
 

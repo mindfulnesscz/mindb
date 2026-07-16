@@ -1,5 +1,7 @@
 # Data model overview
 
-Core records are `clients`, `profiles`, `assets`, `tags`, `ratings`, `comments`, `asset_events`, approvals, and version history. The repository’s generated web database types and live Supabase schema/migrations are the final reference; older standalone docs may lag newer fields such as `stable_id`, `child_id`, `variant_of`, `download_urls`, and stats views.
+Core records are `clients`, `profiles`, `client_members`, `assets`, `tags`, `ratings`, `comments`, `asset_events`, approvals, version history, and `rename_tasks`. Generated types live in `@dc-hub/database` (`npm run db:types`). Live migrations under `supabase/migrations` are authoritative.
 
-`clients` define portal identity and domain assignment. `profiles` map auth users to roles and optional clients. `assets` are delivery records containing taxonomy, lifecycle status, visibility, identity relationships, and URLs. Feedback/events reference asset IDs, which is why stable identity matters.
+`clients` define portal identity (`slug`, branding, `dimension_labels`, domain whitelist) — **not** R2 bucket fields. `profiles` map auth users to roles (`public` / `member` / `editor` / `admin`). Editors are scoped via `client_members`. `assets` are delivery records (taxonomy arrays, lifecycle, identity, CDN URLs). Tags use `shortcode` and hierarchy for portal filters. Feedback/events hang off asset UUIDs — prefer [stable identity](/desktop/identity).
+
+Field ownership: [Platform division](/getting-started/platform-division).

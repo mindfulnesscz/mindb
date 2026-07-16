@@ -10,7 +10,7 @@
 | How do cloud OAuth/uploads work? | `desktop/src/services/cloudService.ts`, `src-tauri/src/cloud.rs` |
 | How are stable IDs/manifests resolved? | `desktop/src/services/supabaseService.ts` (`resolveChildId`, `resolveCdnIdentity`) |
 | How is a new stable package/draft scaffolded? | `desktop/src/features/vocabulary/VocabularyView.tsx` (`handleCreateAsset`) |
-| How are assets synchronized? | `exportAssetsToSupabase`, `syncTagsFromVocabulary`, `syncVersionHistory` |
+| How are assets synchronized? | `exportAssetsToSupabase`, `processRenameTasks`, `syncVersionHistory` (tag tree SoT is web TagsAdmin; `syncTagsFromVocabulary` is a no-op) |
 | What can each web role do? | `web/packages/asset-library/src/permissions.ts` plus Supabase RLS/RPCs |
 | How are gallery rows adapted? | `web/apps/client-hub/src/services/assetService.ts` |
 | How does magic-link state load? | `web/apps/client-hub/src/context/AuthContext.tsx` |

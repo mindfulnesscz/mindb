@@ -1,22 +1,21 @@
-import { invoke } from '@tauri-apps/api/core';
 import { readFile, readTextFile, writeTextFile, exists as fsExists } from '@tauri-apps/plugin-fs';
 import { parseFilename, buildVocabContext } from '../domain/filenameTranslator';
 import type { CloudDestination } from '../domain/client';
-import { extractStableId } from '../domain/stableId';
+import { normalizeDestination } from '../domain/client';
+import { extractStableId, stripStableId } from '../domain/stableId';
 import { filterHighestVersions, parseVersion, compareVersions } from '../domain/version';
 import type { VocabularyData } from '../domain/vocabulary';
 import type { GalleryGroup } from '../domain/assetGrouping';
 import type { AssetVersions, CloudUrlEntry } from './pipelineService';
-import { getCurrentAccessToken } from './authService';
 import { writeReadme } from './readmeService';
 import type { AssetStatsSnapshot } from './readmeService';
+import type { SupabaseConfig } from './supabase/rest';
+import { makeHeaders, sbFetch, fetchAllForClient } from './supabase/rest';
+export type { SupabaseConfig } from './supabase/rest';
+export { requestR2Grant, type R2Grant } from './supabase/r2Grant';
+export { processRenameTasks } from './supabase/renameTasks';
 
 /* ── Types ───────────────────────────────────────────────────────────────── */
-
-export interface SupabaseConfig {
-  url:     string; // https://<project>.supabase.co
-  anonKey: string; // public API key — requests authenticate as the signed-in user
-}
 
 export interface SupabaseExportResult {
   created:        number;
@@ -116,72 +115,10 @@ export async function fetchAssetStats(
   return result;
 }
 
-/* ── Internal fetch helpers ──────────────────────────────────────────────── */
+/* fetch helpers live in supabase/rest.ts */
 
-/** Requests run as the signed-in user: the anon key identifies the project,
- * the session JWT authorizes — RLS staff policies are the write boundary.
- * The service-role key no longer exists desktop-side (authentication-plan
- * Phase 3). Throws when signed out: privileged sync fails closed. */
-function makeHeaders(anonKey: string): Record<string, string> {
-  const token = getCurrentAccessToken();
-  if (!token) throw new Error('Not signed in — Supabase sync requires an active session.');
-  return {
-    apikey:         anonKey,
-    Authorization:  `Bearer ${token}`,
-    'Content-Type': 'application/json',
-  };
-}
+/* ── Version history pagination ──────────────────────────────────────────── */
 
-interface SbRustResponse { status: number; ok: boolean; body: string }
-
-/** Proxy fetch through Rust — native networking, no webview CORS surface. */
-async function sbFetch(
-  url:     string,
-  options: { method?: string; headers: Record<string, string>; body?: string },
-): Promise<{ ok: boolean; status: number; text(): Promise<string>; json<T>(): Promise<T> }> {
-  const r = await invoke<SbRustResponse>('supabase_request', {
-    url,
-    method:  options.method ?? 'GET',
-    headers: options.headers,
-    body:    options.body,
-  });
-  return {
-    ok:     r.ok,
-    status: r.status,
-    text:   async () => r.body,
-    json:   async <T>() => JSON.parse(r.body) as T,
-  };
-}
-
-/**
- * Paginated GET for a single table. `path` is the table name optionally with
- * extra PostgREST filters already appended, e.g. 'assets?status=neq.archived'.
- * client_id, select, limit, offset are always appended.
- */
-async function fetchAllForClient<T>(
-  base:     string,
-  path:     string,
-  clientId: string,
-  select:   string,
-  headers:  Record<string, string>,
-): Promise<T[]> {
-  const PAGE = 1000;
-  const rows: T[] = [];
-  let page = 0;
-  const sep = path.includes('?') ? '&' : '?';
-  while (true) {
-    const url = `${base}/${path}${sep}client_id=eq.${clientId}&select=${select}&limit=${PAGE}&offset=${page * PAGE}`;
-    const res = await sbFetch(url, { headers });
-    if (!res.ok) throw new Error(await res.text());
-    const batch = await res.json() as T[];
-    rows.push(...batch);
-    if (batch.length < PAGE) break;
-    page++;
-  }
-  return rows;
-}
-
-/** Paginated GET for version_history rows belonging to a set of asset UUIDs. */
 async function fetchVHForAssets(
   base:     string,
   assetIds: string[],
@@ -210,41 +147,6 @@ async function fetchVHForAssets(
 
 /* ── Client ID resolution ────────────────────────────────────────────────── */
 
-/**
- * Looks up the Supabase clients.id by name. Creates the row on first run,
- * making the pipeline self-bootstrapping — no manual Supabase setup needed.
- */
-
-/* ── Storage grants — the Control API (authentication-plan Phase 3) ───────
-   The desktop holds no permanent R2 credentials. Each pipeline run requests
-   a short-lived, client-scoped grant from the r2-grant edge function, which
-   validates the session, the role, and the client assignment server-side. */
-
-export interface R2Grant {
-  endpoint:        string;
-  bucket:          string;
-  publicDomain:    string;
-  accessKeyId:     string;
-  secretAccessKey: string;
-  sessionToken:    string;
-  expiresAt:       number;
-}
-
-export async function requestR2Grant(config: SupabaseConfig, clientId: string): Promise<R2Grant> {
-  const res = await sbFetch(`${config.url}/functions/v1/r2-grant`, {
-    method:  'POST',
-    headers: makeHeaders(config.anonKey),
-    body:    JSON.stringify({ client_id: clientId }),
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    let msg = body;
-    try { msg = (JSON.parse(body) as { error?: string }).error ?? body; } catch { /* raw body */ }
-    throw new Error(`Storage grant refused (${res.status}): ${msg}`);
-  }
-  return await res.json<R2Grant>();
-}
-
 /* resolveClientId (lookup-or-create by name) is gone: clients are DB-first —
    the desktop picks a client the database already knows, so its UUID is the
    identity everywhere. Creation lives in the client picker (admin, RLS-gated). */
@@ -272,7 +174,8 @@ export async function fetchCloudDestinationDefs(
     );
     if (!res.ok) return [];
     const rows = await res.json() as Array<{ cloud_destinations: CloudDestination[] | null }>;
-    return rows[0]?.cloud_destinations ?? [];
+    const raw = rows[0]?.cloud_destinations ?? [];
+    return raw.map(d => normalizeDestination(d));
   } catch {
     return [];
   }
@@ -1036,7 +939,9 @@ export async function exportAssetsToSupabase(
 
     for (const { group, packageDir, stableId } of stableGalleries) {
       const state = await manifestState(packageDir, stableId);
-      const parentSlot = '__gallery_parent__';
+      // One parent slot per gallery folder path — two galleries in the same package
+      // (e.g. Selected vs All) must not collapse onto a shared __gallery_parent__.
+      const parentSlot = `__gallery__:${group.name}`;
       let parentChildId = state.manifest.children[parentSlot]?.child_id;
       if (!parentChildId) {
         parentChildId = nextChildId(state.used);
@@ -1050,7 +955,19 @@ export async function exportAssetsToSupabase(
       const firstChildThumb        = firstStableChild ? (cdnUrls?.get(firstStableChild) ?? null) : null;
       const firstChildOriginalUrl  = firstStableChild ? (originalUrls?.get(firstStableChild) ?? null) : null;
       const firstChildCloudUrls    = firstStableChild ? (cloudUrls?.get(firstStableChild) ?? []) : [];
-      const pp        = parseAssetForSupabase(group.name, vocab);
+      // Nested gallery paths (Galleries/Selected) — parse the leaf folder for tags/name.
+      const leafFolder = group.name.includes('/') ? group.name.slice(group.name.lastIndexOf('/') + 1) : group.name;
+      const pp         = parseAssetForSupabase(leafFolder, vocab);
+      // Package folder (OUT's parent) carries the searchable description — prefix it so
+      // "Figurative Gallery Sculpture — Studio Retouches" stays findable as one concept.
+      const packageFolder = stripStableId(packageDir.split('/').pop() ?? '');
+      const pkg           = packageFolder ? parseAssetForSupabase(packageFolder, vocab) : null;
+      const galleryLabel  = (pp.name || leafFolder).trim();
+      const packageLabel  = (pkg?.name || '').trim();
+      const displayName   = packageLabel && galleryLabel && packageLabel !== galleryLabel
+        ? `${packageLabel} — ${galleryLabel}`
+        : (packageLabel || galleryLabel);
+      const uniq = (arr: string[]) => [...new Set(arr.filter(Boolean))];
       const parentKey = `${stableId}:${parentChildId}`;
       currentStableKeys.add(parentKey);
       readmeTargets.push({ packageDir, stableId, stem: group.name });
@@ -1058,8 +975,13 @@ export async function exportAssetsToSupabase(
         key: parentKey,
         record: {
           client_id: clientId, stable_id: stableId, child_id: parentChildId,
-          shortcode: `${pp.shortcode} __${parentKey}`, name: pp.name, entities: pp.entities, formats: pp.formats,
-          angles: pp.angles, tags: pp.tags, version: pp.version,
+          shortcode: `${pp.shortcode || pkg?.shortcode || leafFolder} __${parentKey}`,
+          name: displayName,
+          entities: uniq([...(pkg?.entities ?? []), ...pp.entities]),
+          formats:  uniq([...(pkg?.formats ?? []),  ...pp.formats]),
+          angles:   uniq([...(pkg?.angles ?? []),   ...pp.angles]),
+          tags:     uniq([...(pkg?.tags ?? []),     ...pp.tags]),
+          version: pp.version || pkg?.version || '1-0-0',
           status: 'published', perm: 'public', thumbnail_url: firstChildThumb,
           download_url: firstChildOriginalUrl, download_urls: firstChildCloudUrls,
         },
@@ -1067,27 +989,29 @@ export async function exportAssetsToSupabase(
 
       for (const childStem of group.childStems) {
         const absPath  = identity!.filePaths.get(childStem);
-        const filename = absPath?.split('/').pop() ?? childStem;
+        const filename = absPath?.split('/').pop() ?? childStem.split('/').pop() ?? childStem;
         const resolved = absPath
           ? await resolveChildId(state.manifest, filename, absPath, state.used)
           : { childId: nextChildId(state.used), sha256: '', dirty: true };
         if (resolved.dirty) { state.manifest.children[filename] = { child_id: resolved.childId, sha256: resolved.sha256 }; state.dirty = true; }
 
-        const cp      = parseAssetForSupabase(childStem, vocab);
+        const fileStem = filename.replace(/\.[^.]+$/, '');
+        const cp      = parseAssetForSupabase(fileStem, vocab);
         const childKey = `${stableId}:${resolved.childId}`;
         currentStableKeys.add(childKey);
         childWrites.push({
           key: childKey, parentKey, relation: 'parent_id',
           record: {
             client_id: clientId, stable_id: stableId, child_id: resolved.childId,
-            shortcode: `${pp.shortcode}|${childStem} __${childKey}`, name: cp.name || childStem,
+            shortcode: `${pp.shortcode}|${fileStem} __${childKey}`, name: cp.name || fileStem,
             entities: cp.entities.length ? cp.entities : pp.entities,
             formats:  cp.formats.length  ? cp.formats  : pp.formats,
             angles:   cp.angles.length   ? cp.angles   : pp.angles,
             tags:     cp.tags.length     ? cp.tags     : pp.tags,
             version:  cp.version || pp.version,
-            status: 'published', perm: 'public', thumbnail_url: cdnUrls?.get(childStem) ?? null,
-            download_url: originalUrls?.get(childStem) ?? null, download_urls: cloudUrls?.get(childStem) ?? [],
+            status: 'published', perm: 'public', thumbnail_url: cdnUrls?.get(childStem) ?? cdnUrls?.get(fileStem) ?? null,
+            download_url: originalUrls?.get(childStem) ?? originalUrls?.get(fileStem) ?? null,
+            download_urls: cloudUrls?.get(childStem) ?? cloudUrls?.get(fileStem) ?? [],
           },
         });
       }
@@ -1254,130 +1178,240 @@ export async function exportAssetsToSupabase(
 
 /* ── Tag hierarchy sync ──────────────────────────────────────────────────── */
 
-const SUBTYPE_LABELS: Record<string, string> = {
-  company:     'Company',
-  product:     'Product',
-  customer:    'Customer',
-  partner:     'Partner',
-  event:       'Event',
-  'sales-mktg': 'Sales & Marketing',
-  content:     'Content',
-  context:     'Context',
-  document:    'Document',
-  media:       'Media',
-  asset:       'Asset',
-};
+interface DbTagSyncRow {
+  id: string;
+  name: string;
+  key: string | null;
+  dimension: string;
+  parent_id: string | null;
+  shortcode: string | null;
+  sort_order: number;
+}
 
-const SLOT_SUBTYPE_ORDER: Record<string, string[]> = {
-  entity: ['company', 'product', 'customer', 'partner', 'event'],
-  angle:  ['sales-mktg', 'content', 'context'],
-  format: ['document', 'media', 'asset'],
-};
+function slugifyKeyPart(s: string): string {
+  return s.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9._-]/g, '');
+}
 
-/**
- * Syncs vocabulary tag groups to the Supabase tags table.
- * Creates subtype group headers as parent tags (Company / Product / Customer …)
- * and links every leaf vocab tag to its parent. Idempotent — safe to call on
- * every pipeline run.
+/** Parent taxonomy key for a leaf: strip last key segment, or invent from parentGroup name. */
+function parentKeyForLeaf(tag: { key: string; slot: string; parentGroup: string | null }): string | null {
+  if (!tag.parentGroup?.trim()) return null;
+  const parts = tag.key.split('.').filter(Boolean);
+  if (parts.length >= 2) return parts.slice(0, -1).join('.');
+  return `${tag.slot}.${slugifyKeyPart(tag.parentGroup)}`;
+}
+
+/** Publish local leaf vocabulary → public.tags.
+ * Parent groups are portal-managed — this only upserts/deletes shortcoded leaves.
+ * Requires a signed-in staff session (RLS).
  */
 export async function syncTagsFromVocabulary(
   vocab:     VocabularyData,
   clientId:  string,
   config:    SupabaseConfig,
   appendLog: (type: string, msg: string) => void,
-): Promise<void> {
-  appendLog('section', '━━━ TAG SYNC ━━━');
-  const base    = `${config.url}/rest/v1`;
+): Promise<{ created: number; updated: number; deleted: number }> {
+  appendLog('section', '━━━ TAG SYNC (local → portal) ━━━');
+  const base    = `${config.url.replace(/\/+$/, '')}/rest/v1`;
   const headers = makeHeaders(config.anonKey);
 
-  type TagRow = { id: string; name: string; dimension: string; parent_id: string | null };
-
-  // Fetch all existing tags for this client
-  let existing: TagRow[] = [];
+  let existing: DbTagSyncRow[] = [];
   try {
-    const res = await sbFetch(
-      `${base}/tags?client_id=eq.${clientId}&select=id,name,dimension,parent_id&order=sort_order`,
-      { headers },
+    existing = await fetchAllForClient<DbTagSyncRow>(
+      base, 'tags', clientId,
+      'id,name,key,dimension,parent_id,shortcode,sort_order',
+      headers,
     );
-    if (res.ok) existing = await res.json<TagRow[]>();
-    else { appendLog('error', `  ✕  Could not fetch tags: ${await res.text()}`); return; }
   } catch (e) {
-    appendLog('error', `  ✕  Tag fetch error: ${e}`); return;
+    appendLog('error', `  ✕  Could not fetch tags: ${e}`);
+    throw e;
+  }
+  appendLog('dim', `  ${existing.length} existing tag row(s)`);
+
+  const byKey = new Map<string, DbTagSyncRow>();
+  const byShortcode = new Map<string, DbTagSyncRow>();
+  for (const r of existing) {
+    if (r.key) byKey.set(r.key, r);
+    if (r.shortcode) byShortcode.set(r.shortcode, r);
   }
 
-  const byKey = new Map<string, TagRow>(); // "dimension::name" → row
-  for (const r of existing) byKey.set(`${r.dimension}::${r.name}`, r);
+  const slots: Array<'entity' | 'angle' | 'format'> = ['entity', 'angle', 'format'];
+  let created = 0;
+  let updated = 0;
+  let deleted = 0;
 
-  const slots: Array<'entity' | 'format' | 'angle'> = ['entity', 'format', 'angle'];
-  const parentIdMap = new Map<string, string>(); // "dimension::subtype" → id
-  let parentCreated = 0, leafCreated = 0, leafUpdated = 0;
+  async function insertTag(body: Record<string, unknown>): Promise<DbTagSyncRow | null> {
+    const res = await sbFetch(`${base}/tags`, {
+      method:  'POST',
+      headers: { ...headers, Prefer: 'return=representation' },
+      body:    JSON.stringify(body),
+    });
+    if (!res.ok) {
+      appendLog('error', `  ✕  Insert failed: ${await res.text()}`);
+      return null;
+    }
+    const rows = await res.json<DbTagSyncRow[]>();
+    return rows[0] ?? null;
+  }
 
-  // Pass 1 — ensure group header (parent) tags exist
+  async function patchTag(id: string, body: Record<string, unknown>): Promise<boolean> {
+    const res = await sbFetch(`${base}/tags?id=eq.${id}`, {
+      method:  'PATCH',
+      headers: { ...headers, Prefer: 'return=minimal' },
+      body:    JSON.stringify(body),
+    });
+    if (!res.ok) {
+      appendLog('error', `  ✕  Update ${id}: ${await res.text()}`);
+      return false;
+    }
+    return true;
+  }
+
+  // Pass 1 — resolve existing portal parent groups (never create/edit groups from desktop)
+  const parentIdByGroupKey = new Map<string, string>(); // `${slot}::${parentGroupName}` → id
+
+  for (const row of existing) {
+    const isRootGroup = !row.parent_id && !(row.shortcode ?? '').trim();
+    if (!isRootGroup) continue;
+    parentIdByGroupKey.set(`${row.dimension}::${row.name}`, row.id);
+  }
+
   for (const slot of slots) {
-    const slotVocabTags = vocab.tags.filter(t => t.slot === slot);
-    const usedSubtypes  = [...new Set(slotVocabTags.map(t => t.subtype))];
-    const ordered       = (SLOT_SUBTYPE_ORDER[slot] ?? []).filter(s => usedSubtypes.includes(s as never));
-
-    for (let i = 0; i < ordered.length; i++) {
-      const subtype = ordered[i];
-      const label   = SUBTYPE_LABELS[subtype] ?? subtype;
-      const key     = `${slot}::${label}`;
-
-      if (byKey.has(key)) {
-        parentIdMap.set(`${slot}::${subtype}`, byKey.get(key)!.id);
+    for (const leaf of vocab.tags.filter(t => t.slot === slot && t.parentGroup)) {
+      const name = leaf.parentGroup!.trim();
+      const mapKey = `${slot}::${name}`;
+      if (parentIdByGroupKey.has(mapKey)) continue;
+      // Try match by derived key from leaf path
+      const gKey = parentKeyForLeaf(leaf);
+      if (gKey && byKey.get(gKey)) {
+        parentIdByGroupKey.set(mapKey, byKey.get(gKey)!.id);
         continue;
       }
-      try {
-        const res = await sbFetch(`${base}/tags`, {
-          method:  'POST',
-          headers: { ...headers, Prefer: 'return=representation' },
-          body:    JSON.stringify({ client_id: clientId, name: label, dimension: slot, parent_id: null, sort_order: (i + 1) * 1000 }),
-        });
-        if (res.ok) {
-          const rows = await res.json<TagRow[]>();
-          if (rows[0]?.id) { parentIdMap.set(`${slot}::${subtype}`, rows[0].id); parentCreated++; }
-        } else appendLog('error', `  ✕  Group "${label}": ${await res.text()}`);
-      } catch (e) { appendLog('error', `  ✕  Group "${label}": ${e}`); }
+      appendLog('dim', `  ⚠  Parent group "${name}" (${slot}) not in portal — leaf "${leaf.shortcode}" will be ungrouped`);
     }
   }
 
-  // Pass 2 — ensure leaf tags exist and point to the correct parent
-  for (const slot of slots) {
-    const slotVocabTags = vocab.tags.filter(t => t.slot === slot);
-    for (let i = 0; i < slotVocabTags.length; i++) {
-      const tag      = slotVocabTags[i];
-      const parentId = parentIdMap.get(`${slot}::${tag.subtype}`) ?? null;
-      const key      = `${slot}::${tag.label}`;
-      const row      = byKey.get(key);
+  // Pass 2 — shortcoded leaves only (groups stay portal-managed)
+  const desiredShortcodes = new Set<string>();
+  const desiredKeys = new Set<string>();
 
-      if (row) {
-        if (row.parent_id !== parentId) {
-          try {
-            await sbFetch(`${base}/tags?id=eq.${row.id}`, {
-              method:  'PATCH',
-              headers: { ...headers, Prefer: 'return=minimal' },
-              body:    JSON.stringify({ parent_id: parentId, sort_order: i }),
-            });
-            leafUpdated++;
-          } catch { /* ignore */ }
+  for (const slot of slots) {
+    const leaves = vocab.tags.filter(t => t.slot === slot);
+    for (let i = 0; i < leaves.length; i++) {
+      const tag = leaves[i];
+      const shortcode = tag.shortcode.trim();
+      if (!shortcode) continue;
+      desiredShortcodes.add(shortcode);
+      const key = tag.key.trim() || `${slot}.${slugifyKeyPart(tag.label)}`;
+      desiredKeys.add(key);
+
+      const parentId = tag.parentGroup
+        ? (parentIdByGroupKey.get(`${slot}::${tag.parentGroup.trim()}`) ?? null)
+        : null;
+
+      const existingLeaf =
+        byKey.get(key) ??
+        byShortcode.get(shortcode) ??
+        null;
+
+      if (existingLeaf) {
+        const patch: Record<string, unknown> = {};
+        if (existingLeaf.name !== tag.label) patch.name = tag.label;
+        if ((existingLeaf.key ?? null) !== key) patch.key = key;
+        if ((existingLeaf.shortcode ?? null) !== shortcode) patch.shortcode = shortcode;
+        if (existingLeaf.parent_id !== parentId) patch.parent_id = parentId;
+        if (existingLeaf.dimension !== slot) patch.dimension = slot;
+        if (existingLeaf.sort_order !== i) patch.sort_order = i;
+
+        if (Object.keys(patch).length) {
+          const oldShortcode = existingLeaf.shortcode;
+          if (await patchTag(existingLeaf.id, patch)) {
+            updated++;
+            if (
+              patch.shortcode !== undefined &&
+              oldShortcode &&
+              patch.shortcode !== oldShortcode
+            ) {
+              try {
+                await sbFetch(`${base}/rename_tasks`, {
+                  method:  'POST',
+                  headers: { ...headers, Prefer: 'return=minimal' },
+                  body: JSON.stringify({
+                    client_id: clientId,
+                    task_type: 'tag_rename',
+                    payload: {
+                      tag_id: existingLeaf.id,
+                      old_shortcode: oldShortcode,
+                      new_shortcode: shortcode,
+                    },
+                  }),
+                });
+              } catch (e) {
+                appendLog('dim', `  ⚠  rename_task enqueue failed: ${e}`);
+              }
+            }
+            Object.assign(existingLeaf, patch, { key, shortcode, parent_id: parentId, dimension: slot });
+            byKey.set(key, existingLeaf);
+            byShortcode.set(shortcode, existingLeaf);
+          }
         }
         continue;
       }
 
-      try {
-        const res = await sbFetch(`${base}/tags`, {
-          method:  'POST',
-          headers: { ...headers, Prefer: 'return=minimal' },
-          body:    JSON.stringify({ client_id: clientId, name: tag.label, dimension: slot, parent_id: parentId, sort_order: i }),
-        });
-        if (res.ok) leafCreated++;
-        else appendLog('error', `  ✕  Leaf "${tag.label}": ${await res.text()}`);
-      } catch { /* ignore */ }
+      const row = await insertTag({
+        client_id:  clientId,
+        name:       tag.label,
+        key,
+        dimension:  slot,
+        parent_id:  parentId,
+        shortcode,
+        sort_order: i,
+      });
+      if (row) {
+        created++;
+        byKey.set(key, row);
+        byShortcode.set(shortcode, row);
+        existing.push(row);
+      }
     }
   }
 
-  appendLog('dim', `  ${parentCreated} groups created · ${leafCreated} leaf tags added · ${leafUpdated} updated`);
-  appendLog('section', `━━━ TAG SYNC DONE ━━━`);
+  // Pass 3 — delete shortcoded DB leaves no longer in local vocab
+  for (const row of existing) {
+    const sc = (row.shortcode ?? '').trim();
+    if (!sc) continue;
+    const k = (row.key ?? '').trim();
+    if (desiredShortcodes.has(sc) || (k && desiredKeys.has(k))) continue;
+    try {
+      const res = await sbFetch(`${base}/tags?id=eq.${row.id}`, {
+        method: 'DELETE',
+        headers: { ...headers, Prefer: 'return=minimal' },
+      });
+      if (res.ok) {
+        deleted++;
+        if (sc) {
+          try {
+            await sbFetch(`${base}/rename_tasks`, {
+              method:  'POST',
+              headers: { ...headers, Prefer: 'return=minimal' },
+              body: JSON.stringify({
+                client_id: clientId,
+                task_type: 'tag_delete',
+                payload: { tag_id: row.id, shortcode: sc },
+              }),
+            });
+          } catch { /* non-fatal */ }
+        }
+      } else {
+        appendLog('error', `  ✕  Delete "${row.name}": ${await res.text()}`);
+      }
+    } catch (e) {
+      appendLog('error', `  ✕  Delete "${row.name}": ${e}`);
+    }
+  }
+
+  appendLog('dim', `  ${created} created · ${updated} updated · ${deleted} deleted`);
+  appendLog('section', '━━━ TAG SYNC DONE ━━━');
+  return { created, updated, deleted };
 }
 
 /* ── Version History sync ────────────────────────────────────────────────── */

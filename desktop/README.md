@@ -82,16 +82,13 @@ R2 operations are handled by native Rust commands (`upload_to_r2`, `list_r2_keys
 
 ## Multi-client support
 
-Clients are configured in the Settings view. Each client has:
+Clients are database-first (list from Supabase after sign-in). Each workstation stores machine-local fields:
 
-- Source and target folder paths
-- Cloud destinations (local, Dropbox, OneDrive, GDrive)
-- Supabase project credentials
-- Cloudflare R2 credentials
+- Source, target, and vault folder paths
+- OAuth tokens / Google client secret for cloud destinations (structure comes from the portal)
+- Last active client
 
-Client configs are stored in `tauri-plugin-store` (OS app-data dir), never in plain files.
-
-Step-by-step setup and connection instructions for each destination type are in [CLOUD_DESTINATIONS.md](CLOUD_DESTINATIONS.md).
+Step-by-step destination setup: [CLOUD_DESTINATIONS.md](CLOUD_DESTINATIONS.md). Product workflow (tags + destinations ownership): [docs/pages/getting-started/tags-and-destinations.mdx](../docs/pages/getting-started/tags-and-destinations.mdx).
 
 ---
 

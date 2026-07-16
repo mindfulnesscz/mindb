@@ -1,10 +1,18 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Client } from '@dc-hub/asset-library'
+import { canManageClients } from '@dc-hub/asset-library'
 import { useAuth } from '../../context/AuthContext'
 import { useClients } from '../../hooks/useClients'
 import { createClient, updateClient } from '../../services/clientService'
-import { fetchAllUsers, updateUserRole, type UserProfile } from '../../services/userService'
+import { uploadClientLogo } from '../../services/brandingService'
+import {
+  importTaxonomyJsonFile,
+  parseAndValidateTaxonomyJson,
+} from '../../services/taxonomyImport'
+import { TagsAdmin } from './TagsAdmin'
+import { DestinationsAdmin } from './DestinationsAdmin'
+import { fetchAllUsers, updateUserAccess, createUser, normalizeRole, type UserProfile } from '../../services/userService'
 import { isConfigured } from '../../lib/supabase'
 
 // ── DC logo mark ──────────────────────────────────────────────
@@ -77,10 +85,14 @@ function toSlug(name: string): string {
 interface ClientFormState {
   name: string; slug: string; initials: string; accent: string
   logoUrl: string; website: string; portalBg: string; domainWhitelist: string[]
+  dimEntity: string; dimAngle: string; dimFormat: string
 }
 
 function emptyForm(): ClientFormState {
-  return { name: '', slug: '', initials: '', accent: '#161616', logoUrl: '', website: '', portalBg: '', domainWhitelist: [] }
+  return {
+    name: '', slug: '', initials: '', accent: '#161616', logoUrl: '', website: '', portalBg: '',
+    domainWhitelist: [], dimEntity: 'Entity', dimAngle: 'Angle', dimFormat: 'Format',
+  }
 }
 
 function clientToForm(c: Client): ClientFormState {
@@ -88,10 +100,192 @@ function clientToForm(c: Client): ClientFormState {
     name: c.name, slug: c.slug ?? '', initials: c.initials, accent: c.accent,
     logoUrl: c.logoUrl ?? '', website: c.website ?? '', portalBg: c.portalBg ?? '',
     domainWhitelist: c.domainWhitelist ?? [],
+    dimEntity: c.dimensionLabels?.entity ?? 'Entity',
+    dimAngle:  c.dimensionLabels?.angle  ?? 'Angle',
+    dimFormat: c.dimensionLabels?.format ?? 'Format',
   }
 }
 
 const inputCls = 'w-full text-sm font-sans border border-border rounded-sm px-3 py-2 bg-bg placeholder:text-text-subtle focus:outline-none focus:border-cosmos-black transition-colors'
+
+const LOGO_ACCEPT = 'image/png,image/jpeg,image/webp,image/svg+xml,image/gif'
+const LOGO_MAX_BYTES = 2 * 1024 * 1024
+
+function LogoPreview({ src, initials, accent, size = 64 }: {
+  src?: string | null
+  initials: string
+  accent: string
+  size?: number
+}) {
+  if (src) {
+    return (
+      <img
+        src={src}
+        alt=""
+        className="rounded-[28%_38%] object-cover border border-border shrink-0"
+        style={{ width: size, height: size }}
+        onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
+      />
+    )
+  }
+  return (
+    <div
+      className="rounded-[28%_38%] flex items-center justify-center text-sm font-bold font-sans text-clear-white shrink-0 border border-border"
+      style={{ width: size, height: size, backgroundColor: accent || '#161616' }}
+    >
+      {initials || '?'}
+    </div>
+  )
+}
+
+/** Logo picker — preview + Change opens drag/drop modal. Uploads to CDN on save (no URL paste). */
+function LogoField({
+  currentUrl,
+  pendingFile,
+  onPick,
+  onClearPending,
+  initials,
+  accent,
+}: {
+  currentUrl: string
+  pendingFile: File | null
+  onPick: (file: File) => void
+  onClearPending: () => void
+  initials: string
+  accent: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [dragging, setDragging] = useState(false)
+  const [localError, setLocalError] = useState('')
+  const [objectUrl, setObjectUrl] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!pendingFile) {
+      setObjectUrl(null)
+      return
+    }
+    const url = URL.createObjectURL(pendingFile)
+    setObjectUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [pendingFile])
+
+  const previewUrl = objectUrl ?? (currentUrl || null)
+
+  function acceptFile(file: File | undefined | null) {
+    setLocalError('')
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      setLocalError('Choose an image file (PNG, JPG, WebP, SVG).')
+      return
+    }
+    if (file.size > LOGO_MAX_BYTES) {
+      setLocalError('Logo must be under 2 MB.')
+      return
+    }
+    onPick(file)
+    setOpen(false)
+  }
+
+  function onDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setDragging(false)
+    acceptFile(e.dataTransfer.files?.[0])
+  }
+
+  return (
+    <div>
+      <label className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5">Logo</label>
+      <div className="flex items-center gap-4 p-3 bg-surface-sunken rounded-sm border border-border">
+        <LogoPreview
+          src={previewUrl}
+          initials={initials}
+          accent={accent}
+          size={64}
+        />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-sans text-cosmos-black">
+            {pendingFile ? pendingFile.name : currentUrl ? 'On CDN' : 'No logo yet'}
+          </p>
+          <p className="text-[11px] font-sans text-text-muted mt-0.5">
+            {pendingFile
+              ? 'Will upload to CDN when you save.'
+              : 'Displayed on the portal welcome and admin cards.'}
+          </p>
+          <div className="flex flex-wrap gap-2 mt-2">
+            <button
+              type="button"
+              onClick={() => { setLocalError(''); setOpen(true) }}
+              className="px-3 py-1.5 text-[11px] font-sans font-semibold border border-cosmos-black rounded-sm hover:bg-cosmos-black hover:text-clear-white transition-colors"
+            >
+              {currentUrl || pendingFile ? 'Change logo' : 'Add logo'}
+            </button>
+            {pendingFile && (
+              <button
+                type="button"
+                onClick={onClearPending}
+                className="px-3 py-1.5 text-[11px] font-sans text-text-muted hover:text-cosmos-black transition-colors"
+              >
+                Undo selection
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {open && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center px-4"
+          style={{ backdropFilter: 'blur(4px)', backgroundColor: 'rgba(22,22,22,0.45)' }}
+          onClick={e => { if (e.target === e.currentTarget) setOpen(false) }}
+        >
+          <div
+            className="w-full max-w-md bg-bg border border-cosmos-black rounded-sm overflow-hidden"
+            style={{ boxShadow: '6px 6px 0 #161616' }}
+          >
+            <div className="px-5 pt-5 pb-3 border-b border-border flex items-center justify-between">
+              <h3 className="font-serif text-lg font-medium text-cosmos-black">Upload logo</h3>
+              <button type="button" onClick={() => setOpen(false)} className="text-text-muted hover:text-cosmos-black text-xl leading-none">×</button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div
+                onDragEnter={e => { e.preventDefault(); setDragging(true) }}
+                onDragOver={e => { e.preventDefault(); setDragging(true) }}
+                onDragLeave={e => { e.preventDefault(); setDragging(false) }}
+                onDrop={onDrop}
+                className={`flex flex-col items-center justify-center gap-3 px-4 py-10 border-2 border-dashed rounded-sm transition-colors ${
+                  dragging ? 'border-cosmos-black bg-surface-sunken' : 'border-border bg-bg'
+                }`}
+              >
+                <LogoPreview src={null} initials={initials || 'LG'} accent={accent} size={48} />
+                <p className="text-sm font-sans text-cosmos-black text-center">
+                  Drag & drop an image here
+                </p>
+                <p className="text-[11px] font-sans text-text-muted">PNG, JPG, WebP, or SVG · max 2 MB</p>
+                <button
+                  type="button"
+                  onClick={() => inputRef.current?.click()}
+                  className="mt-1 px-4 py-2 text-sm font-sans font-semibold bg-cosmos-black text-clear-white rounded-sm hover:bg-ink-800 transition-colors"
+                  style={{ boxShadow: '4px 4px 0 #161616' }}
+                >
+                  Browse files
+                </button>
+                <input
+                  ref={inputRef}
+                  type="file"
+                  accept={LOGO_ACCEPT}
+                  className="hidden"
+                  onChange={e => acceptFile(e.target.files?.[0])}
+                />
+              </div>
+              {localError && <p className="text-[11px] font-sans text-signal-error">{localError}</p>}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ── Client drawer ─────────────────────────────────────────────
 
@@ -103,8 +297,19 @@ function ClientDrawer({ editing, onClose, onSaved }: {
   const [form, setForm] = useState<ClientFormState>(editing ? clientToForm(editing) : emptyForm())
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [logoFile, setLogoFile] = useState<File | null>(null)
+  const [logoUploadError, setLogoUploadError] = useState('')
+  const [taxonomyFile, setTaxonomyFile] = useState<File | null>(null)
+  const [taxonomyHint, setTaxonomyHint] = useState('')
 
-  useEffect(() => { setForm(editing ? clientToForm(editing) : emptyForm()); setError('') }, [editing])
+  useEffect(() => {
+    setForm(editing ? clientToForm(editing) : emptyForm())
+    setError('')
+    setLogoFile(null)
+    setLogoUploadError('')
+    setTaxonomyFile(null)
+    setTaxonomyHint('')
+  }, [editing])
 
   function set<K extends keyof ClientFormState>(key: K, val: ClientFormState[K]) {
     if (key === 'name' && !editing) {
@@ -114,18 +319,64 @@ function ClientDrawer({ editing, onClose, onSaved }: {
     }
   }
 
+  async function onTaxonomyFileChosen(file: File | null) {
+    setTaxonomyFile(file)
+    setTaxonomyHint('')
+    if (!file) return
+    const text = await file.text()
+    const result = parseAndValidateTaxonomyJson(text)
+    if (!result.ok || !result.document) {
+      setTaxonomyFile(null)
+      setError(result.errors.join('; ') || 'Invalid taxonomy JSON')
+      return
+    }
+    setError('')
+    setForm(f => ({
+      ...f,
+      dimEntity: result.document!.dimension_labels.entity,
+      dimAngle: result.document!.dimension_labels.angle,
+      dimFormat: result.document!.dimension_labels.format,
+    }))
+    setTaxonomyHint(
+      `Valid — ${result.document.nodes.length} node(s)` +
+        (result.document.name ? ` · ${result.document.name}` : ''),
+    )
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!form.name.trim()) return
-    setSaving(true); setError('')
+    if (!form.slug.trim()) {
+      setError('Portal URL slug is required so the client can be opened.')
+      return
+    }
+    setSaving(true); setError(''); setLogoUploadError('')
     try {
       const payload = {
-        name: form.name.trim(), slug: form.slug.trim() || undefined,
+        name: form.name.trim(), slug: form.slug.trim(),
         initials: form.initials.trim() || getInitials(form.name), accent: form.accent,
-        logoUrl: form.logoUrl.trim() || undefined, website: form.website.trim() || undefined,
+        website: form.website.trim() || undefined,
         portalBg: form.portalBg.trim() || undefined, domainWhitelist: form.domainWhitelist,
+        dimensionLabels: { entity: form.dimEntity.trim(), angle: form.dimAngle.trim(), format: form.dimFormat.trim() },
       }
-      editing ? await updateClient(editing.id, payload) : await createClient(payload)
+      const saved = editing
+        ? await updateClient(editing.id, payload)
+        : await createClient(payload)
+      if (!editing && taxonomyFile && saved.id) {
+        await importTaxonomyJsonFile(saved.id, taxonomyFile, { replaceExisting: false })
+      }
+      if (logoFile && saved.id) {
+        try {
+          const url = await uploadClientLogo(saved.id, logoFile)
+          await updateClient(saved.id, { logoUrl: url })
+          setForm(f => ({ ...f, logoUrl: url }))
+          setLogoFile(null)
+        } catch (logoErr) {
+          setLogoUploadError(logoErr instanceof Error ? logoErr.message : String(logoErr))
+          setSaving(false)
+          return
+        }
+      }
       onSaved()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -167,21 +418,65 @@ function ClientDrawer({ editing, onClose, onSaved }: {
             </div>
           </div>
 
-          <div className="flex items-center gap-3 p-3 bg-surface-sunken rounded-sm border border-border">
-            {form.logoUrl
-              ? <img src={form.logoUrl} alt="" className="w-10 h-10 rounded-[28%_38%] object-cover" onError={e => { (e.target as HTMLImageElement).style.display = 'none' }} />
-              : <div className="w-10 h-10 rounded-[28%_38%] flex items-center justify-center text-sm font-bold font-sans text-clear-white shrink-0" style={{ backgroundColor: form.accent }}>{form.initials || getInitials(form.name) || '?'}</div>
-            }
-            <div>
-              <p className="text-sm font-sans font-semibold text-cosmos-black">{form.name || 'Client name'}</p>
-              {form.website && <p className="text-[11px] font-sans text-text-muted">{form.website}</p>}
+          <LogoField
+            currentUrl={form.logoUrl}
+            pendingFile={logoFile}
+            onPick={file => { setLogoFile(file); setLogoUploadError('') }}
+            onClearPending={() => setLogoFile(null)}
+            initials={form.initials || getInitials(form.name)}
+            accent={form.accent}
+          />
+          {logoUploadError && (
+            <div className="p-3 border border-signal-error/40 bg-signal-error/5 rounded-sm">
+              <p className="text-[11px] font-sans font-semibold text-signal-error mb-1">Logo upload failed</p>
+              <p className="text-[11px] font-sans text-signal-error">{logoUploadError}</p>
+              <p className="text-[11px] font-sans text-text-muted mt-2">
+                Client details were saved. Fix storage secrets on staging, then Change logo and save again.
+              </p>
             </div>
-          </div>
+          )}
 
           <div>
-            <label className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5">Logo URL</label>
-            <input type="url" value={form.logoUrl} onChange={e => set('logoUrl', e.target.value)} placeholder="https://acme.com/logo.png" className={`${inputCls} font-mono`} />
+            <label className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5">Taxonomy labels (display only)</label>
+            <div className="grid grid-cols-3 gap-2">
+              <input type="text" value={form.dimEntity} onChange={e => set('dimEntity', e.target.value)} placeholder="Entity" className={inputCls} />
+              <input type="text" value={form.dimAngle} onChange={e => set('dimAngle', e.target.value)} placeholder="Angle" className={inputCls} />
+              <input type="text" value={form.dimFormat} onChange={e => set('dimFormat', e.target.value)} placeholder="Format" className={inputCls} />
+            </div>
+            <p className="text-[11px] font-sans text-text-subtle mt-1">Internal keys stay entity/angle/format — these are per-client display names (e.g. WHY / HOW / WHAT).</p>
           </div>
+
+          {!editing && (
+            <div>
+              <label className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5">
+                Taxonomy JSON (optional)
+              </label>
+              <input
+                type="file"
+                accept="application/json,.json"
+                onChange={e => void onTaxonomyFileChosen(e.target.files?.[0] ?? null)}
+                className="text-sm font-sans w-full"
+              />
+              <p className="text-[11px] font-sans text-text-subtle mt-1">
+                Import labels + tag tree on create.{' '}
+                <a href="/taxonomy.sample.json" download className="underline hover:text-cosmos-black">
+                  Download sample
+                </a>
+              </p>
+              {taxonomyHint && (
+                <p className="text-[11px] font-sans text-cosmos-black mt-1">{taxonomyHint}</p>
+              )}
+              {taxonomyFile && (
+                <button
+                  type="button"
+                  onClick={() => { setTaxonomyFile(null); setTaxonomyHint('') }}
+                  className="text-[11px] font-sans text-text-muted hover:text-cosmos-black mt-1"
+                >
+                  Clear file
+                </button>
+              )}
+            </div>
+          )}
 
           <div>
             <label className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5">Website</label>
@@ -189,12 +484,14 @@ function ClientDrawer({ editing, onClose, onSaved }: {
           </div>
 
           <div>
-            <label className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5">Portal URL slug</label>
+            <label className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5">
+              Portal URL slug <span className="text-signal-error">*</span>
+            </label>
             <div className="flex items-center border border-border rounded-sm overflow-hidden focus-within:border-cosmos-black transition-colors">
               <span className="px-3 py-2 text-sm font-sans text-text-muted bg-surface-sunken border-r border-border whitespace-nowrap">/</span>
-              <input type="text" value={form.slug} onChange={e => set('slug', e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} placeholder="acme-corp" className="flex-1 px-3 py-2 text-sm font-mono bg-bg placeholder:text-text-subtle focus:outline-none" />
+              <input type="text" value={form.slug} onChange={e => set('slug', e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} placeholder="acme-corp" required className="flex-1 px-3 py-2 text-sm font-mono bg-bg placeholder:text-text-subtle focus:outline-none" />
             </div>
-            <p className="text-[11px] font-sans text-text-subtle mt-1">Share this URL with clients for their branded sign-in page.</p>
+            <p className="text-[11px] font-sans text-text-subtle mt-1">Required — share this URL with clients for their branded sign-in page.</p>
           </div>
 
           <div>
@@ -209,6 +506,19 @@ function ClientDrawer({ editing, onClose, onSaved }: {
             <p className="text-[11px] font-sans text-text-subtle mt-1">Users with matching email domains are auto-assigned to this client. Press Enter or comma to add.</p>
           </div>
 
+          {editing && (
+            <div className="pt-4 border-t border-border space-y-8">
+              <div>
+                <p className="text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-3">Tags (source of truth)</p>
+                <TagsAdmin client={editing} onClientUpdated={onSaved} />
+              </div>
+              <div>
+                <p className="text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-3">Export destinations</p>
+                <DestinationsAdmin client={editing} />
+              </div>
+            </div>
+          )}
+
           {error && <p className="text-[11px] font-sans text-signal-error">{error}</p>}
         </form>
 
@@ -221,7 +531,7 @@ function ClientDrawer({ editing, onClose, onSaved }: {
             className="px-4 py-2 text-sm font-sans font-semibold bg-cosmos-black text-clear-white rounded-sm disabled:opacity-40 hover:bg-ink-800 transition-colors"
             style={form.name.trim() ? { boxShadow: '4px 4px 0 #161616' } : undefined}
           >
-            {saving ? 'Saving…' : editing ? 'Save changes' : 'Create client'}
+            {saving ? (logoFile ? 'Uploading logo…' : 'Saving…') : editing ? 'Save changes' : 'Create client'}
           </button>
         </div>
       </div>
@@ -231,22 +541,25 @@ function ClientDrawer({ editing, onClose, onSaved }: {
 
 // ── Admin client card ─────────────────────────────────────────
 
-function AdminClientCard({ client, onNavigate, onEdit }: {
+function AdminClientCard({ client, onNavigate, onEdit, canEdit }: {
   client: Client
   onNavigate: () => void
   onEdit: () => void
+  canEdit: boolean
 }) {
   return (
     <div
       className="relative group p-5 bg-surface border border-border hover:border-cosmos-black rounded-sm transition-colors cursor-pointer"
       onClick={onNavigate}
     >
+      {canEdit && (
       <button
         onClick={e => { e.stopPropagation(); onEdit() }}
         className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 text-[11px] font-sans text-text-muted hover:text-cosmos-black transition-all px-2 py-1 rounded-chip border border-transparent hover:border-border"
       >
         Edit
       </button>
+      )}
 
       {client.logoUrl ? (
         <img src={client.logoUrl} alt={client.name} className="w-10 h-10 rounded-[28%_38%] object-cover mb-3" />
@@ -380,39 +693,250 @@ function AdminSignIn() {
   )
 }
 
-// ── Users view ────────────────────────────────────────────────
-
 const ROLE_OPTIONS = ['public', 'member', 'editor', 'admin'] as const
 const ROLE_LABELS: Record<string, string> = {
   public: 'Public', member: 'Member', editor: 'Editor', admin: 'Admin',
 }
 
+// ── New user drawer ───────────────────────────────────────────
+
+function UserCreateDrawer({ clients, onClose, onCreated }: {
+  clients: Client[]
+  onClose: () => void
+  onCreated: () => void
+}) {
+  const [email, setEmail] = useState('')
+  const [name, setName] = useState('')
+  const [role, setRole] = useState<string>('member')
+  const [clientId, setClientId] = useState('')
+  const [memberClientIds, setMemberClientIds] = useState<string[]>([])
+  const [sendInvitation, setSendInvitation] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    const trimmedEmail = email.trim().toLowerCase()
+    if (!trimmedEmail) return
+    if (role === 'member' && !clientId) {
+      setError('Select a client for members.')
+      return
+    }
+    if (role === 'editor' && memberClientIds.length === 0) {
+      setError('Select at least one client for editors.')
+      return
+    }
+    setSaving(true); setError('')
+    try {
+      await createUser({
+        email: trimmedEmail,
+        name: name.trim() || undefined,
+        role,
+        clientId: role === 'member' ? clientId : null,
+        memberClientIds: role === 'editor' ? memberClientIds : undefined,
+        sendInvitation,
+      })
+      onCreated()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function toggleEditorClient(id: string) {
+    setMemberClientIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id],
+    )
+  }
+
+  return (
+    <>
+      <div className="fixed inset-0 bg-cosmos-black/20 z-40" onClick={onClose} />
+      <div className="fixed right-0 top-0 h-full w-full max-w-[420px] bg-bg border-l border-border z-50 flex flex-col shadow-xl">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
+          <h2 className="font-serif text-lg font-medium text-cosmos-black">New user</h2>
+          <button onClick={onClose} className="text-text-muted hover:text-cosmos-black transition-colors text-xl leading-none">×</button>
+        </div>
+
+        <form onSubmit={handleSubmit} id="user-create-form" className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
+          <div>
+            <label className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5">
+              Email <span className="text-signal-error">*</span>
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              placeholder="colleague@company.com"
+              required
+              autoFocus
+              className={inputCls}
+            />
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5">Name</label>
+            <input
+              type="text"
+              value={name}
+              onChange={e => setName(e.target.value)}
+              placeholder="Jana Kovářová"
+              className={inputCls}
+            />
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5">Role</label>
+            <select
+              value={role}
+              onChange={e => setRole(e.target.value)}
+              className={`${inputCls} cursor-pointer`}
+            >
+              {ROLE_OPTIONS.map(r => (
+                <option key={r} value={r}>{ROLE_LABELS[r]}</option>
+              ))}
+            </select>
+          </div>
+
+          {role === 'member' && (
+            <div>
+              <label className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5">
+                Client <span className="text-signal-error">*</span>
+              </label>
+              <select
+                value={clientId}
+                onChange={e => setClientId(e.target.value)}
+                required
+                className={`${inputCls} cursor-pointer`}
+              >
+                <option value="">Select client…</option>
+                {clients.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {role === 'editor' && (
+            <div>
+              <label className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5">
+                Clients <span className="text-signal-error">*</span>
+              </label>
+              <div className="flex flex-wrap gap-2 p-3 border border-border rounded-sm bg-surface-sunken">
+                {clients.map(c => (
+                  <label key={c.id} className="flex items-center gap-1.5 text-sm font-sans cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={memberClientIds.includes(c.id)}
+                      onChange={() => toggleEditorClient(c.id)}
+                    />
+                    {c.name}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <label className="flex items-start gap-3 cursor-pointer group p-3 border border-border rounded-sm bg-surface-sunken">
+            <input
+              type="checkbox"
+              checked={sendInvitation}
+              onChange={e => setSendInvitation(e.target.checked)}
+              className="mt-0.5 shrink-0 accent-cosmos-black"
+            />
+            <span className="text-sm font-sans text-cosmos-black group-hover:text-cosmos-black">
+              Send invitation email
+              <span className="block text-[11px] text-text-muted mt-1 font-normal">
+                {sendInvitation
+                  ? 'Supabase sends a sign-in link to this address.'
+                  : 'Creates the account silently — they can sign in later via magic link.'}
+              </span>
+            </span>
+          </label>
+
+          {error && (
+            <div className="p-3 border border-signal-error/40 bg-signal-error/5 rounded-sm">
+              <p className="text-[11px] font-sans text-signal-error">{error}</p>
+            </div>
+          )}
+        </form>
+
+        <div className="flex items-center justify-between px-6 py-4 border-t border-border shrink-0">
+          <button type="button" onClick={onClose} className="text-sm font-sans text-text-muted hover:text-cosmos-black transition-colors">
+            Cancel
+          </button>
+          <button
+            form="user-create-form"
+            type="submit"
+            disabled={saving || !email.trim()}
+            className="px-4 py-2 text-sm font-sans font-semibold bg-cosmos-black text-clear-white rounded-sm disabled:opacity-40 hover:bg-ink-800 transition-colors"
+            style={email.trim() ? { boxShadow: '4px 4px 0 #161616' } : undefined}
+          >
+            {saving ? 'Creating…' : sendInvitation ? 'Create & invite' : 'Create user'}
+          </button>
+        </div>
+      </div>
+    </>
+  )
+}
+
+// ── Users view ────────────────────────────────────────────────
+
 function UsersView({ isAdmin }: { isAdmin: boolean }) {
   const { profile: self } = useAuth()
+  const { clients } = useClients()
   const [users, setUsers] = useState<UserProfile[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState<string | null>(null)
+  const [draftClient, setDraftClient] = useState<Record<string, string>>({})
+  const [draftMembers, setDraftMembers] = useState<Record<string, string[]>>({})
+  const [createOpen, setCreateOpen] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true); setError('')
-    try { setUsers(await fetchAllUsers()) }
+    try {
+      const list = await fetchAllUsers()
+      setUsers(list)
+      const clientDraft: Record<string, string> = {}
+      const memberDraft: Record<string, string[]> = {}
+      for (const u of list) {
+        if (u.clientId) clientDraft[u.id] = u.clientId
+        if (u.memberClientIds?.length) memberDraft[u.id] = u.memberClientIds
+      }
+      setDraftClient(clientDraft)
+      setDraftMembers(memberDraft)
+    }
     catch (e) { setError(e instanceof Error ? e.message : String(e)) }
     finally { setLoading(false) }
   }, [])
 
   useEffect(() => { load() }, [load])
 
-  async function handleRoleChange(userId: string, role: string) {
-    setSaving(userId)
+  async function saveAccess(user: UserProfile) {
+    const role = user.role
+    setSaving(user.id)
     try {
-      await updateUserRole(userId, role)
-      setUsers(u => u.map(p => p.id === userId ? { ...p, role } : p))
+      await updateUserAccess({
+        userId: user.id,
+        role,
+        clientId: role === 'member' ? (draftClient[user.id] ?? null) : null,
+        memberClientIds: role === 'editor' ? (draftMembers[user.id] ?? []) : undefined,
+      })
+      await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setSaving(null)
     }
+  }
+
+  async function handleRoleChange(userId: string, role: string) {
+    setUsers(u => u.map(p => p.id === userId ? { ...p, role } : p))
+    const user = users.find(u => u.id === userId)
+    if (!user) return
+    await saveAccess({ ...user, role })
   }
 
   if (loading) return (
@@ -424,13 +948,26 @@ function UsersView({ isAdmin }: { isAdmin: boolean }) {
   if (error) return <p className="text-sm font-sans text-signal-error">{error}</p>
 
   return (
-    <div className="rounded-sm border border-border overflow-hidden">
+    <>
+      {isAdmin && (
+        <div className="flex justify-end mb-4">
+          <button
+            onClick={() => setCreateOpen(true)}
+            className="text-sm font-sans font-semibold border-2 border-cosmos-black px-4 py-2 rounded-sm hover:bg-cosmos-black hover:text-clear-white transition-colors"
+            style={{ boxShadow: '4px 4px 0 #161616' }}
+          >
+            + New user
+          </button>
+        </div>
+      )}
+
+      <div className="rounded-sm border border-border overflow-hidden">
       <table className="w-full text-sm font-sans">
         <thead>
           <tr className="border-b border-border bg-surface-sunken">
             <th className="text-left text-[10px] font-bold uppercase tracking-label text-text-muted px-4 py-3">User</th>
             <th className="text-left text-[10px] font-bold uppercase tracking-label text-text-muted px-4 py-3">Email</th>
-            <th className="text-left text-[10px] font-bold uppercase tracking-label text-text-muted px-4 py-3">Client</th>
+            <th className="text-left text-[10px] font-bold uppercase tracking-label text-text-muted px-4 py-3">Access</th>
             <th className="text-left text-[10px] font-bold uppercase tracking-label text-text-muted px-4 py-3">Role</th>
           </tr>
         </thead>
@@ -446,7 +983,49 @@ function UsersView({ isAdmin }: { isAdmin: boolean }) {
                 </div>
               </td>
               <td className="px-4 py-3 font-mono text-text-muted text-[11px]">{u.email}</td>
-              <td className="px-4 py-3 text-text-muted">{u.clientName ?? '—'}</td>
+              <td className="px-4 py-3 text-text-muted min-w-[180px]">
+                {isAdmin && u.id !== self?.id && u.role === 'member' ? (
+                  <select
+                    value={draftClient[u.id] ?? u.clientId ?? ''}
+                    disabled={saving === u.id}
+                    onChange={e => {
+                      const clientId = e.target.value
+                      setDraftClient(prev => ({ ...prev, [u.id]: clientId }))
+                      void saveAccess({ ...u, role: 'member', clientId: clientId || null })
+                    }}
+                    className="text-sm font-sans border border-border rounded-sm px-2 py-1 bg-bg w-full"
+                  >
+                    <option value="">Select client…</option>
+                    {clients.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                ) : isAdmin && u.id !== self?.id && u.role === 'editor' ? (
+                  <div className="flex flex-wrap gap-1">
+                    {clients.map(c => {
+                      const checked = (draftMembers[u.id] ?? u.memberClientIds ?? []).includes(c.id)
+                      return (
+                        <label key={c.id} className="flex items-center gap-1 text-[11px] cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={saving === u.id}
+                            onChange={() => {
+                              const cur = draftMembers[u.id] ?? u.memberClientIds ?? []
+                              const ids = cur.includes(c.id) ? cur.filter(id => id !== c.id) : [...cur, c.id]
+                              setDraftMembers(prev => ({ ...prev, [u.id]: ids }))
+                              void saveAccess({ ...u, role: 'editor', memberClientIds: ids })
+                            }}
+                          />
+                          {c.name}
+                        </label>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <span>{u.clientName ?? (u.memberClientIds?.length ? `${u.memberClientIds.length} client(s)` : '—')}</span>
+                )}
+              </td>
               <td className="px-4 py-3">
                 {isAdmin && u.id !== self?.id ? (
                   <select
@@ -469,7 +1048,16 @@ function UsersView({ isAdmin }: { isAdmin: boolean }) {
           ))}
         </tbody>
       </table>
-    </div>
+      </div>
+
+      {createOpen && (
+        <UserCreateDrawer
+          clients={clients}
+          onClose={() => setCreateOpen(false)}
+          onCreated={() => { setCreateOpen(false); void load() }}
+        />
+      )}
+    </>
   )
 }
 
@@ -482,6 +1070,8 @@ function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
   const [tab, setTab] = useState<'clients' | 'users'>('clients')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [editingClient, setEditingClient] = useState<Client | null>(null)
+  const role = normalizeRole(profile?.role ?? 'public')
+  const manageClients = canManageClients(role)
 
   function openCreate() { setEditingClient(null); setDrawerOpen(true) }
   function openEdit(client: Client) { setEditingClient(client); setDrawerOpen(true) }
@@ -523,7 +1113,7 @@ function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
           <>
             <div className="flex items-center justify-between mb-8">
               <h1 className="font-serif text-2xl font-medium text-cosmos-black">Clients</h1>
-              {!usingMock && (
+              {!usingMock && manageClients && (
                 <button
                   onClick={openCreate}
                   className="text-sm font-sans font-semibold border-2 border-cosmos-black px-4 py-2 rounded-sm bg-bg text-cosmos-black hover:bg-cosmos-black hover:text-clear-white transition-colors"
@@ -546,7 +1136,7 @@ function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
               <div className="py-20 text-center">
                 <p className="font-serif text-lg font-medium text-cosmos-black mb-2">No clients yet</p>
                 <p className="font-sans text-sm text-text-muted mb-6">Create your first client to get started.</p>
-                {!usingMock && (
+                {!usingMock && manageClients && (
                   <button onClick={openCreate} className="text-sm font-sans font-semibold border-2 border-cosmos-black px-6 py-2.5 rounded-sm hover:bg-cosmos-black hover:text-clear-white transition-colors">
                     + New client
                   </button>
@@ -558,7 +1148,15 @@ function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
                   <AdminClientCard
                     key={client.id}
                     client={client}
-                    onNavigate={() => client.slug && navigate(`/${client.slug}`)}
+                    canEdit={manageClients}
+                    onNavigate={() => {
+                      if (client.slug) {
+                        navigate(`/${client.slug}`)
+                        return
+                      }
+                      // No portal slug → open edit so admins can set one (click used to no-op).
+                      if (manageClients) openEdit(client)
+                    }}
                     onEdit={() => openEdit(client)}
                   />
                 ))}
@@ -627,8 +1225,8 @@ export default function AdminLandingPage() {
 
   if (!session) return <AdminSignIn />
 
-  if (profile?.role === 'admin') return <AdminDashboard isAdmin />
-  if (profile?.role === 'editor') return <EditorRouter />
+  if (profile && normalizeRole(profile.role) === 'admin') return <AdminDashboard isAdmin />
+  if (profile && normalizeRole(profile.role) === 'editor') return <EditorRouter />
 
   if (profile) {
     return (

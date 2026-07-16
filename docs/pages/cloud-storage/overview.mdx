@@ -1,14 +1,18 @@
 # Cloud destination comparison
 
-Cloud destinations are optional delivery copies, distinct from R2. A destination has a provider, name, internal/client role, enabled selection state, remote path, link toggle, credentials, and token. The pipeline uploads each scanned file separately with concurrency two.
+Cloud destinations are optional delivery copies, distinct from R2. **Structure is portal-owned** (`clients.cloud_destinations`); each workstation stores OAuth tokens (and Google client secret) locally after Sync. Full workflow: [Tags and export destinations](/getting-started/tags-and-destinations).
+
+A destination has a provider, name, pipeline role (`internal` / `client`), portal `minRole`, enabled flags, remote path, link toggle, credentials, and token. The pipeline uploads each scanned file separately with concurrency two.
 
 | Provider | Sign-in | Existing-name behavior | Structure | Best fit | Main weakness |
 |---|---|---|---|---|---|
 | Local | None | mtime/size skip in local publishing | Can mirror folders | Synced enterprise folder, inspectable output | Depends on another sync client; local disk coupling |
 | Dropbox | Browser PKCE | **Skips if path exists**, regardless of changed content | Cloud stage is flat into remote path | Simple delivery, stable shared links | Existing remote file can become stale |
 | OneDrive | Device code | PUT overwrites same path | Cloud stage is flat | Microsoft 365 users | Conditional Access; simple upload is memory/CORS-sensitive |
-| Google Drive | Browser PKCE plus client secret | Current code POSTs a **new file**; duplicate names can accumulate | Lazily creates remote folders | Workspace/Shared Drive collaboration | Duplicate files; public permission creation; full-file memory upload |
+| Google Drive | Browser PKCE plus client secret | Skip same-name+size; update in place when changed | Lazily creates remote folders | Workspace/Shared Drive collaboration | Full-file memory upload; public permission creation |
 
 All three provider uploads are one API operation per file, not a zip or transactional batch. OneDrive and Google Drive read the complete file into the webview’s memory. Dropbox uses native Rust to avoid webview binary limits.
 
-Only generated links from destinations with role `client` are sent toward the client-facing `download_urls` metadata. R2 `download_url` remains the web portal’s primary download today.
+Only generated links from destinations with role `client` are written to `download_urls`. The portal then role-gates those links with `minRole` / `showInPortal`. R2 `download_url` remains the primary Download button — see [CDN and cloud URLs](/data-model/cloud-links).
+
+Provider-specific setup (Azure tenant, Shared Drive id, redirect URI `http://localhost:7623/callback`) lives under this section’s provider pages and in `desktop/CLOUD_DESTINATIONS.md`.

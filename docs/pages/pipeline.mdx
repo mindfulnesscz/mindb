@@ -1,23 +1,23 @@
 # Asset Pipeline
 
-The asset pipeline is a **desktop application** (`desktop`) built with [Tauri 2](https://tauri.app/) — a Rust backend with a React/TypeScript frontend. It runs locally on a DC Collective machine and is responsible for processing creative files and publishing them to the platform.
+The asset pipeline is a **desktop application** (`desktop`) built with [Tauri 2](https://tauri.app/) — a Rust backend with a React/TypeScript frontend. It runs on a signed-in staff machine (**editor** or **admin**) and processes creative files for the platform.
 
-The desktop app uses Supabase's **service role key**, which bypasses Row Level Security. This key is stored in the local app config and is never exposed to browsers or clients.
+All Supabase access uses the signed-in user's JWT under RLS. There is no service-role key on the desktop. CDN access uses short-lived `r2-grant` credentials when the environment is provisioned.
 
 ## Steps, in run order
 
-Steps 1–5 are numbered checkboxes in the app's **Tasks** panel and can each be switched on/off per run. **Scan**, **Supabase sync**, and **Version history sync** aren't checkboxes — they run automatically whenever a source folder / Supabase config is present.
+Steps 1–5 are numbered checkboxes in the app's **Tasks** panel and can each be switched on/off per run. **Scan**, **Supabase sync**, and **Version history sync** aren't checkboxes — they run automatically whenever a source folder / Supabase session is present.
 
 | Step | What it does | |
 |---|---|---|
 | Scan | Walks the source folder for every file sitting in an `OUT` folder. | [→](#scan) |
 | 1 — Generate thumbnails | Renders a WebP thumbnail per asset via the Rust backend. | [→](#1--generate-thumbnails) |
-| CDN upload | Uploads thumbnails + originals to Cloudflare R2. Runs only if thumbnails are on and R2 is configured. | [→](#cdn-upload) |
+| CDN upload | Uploads thumbnails + originals to R2 when thumbnails are on and `r2-grant` succeeds. | [→](#cdn-upload) |
 | 2 — Distribute packages | Pulls loose, non-package sibling files into their package folder, applying the naming convention. | [→](#2--distribute-packages) |
 | 3 — Export to destinations | Mirrors the `OUT` tree into a local folder (e.g. a SharePoint-synced directory), flags removed files. | [→](#3--export-to-destinations) |
 | 4 — Cloud export | Flat-uploads files to Dropbox / OneDrive / Google Drive via OAuth, generates sharing links. | [→](#4--cloud-export) |
 | 5 — Publish to DAM | Generates the Obsidian vault's markdown notes. | [→](#5--publish-to-dam) |
-| Supabase sync | Upserts `assets` rows, marks stale ones, syncs the tag hierarchy. | [→](#supabase-sync) |
+| Supabase sync | Upserts `assets` rows, marks stale ones; may process `rename_tasks`. Tags are web-admin SoT. | [→](#supabase-sync) |
 | Version history sync | Syncs the `version_history` table from files found under `versions/`. | [→](#version-history-sync) |
 
 ---
@@ -32,7 +32,7 @@ For each collected asset, the Rust backend renders a WebP thumbnail (PPTX/PDF vi
 
 ### CDN upload
 
-Runs only when thumbnails are enabled **and** the active destination has R2 credentials configured. Uploads each thumbnail and original file to Cloudflare R2, keyed by a `thumbnails/` or `originals/` prefix. At the start of a run, the pipeline pre-populates a `stem → CDN URL` map from existing DB records so already-uploaded assets are skipped — gallery children (shortcodes containing `|`) are deliberately excluded from that pre-population so the first child image is always re-verified.
+Runs only when thumbnails are enabled **and** the Control API grant succeeds (`r2-grant`). Uploads each thumbnail and original to Cloudflare R2 under `{client_id}/thumbnails/` or `{client_id}/originals/`. At the start of a run, the pipeline may pre-populate a `stem → CDN URL` map from existing DB records so already-uploaded assets are skipped — gallery children (shortcodes containing `|`) are deliberately excluded from that pre-population so the first child image is always re-verified.
 
 **Only the highest version uploads.** When several version files of one asset sit in the same folder (`v0-3-7` next to `v0-3-8`), only the highest per base+extension is eligible — they all share one version-stable object key, so uploading more than one would make them overwrite each other every run. The log reports `⊘ N older version file(s) excluded from CDN`.
 
@@ -41,7 +41,7 @@ Runs only when thumbnails are enabled **and** the active destination has R2 cred
 2. A local upload cache (mtime + size + sha256, per machine) skips unchanged files with zero network calls; the cached public URL is still recorded so the Supabase sync never sees a gap.
 3. On a cache miss, the Rust backend hashes the file and compares against the caller's cached hash or the object's `x-amz-meta-sha256` — content must differ for an actual upload to happen.
 
-Stable-identity clients key uploads per **file** (`originals/{stableId}/{childId}.ext` from the `.dchub.json` manifest), so files differing only by extension get distinct keys. A stale-sibling cleanup removes an old object when a version bump changes the file extension — but never a key claimed by another file in the same run.
+Stable-identity clients key uploads per **file** (`{client_id}/originals/{stableId}/{childId}.ext` from the `.dchub.json` manifest), so files differing only by extension get distinct keys. A stale-sibling cleanup removes an old object when a version bump changes the file extension — but never a key claimed by another file in the same run.
 
 ### 2 — Distribute packages
 
@@ -72,7 +72,7 @@ Always runs after the steps above, if a Supabase config is present for the activ
 - **Legacy (default)** — assets are matched by `shortcode`, a string derived from the filename with the version suffix stripped. A taxonomy or filename rename changes the shortcode, which the pipeline reads as "this asset disappeared" — the old row is deleted and a new one created, orphaning its ratings/comments/history. Stale rows here are **hard-deleted**.
 - **Folder-based stable identity** (`client.identityMigrated`) — assets are matched by an 8-hex-char hash suffix on their package folder (` __a1b2c3d4`), immune to filename/taxonomy renames. A per-folder `.dchub.json` manifest maps individual files to a stable child ID, with SHA-256 content-hash matching as a fallback for renamed files. Stale rows here are **soft-marked `disconnected`**, never deleted — see `CLAUDE_CODE_PROMPT_identity-migration.md` at the repo root for the full design and migration procedure (`desktop/scripts/migrate-identity.ts`).
 
-Either way, this step also cleans up R2 objects for assets no longer present on disk — except any object key still referenced by an active record (protects a gallery parent's shared thumbnail) — and syncs the vocabulary's tag hierarchy so the web portal can render collapsible tag groups.
+Either way, this step also cleans up R2 objects for assets no longer present on disk — except any object key still referenced by an active record (protects a gallery parent's shared thumbnail). Tag trees are **not** synced from vocabulary JSON (web TagsAdmin is source of truth); the desktop may process pending `rename_tasks` from web tag edits.
 
 ### Version history sync
 

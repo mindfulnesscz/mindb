@@ -1,17 +1,18 @@
 import { useState } from 'react';
-import { ChevronRight, Pencil, Trash2, Check, Plus, Search, X, FolderOpen } from 'lucide-react';
+import { ChevronRight, Pencil, Trash2, Check, Plus, Search, X, FolderOpen, RefreshCw } from 'lucide-react';
 import { mkdir, writeTextFile } from '@tauri-apps/plugin-fs';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import {
   type Slot, type VocabTag,
-  SUBTYPES, SLOT_LABELS, ENTITY_PREFIXES,
+  dimensionLabelForSlot, parentGroupsForSlot,
   buildFilenameCode, buildObsidianTags,
 } from '../../domain/vocabulary';
 import { generateStableId, appendStableId } from '../../domain/stableId';
 import { useVocabularyStore } from '../../store/vocabularyStore';
 import { useClientStore } from '../../store/clientStore';
 import { saveClients } from '../../services/clientService';
-import { createDraftAsset, fetchExistingStableIds } from '../../services/supabaseService';
+import { createDraftAsset, fetchExistingStableIds, syncTagsFromVocabulary } from '../../services/supabaseService';
+import { loadVocabulary } from '../../services/vocabService';
 import { writeReadme, README_FILENAME } from '../../services/readmeService';
 import { FolderTargetPicker } from '../../components/FolderTargetPicker';
 import { TagModal } from './TagModal';
@@ -27,8 +28,9 @@ interface VersionState { major: string; minor: string; patch: string }
 const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
 export function VocabularyView() {
-  const { data, deleteTag } = useVocabularyStore();
+  const { data, deleteTag, setData, markClean } = useVocabularyStore();
   const allTags = data?.tags ?? [];
+  const dirty = useVocabularyStore(s => s.dirty);
 
   const { clients, activeClientId, updateClient } = useClientStore();
   const activeClient = clients.find(c => c.id === activeClientId) ?? null;
@@ -39,6 +41,9 @@ export function VocabularyView() {
   const [modalSlot,  setModalSlot]  = useState<Slot>('entity');
   const [editIndex,  setEditIndex]  = useState<number | undefined>(undefined);
   const [search,     setSearch]     = useState('');
+  const [syncing,    setSyncing]    = useState(false);
+  const [syncMsg,    setSyncMsg]    = useState<string | null>(null);
+  const [syncError,  setSyncError]  = useState<string | null>(null);
 
   /* Generator state */
   const [selected,     setSelected]     = useState<Map<string, VocabTag>>(new Map());
@@ -95,6 +100,53 @@ export function VocabularyView() {
     setSelected(new Map());
     setDescription('');
     setVersion({ major: '', minor: '', patch: '' });
+  }
+
+  async function handleSync() {
+    if (!activeClientId || !activeClient) return;
+    if (!activeClient.supabaseUrl || !activeClient.supabaseAnonKey) {
+      setSyncError('Client has no Supabase connection.');
+      return;
+    }
+    if (!data) return;
+
+    const willPublish = dirty;
+    if (willPublish && !window.confirm(
+      `Sync with portal for "${activeClient.name}"?\n\n` +
+      'Local leaf changes will be published, then vocabulary is reloaded from the database.',
+    )) return;
+    if (!willPublish && !window.confirm(
+      `Reload vocabulary from portal for "${activeClient.name}"?`,
+    )) return;
+
+    setSyncing(true);
+    setSyncMsg(null);
+    setSyncError(null);
+    const lines: string[] = [];
+    try {
+      if (willPublish) {
+        const result = await syncTagsFromVocabulary(
+          data,
+          activeClient.id,
+          { url: activeClient.supabaseUrl, anonKey: activeClient.supabaseAnonKey },
+          (_type, msg) => { lines.push(msg); },
+        );
+        markClean();
+        lines.push(`Published: ${result.created} created · ${result.updated} updated · ${result.deleted} deleted`);
+      }
+      const fresh = await loadVocabulary(activeClientId, { forceFromDb: true });
+      setData(fresh, { dirty: false });
+      setSyncMsg(
+        willPublish
+          ? `Synced — ${fresh.tags.length} leaf tag(s), ${fresh.parentGroups?.length ?? 0} group(s) from portal`
+          : `Reloaded ${fresh.tags.length} leaf tag(s) from portal`,
+      );
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : String(e));
+      if (lines.length) console.warn(lines.join('\n'));
+    } finally {
+      setSyncing(false);
+    }
   }
 
   const q = search.trim().toLowerCase();
@@ -214,8 +266,27 @@ export function VocabularyView() {
               </button>
             )}
           </div>
+          <button
+            className={css.btnPublish}
+            onClick={handleSync}
+            disabled={syncing || !activeClient?.supabaseUrl}
+            title={dirty
+              ? 'Publish local leaf changes, then reload from portal'
+              : 'Reload vocabulary from portal'}
+          >
+            <RefreshCw size={13} />
+            {syncing ? 'Syncing…' : dirty ? 'Sync*' : 'Sync'}
+          </button>
         </div>
       </div>
+      {(syncMsg || syncError) && (
+        <div className={`${css.syncBanner}${syncError ? ` ${css.syncBannerError}` : ''}`}>
+          {syncError ?? syncMsg}
+          <button className={css.syncBannerDismiss} onClick={() => { setSyncMsg(null); setSyncError(null); }}>
+            <X size={12} />
+          </button>
+        </div>
+      )}
 
       {/* ── 4-column body ── */}
       <div className={css.body}>
@@ -223,6 +294,7 @@ export function VocabularyView() {
           <DimColumn
             key={slot}
             slot={slot}
+            dimLabel={dimensionLabelForSlot(activeClient, slot)}
             allTags={allTags}
             selected={selected}
             searchQuery={q}
@@ -328,6 +400,7 @@ export function VocabularyView() {
 
 interface DimColProps {
   slot:            Slot;
+  dimLabel:        string;
   allTags:         VocabTag[];
   selected:        Map<string, VocabTag>;
   searchQuery:     string;
@@ -340,9 +413,10 @@ interface DimColProps {
 }
 
 function DimColumn({
-  slot, allTags, selected, searchQuery, collapsedGroups,
+  slot, dimLabel, allTags, selected, searchQuery, collapsedGroups,
   onToggleGroup, onToggleTag, onAdd, onEdit, onDelete,
 }: DimColProps) {
+  const portalGroups = useVocabularyStore(s => s.data?.parentGroups);
   const slotTags  = allTags.filter(t => t.slot === slot);
   const searching = searchQuery.length > 0;
 
@@ -351,25 +425,30 @@ function DimColumn({
     tag.label.toLowerCase().includes(searchQuery) ||
     tag.shortcode.toLowerCase().includes(searchQuery);
 
+  const groupNames = parentGroupsForSlot(slotTags, slot, portalGroups);
+
   return (
     <div className={css.dimCol}>
       <div className={css.dimColHead}>
-        <span className={css.dimColLabel}>{SLOT_LABELS[slot]}</span>
+        <span className={css.dimColLabel}>{dimLabel}</span>
         <button className={css.btnAddCol} onClick={onAdd} title={`Add ${slot} tag`}>
           <Plus size={13} />
         </button>
       </div>
 
       <div className={css.dimColScroll}>
-        {SUBTYPES[slot].map(subtype => {
-          const group = slotTags.filter(t => t.subtype === subtype && matches(t));
-          if (!group.length) return null;
+        {groupNames.map(groupName => {
+          const group = slotTags.filter(t =>
+            matches(t) &&
+            (groupName === 'Ungrouped' ? !t.parentGroup : t.parentGroup === groupName)
+          );
+          const isPortalGroup = groupName !== 'Ungrouped'
+            && (portalGroups ?? []).some(g => g.slot === slot && g.name === groupName);
+          if (!group.length && !isPortalGroup) return null;
+          if (!group.length && searching) return null;
 
-          const groupKey = `${slot}-${subtype}`;
+          const groupKey = `${slot}-${groupName}`;
           const isOpen   = searching || !collapsedGroups.has(groupKey);
-          const prefix   = slot === 'entity'
-            ? (ENTITY_PREFIXES[subtype as keyof typeof ENTITY_PREFIXES] ?? '')
-            : '';
 
           return (
             <div key={groupKey}>
@@ -378,10 +457,7 @@ function DimColumn({
                   size={11}
                   className={`${css.subtypeCaret}${isOpen ? ` ${css.open}` : ''}`}
                 />
-                <span className={css.subtypeLabel}>{subtype}</span>
-                {slot === 'entity' && prefix && (
-                  <span className={css.subtypePrefix}>{prefix}</span>
-                )}
+                <span className={css.subtypeLabel}>{groupName}</span>
                 <span className={css.subtypeCount}>{group.length}</span>
               </div>
 

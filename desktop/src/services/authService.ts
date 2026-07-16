@@ -24,57 +24,94 @@ export const DESKTOP_ROLES = ['editor', 'admin'];
 
 export const AUTH_CALLBACK_URL = 'http://localhost:7623/auth-callback';
 
+const AUTH_TIMEOUT_MS = 12_000;
+
+/** Reject when a Supabase auth/network call stalls (common on env switch to an
+ * unreachable or misconfigured production URL — without this the boot gate
+ * shows "Connecting…" forever). */
+export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(
+        () => reject(new Error(`${label} timed out — check the environment URL, anon key, and network.`)),
+        ms,
+      );
+    }),
+  ]);
+}
+
 let client: SupabaseClient | null = null;
 let clientKey = '';
 let authSubscription: { unsubscribe: () => void } | null = null;
-
-/* The signed-in session's current access token, kept fresh by supabase-js's
- * auto-refresh via onAuthStateChange. The pipeline attaches this to every
- * PostgREST request — the service-role key no longer exists desktop-side
- * (authentication-plan Phase 3). */
 let currentAccessToken: string | null = null;
 
 export function getCurrentAccessToken(): string | null {
   return currentAccessToken;
 }
 
-export function initAuthClient(config: AuthServerConfig): SupabaseClient {
-  const key = `${config.url}::${config.anonKey}`;
-  if (client && clientKey === key) return client;
-  // Tear the previous environment's client down — its auto-refresh timers and
-  // listeners otherwise keep running and can contend with the new instance
-  // (symptom: getSession() hangs on environment switch → endless boot screen).
+function authStorageKey(url: string): string {
+  const host = url.replace(/^https?:\/\//, '').replace(/[:./]/g, '_');
+  return `dc-hub-auth-${host}`;
+}
+
+function teardownAuthClient(): void {
+  authSubscription?.unsubscribe();
+  authSubscription = null;
+  currentAccessToken = null;
   if (client) {
-    authSubscription?.unsubscribe();
-    authSubscription = null;
     try { client.auth.stopAutoRefresh(); } catch { /* already stopped */ }
   }
+  client = null;
+  clientKey = '';
+}
+
+function mountAuthClient(config: AuthServerConfig): SupabaseClient {
   client = createClient(config.url, config.anonKey, {
     auth: {
       flowType: 'pkce',
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: false,
+      storageKey: authStorageKey(config.url),
     },
   });
-  clientKey = key;
-  currentAccessToken = null;
+  clientKey = `${config.url}::${config.anonKey}`;
   const { data } = client.auth.onAuthStateChange((_event, session) => {
     currentAccessToken = session?.access_token ?? null;
   });
   authSubscription = data.subscription;
-  // Prime the token from a persisted session without waiting for the listener.
-  client.auth.getSession().then(({ data }) => {
-    currentAccessToken = data.session?.access_token ?? currentAccessToken;
-  }).catch(() => { /* signed out */ });
   return client;
+}
+
+export function initAuthClient(config: AuthServerConfig): SupabaseClient {
+  const key = `${config.url}::${config.anonKey}`;
+  if (client && clientKey === key) return client;
+  teardownAuthClient();
+  return mountAuthClient(config);
+}
+
+/** Tear down the previous project's session storage lock before switching
+ * environments — without this, getSession() can stall indefinitely. */
+export async function switchAuthClient(config: AuthServerConfig): Promise<SupabaseClient> {
+  const key = `${config.url}::${config.anonKey}`;
+  if (client && clientKey === key) return client;
+
+  const previous = client;
+  teardownAuthClient();
+
+  if (previous) {
+    try {
+      await withTimeout(previous.auth.signOut({ scope: 'local' }), 4_000, 'Sign out');
+    } catch { /* best-effort — proceed with new client */ }
+  }
+
+  return mountAuthClient(config);
 }
 
 export function getAuthClient(): SupabaseClient | null {
   return client;
 }
-
-/* ── Auth server config persistence ─────────────────────────────────────── */
 
 async function authConfigPath(): Promise<string> {
   return await join(await appDataDir(), 'auth-server.json');
@@ -140,26 +177,35 @@ export async function waitForMagicLink(): Promise<Session> {
 
 export async function getSession(): Promise<Session | null> {
   if (!client) return null;
-  // Belt and braces: never let a wedged storage/lock state hang the boot.
-  // Timing out reads as "no session" — the login screen, which can recover.
-  const result = await Promise.race([
-    client.auth.getSession(),
-    new Promise<null>(resolve => setTimeout(() => resolve(null), 5000)),
-  ]);
-  return result ? result.data.session : null;
+  try {
+    const { data, error } = await withTimeout(client.auth.getSession(), AUTH_TIMEOUT_MS, 'Session lookup');
+    if (error) return null;
+    return data.session;
+  } catch {
+    return null;
+  }
 }
 
 /** The authoritative role check — the profile row, read under the user's own
  * JWT (RLS: own row readable). check_email_auth is only the pre-flight. */
 export async function loadProfile(): Promise<AuthProfile> {
   if (!client) throw new Error('Auth client not initialized');
-  const { data: userData, error: userErr } = await client.auth.getUser();
+  const { data: userData, error: userErr } = await withTimeout(
+    client.auth.getUser(),
+    AUTH_TIMEOUT_MS,
+    'User lookup',
+  );
   if (userErr || !userData.user) throw new Error(userErr?.message ?? 'No user');
-  const { data, error } = await client
+  const profileQuery = client
     .from('profiles')
     .select('id,name,role')
     .eq('id', userData.user.id)
     .single();
+  const { data, error } = await withTimeout(
+    Promise.resolve(profileQuery),
+    AUTH_TIMEOUT_MS,
+    'Profile lookup',
+  );
   if (error) throw new Error(error.message);
   return data as AuthProfile;
 }

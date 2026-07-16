@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase'
-import type { Asset, FilterState, Role } from '@dc-hub/asset-library'
+import type { Asset, FilterState, Role, AssetStatus, AssetPerm } from '@dc-hub/asset-library'
 import type { AssetRow, AssetStats } from '../lib/database.types'
 
 type AssetRowWithStats = AssetRow & { stats: AssetStats | AssetStats[] | null }
@@ -45,8 +45,8 @@ function toAsset(row: AssetRowWithStats): Asset {
     parentId: row.parent_id ?? null,
     childCount: 0,                      // enriched after fetch
     variantOf: row.variant_of ?? null,
-    status: row.status,
-    perm: row.perm,
+    status: row.status as AssetStatus,
+    perm: row.perm as AssetPerm,
     version: row.version,
     latest: row.latest,
     avg: Number(stats?.avg_rating ?? 0),
@@ -55,8 +55,28 @@ function toAsset(row: AssetRowWithStats): Asset {
     approval: 'none',
     thumbnailUrl: row.thumbnail_url ? encodeURI(row.thumbnail_url) : undefined,
     downloadUrl: row.download_url ? encodeURI(row.download_url) : undefined,
+    downloadUrls: parseDownloadUrls(row.download_urls),
+    stableId: row.stable_id ?? null,
     updatedAt: row.updated_at,
   }
+}
+
+function parseDownloadUrls(raw: unknown): Asset['downloadUrls'] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map(item => {
+      if (!item || typeof item !== 'object') return null
+      const o = item as Record<string, unknown>
+      const url = typeof o.url === 'string' ? o.url : ''
+      if (!url) return null
+      return {
+        destId: typeof o.destId === 'string' ? o.destId : undefined,
+        provider: String(o.provider ?? ''),
+        name: String(o.name ?? o.provider ?? 'Cloud'),
+        url,
+      }
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null)
 }
 
 export interface FetchAssetsOptions {

@@ -11,7 +11,7 @@
 | OneDrive AADSTS50059 | Wrong `common` authority for single tenant | Set Directory tenant GUID |
 | OneDrive 53003 | Conditional Access/device compliance | Ask Entra admin; app code cannot bypass policy |
 | OneDrive large upload fails | Whole-file simple PUT, no upload session | Use smaller file or implement chunked upload |
-| Drive creates repeated same-name files | POST-create behavior | Clean duplicates; implement ID lookup/update for overwrite semantics |
+| Drive creates repeated same-name files | Older builds always POSTed a new file | Upgrade desktop; clean duplicates once. Current builds skip unchanged (same size) and update in place when size differs |
 | Drive folder/link forbidden | Shared Drive role or Workspace sharing policy | Grant correct membership; review admin policy |
 | Google refresh token absent | Consent did not issue offline token | Revoke old grant if needed, reconnect with consent prompt |
 

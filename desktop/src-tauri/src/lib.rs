@@ -4,6 +4,7 @@ use std::process::Command;
 mod r2;
 mod cloud;
 mod supabase;
+mod reveal;
 
 fn which_soffice() -> Option<String> {
     if let Ok(out) = Command::new("which").arg("soffice").output() {
@@ -161,9 +162,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             generate_thumbnail,
             wait_for_oauth_redirect,
+            reveal::start_reveal_bridge,
+            reveal::set_reveal_client_root,
             r2::upload_to_r2,
             r2::check_r2_connection,
             r2::list_r2_keys,

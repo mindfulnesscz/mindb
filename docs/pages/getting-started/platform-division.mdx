@@ -1,0 +1,27 @@
+# Platform division
+
+DC Hub splits work between **web** (identity, portal, users, shared config) and **desktop** (pipeline, filesystem, cloud OAuth). Supabase is the source of truth for shared data; each field group has one canonical admin surface.
+
+## Field ownership
+
+| Layer | Fields | Admin surface |
+|-------|--------|---------------|
+| **Portal** | `slug`, `portal_bg`, `domain_whitelist`, `website`, `initials` | Web `/` client drawer (admin) |
+| **Branding** | `logo_url`, `accent` | Web — logo on CDN at `branding/{client_id}/` |
+| **Storage** | `R2_BUCKET`, `R2_PUBLIC_DOMAIN` | Environment edge secrets — not per client |
+| **Taxonomy labels** | `dimension_labels` (entity/angle/format display names) | Web client drawer (admin) |
+| **Tags** | `tags` tree + `shortcode` + `key` | Web **Tags**; DB is source of truth. Desktop may publish **leaves** only |
+| **Export destinations** | `cloud_destinations` structure (`minRole`, paths, flags) | Web **Export destinations** |
+| **Local-only** | folder paths, OAuth tokens, Google client secret, per-run dest checkboxes | Desktop Settings / Pipeline |
+
+Practical walkthrough: [Tags and export destinations](/getting-started/tags-and-destinations).
+
+## Rules
+
+- Never edit the same DB column from web and desktop as competing sources of truth.
+- Desktop reads portal/branding/destination structure; structure edits happen on the web.
+- Desktop may push **leaf tag** upserts/deletes and must **never** push OAuth tokens into `cloud_destinations`.
+- Object keys in R2 are prefixed `{client_id}/` within the environment bucket.
+- Rename tasks (future) queue filesystem updates when tags change on web; until then, shortcode renames do not rewrite existing filenames.
+
+See [Architecture](/getting-started/architecture), [Team staging setup](/getting-started/team-dev-setup), and [Auth & secrets roadmap](/desktop/authentication-plan).

@@ -1,229 +1,229 @@
 {
-  "_schema_version": "2.2.0",
-  "_comment": "Seed vocabulary — starting template for new clients. Stored at {appDataDir}/vocab-seed.json after first launch and can be edited directly. Each client gets its own vocab-{clientId}.json copied from this seed.",
+  "_schema_version": "4.0.0",
+  "_comment": "Legacy bundled seed (deprecated). Prefer portal taxonomy JSON import. parentGroup replaces subtype; key replaces obsidian_tag.",
   "tags": [
     {
       "shortcode": "Org",
       "slot": "entity",
-      "subtype": "company",
+      "parentGroup": "company",
       "label": "Organisation",
-      "obsidian_tag": "organisation",
+      "key": "organisation",
       "icon": ""
     },
     {
       "shortcode": "p-Product",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "Product",
-      "obsidian_tag": "product",
+      "key": "product",
       "icon": ""
     },
     {
       "shortcode": "p-Svc",
       "slot": "entity",
-      "subtype": "product",
+      "parentGroup": "product",
       "label": "Service",
-      "obsidian_tag": "service",
+      "key": "service",
       "icon": ""
     },
     {
       "shortcode": "c-Client",
       "slot": "entity",
-      "subtype": "customer",
+      "parentGroup": "customer",
       "label": "Client",
-      "obsidian_tag": "client",
+      "key": "client",
       "icon": ""
     },
     {
       "shortcode": "x-Partner",
       "slot": "entity",
-      "subtype": "partner",
+      "parentGroup": "partner",
       "label": "Partner",
-      "obsidian_tag": "partner",
+      "key": "partner",
       "icon": ""
     },
     {
       "shortcode": "e-Event",
       "slot": "entity",
-      "subtype": "event",
+      "parentGroup": "event",
       "label": "Event",
-      "obsidian_tag": "event",
+      "key": "event",
       "icon": "🎪"
     },
     {
       "shortcode": "OVR",
       "slot": "angle",
-      "subtype": "sales-mktg",
+      "parentGroup": "sales-mktg",
       "label": "Overview",
-      "obsidian_tag": "overview",
+      "key": "overview",
       "icon": ""
     },
     {
       "shortcode": "SAL",
       "slot": "angle",
-      "subtype": "sales-mktg",
+      "parentGroup": "sales-mktg",
       "label": "Sales",
-      "obsidian_tag": "sales",
+      "key": "sales",
       "icon": ""
     },
     {
       "shortcode": "CMP",
       "slot": "angle",
-      "subtype": "sales-mktg",
+      "parentGroup": "sales-mktg",
       "label": "Competitive",
-      "obsidian_tag": "competitive",
+      "key": "competitive",
       "icon": ""
     },
     {
       "shortcode": "BCS",
       "slot": "angle",
-      "subtype": "sales-mktg",
+      "parentGroup": "sales-mktg",
       "label": "Business Case",
-      "obsidian_tag": "business-case",
+      "key": "business-case",
       "icon": ""
     },
     {
       "shortcode": "TST",
       "slot": "angle",
-      "subtype": "sales-mktg",
+      "parentGroup": "sales-mktg",
       "label": "Testimonial",
-      "obsidian_tag": "testimonial",
+      "key": "testimonial",
       "icon": ""
     },
     {
       "shortcode": "TEC",
       "slot": "angle",
-      "subtype": "content",
+      "parentGroup": "content",
       "label": "Technical",
-      "obsidian_tag": "technical",
+      "key": "technical",
       "icon": ""
     },
     {
       "shortcode": "TRN",
       "slot": "angle",
-      "subtype": "content",
+      "parentGroup": "content",
       "label": "Training",
-      "obsidian_tag": "training",
+      "key": "training",
       "icon": ""
     },
     {
       "shortcode": "SM",
       "slot": "angle",
-      "subtype": "content",
+      "parentGroup": "content",
       "label": "Social Media",
-      "obsidian_tag": "social-media",
+      "key": "social-media",
       "icon": ""
     },
     {
       "shortcode": "SUS",
       "slot": "angle",
-      "subtype": "content",
+      "parentGroup": "content",
       "label": "Sustainability",
-      "obsidian_tag": "sustainability",
+      "key": "sustainability",
       "icon": ""
     },
     {
       "shortcode": "BRD",
       "slot": "angle",
-      "subtype": "context",
+      "parentGroup": "context",
       "label": "Brand",
-      "obsidian_tag": "brand",
+      "key": "brand",
       "icon": ""
     },
     {
       "shortcode": "EVT",
       "slot": "angle",
-      "subtype": "context",
+      "parentGroup": "context",
       "label": "Event",
-      "obsidian_tag": "event",
+      "key": "event",
       "icon": ""
     },
     {
       "shortcode": "INT",
       "slot": "angle",
-      "subtype": "context",
+      "parentGroup": "context",
       "label": "Internal",
-      "obsidian_tag": "internal",
+      "key": "internal",
       "icon": ""
     },
     {
       "shortcode": "SlD",
       "slot": "format",
-      "subtype": "document",
+      "parentGroup": "document",
       "label": "Slide Deck",
-      "obsidian_tag": "deck document",
+      "key": "deck",
       "icon": "🗂️"
     },
     {
       "shortcode": "PDF",
       "slot": "format",
-      "subtype": "document",
+      "parentGroup": "document",
       "label": "PDF",
-      "obsidian_tag": "pdf document",
+      "key": "pdf",
       "icon": "📄"
     },
     {
       "shortcode": "Doc",
       "slot": "format",
-      "subtype": "document",
+      "parentGroup": "document",
       "label": "Document",
-      "obsidian_tag": "doc document",
+      "key": "doc",
       "icon": "📝"
     },
     {
       "shortcode": "Sht",
       "slot": "format",
-      "subtype": "document",
+      "parentGroup": "document",
       "label": "Spreadsheet",
-      "obsidian_tag": "spreadsheet document",
+      "key": "spreadsheet",
       "icon": "📊"
     },
     {
       "shortcode": "Tmp",
       "slot": "format",
-      "subtype": "document",
+      "parentGroup": "document",
       "label": "Template",
-      "obsidian_tag": "template document",
+      "key": "template",
       "icon": "📋"
     },
     {
       "shortcode": "Vid",
       "slot": "format",
-      "subtype": "media",
+      "parentGroup": "media",
       "label": "Video",
-      "obsidian_tag": "video",
+      "key": "video",
       "icon": "🎬"
     },
     {
       "shortcode": "Rec",
       "slot": "format",
-      "subtype": "media",
+      "parentGroup": "media",
       "label": "Recording",
-      "obsidian_tag": "recording audio",
+      "key": "recording",
       "icon": "🎙️"
     },
     {
       "shortcode": "Crs",
       "slot": "format",
-      "subtype": "media",
+      "parentGroup": "media",
       "label": "Carousel",
-      "obsidian_tag": "carousel social-media",
+      "key": "carousel",
       "icon": "🎠"
     },
     {
       "shortcode": "Ast",
       "slot": "format",
-      "subtype": "asset",
+      "parentGroup": "asset",
       "label": "Asset",
-      "obsidian_tag": "asset image",
+      "key": "asset",
       "icon": "🖼️"
     },
     {
       "shortcode": "Pkg",
       "slot": "format",
-      "subtype": "asset",
+      "parentGroup": "asset",
       "label": "Package",
-      "obsidian_tag": "package bundle",
+      "key": "package",
       "icon": "📦"
     }
   ],

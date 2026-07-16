@@ -5,14 +5,13 @@
 -- Seeded sign-ins (LOCAL ONLY — never reuse this pattern on a hosted tier):
 --   admin@acme.test  / password: dchub-local   (role: admin — full portal + admin area)
 --   Additional users: create in Studio (http://localhost:54323 → Authentication);
---   any @acme.test address auto-joins Acme Studio as role 'client'.
+--   any @acme.test address auto-joins Acme Studio as role 'member'.
 
 -- identity_migrated: the local dev client runs the stable-identity path
 -- (matching production ESS) — the legacy path is not exercised locally.
 -- Storage: local publishing rehearses against the staging bucket.
-insert into public.clients (id, name, slug, accent, initials, domain_whitelist, identity_migrated, r2_bucket, r2_public_domain) values
-  ('00000000-0000-0000-0000-000000000001', 'Acme Studio', 'acme', '#1d4ed8', 'AS', '{acme.test}', true,
-   'dc-hub-staging', 'https://pub-70cb5e135f5b48fa8e681980c96e19d8.r2.dev');
+insert into public.clients (id, name, slug, accent, initials, domain_whitelist, identity_migrated) values
+  ('00000000-0000-0000-0000-000000000001', 'Acme Studio', 'acme', '#1d4ed8', 'AS', '{acme.test}', true);
 
 insert into public.tags (client_id, name, dimension, sort_order) values
   ('00000000-0000-0000-0000-000000000001', 'Product',   'entity', 1),

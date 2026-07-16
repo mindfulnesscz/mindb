@@ -1,10 +1,17 @@
 import { useState, useMemo, useEffect } from 'react'
 import { useRole } from '../../context/RoleContext'
-import { getDefaultFilters, type FilterState, type Asset } from '@dc-hub/asset-library'
+import { getDefaultFilters, canDownload, type FilterState, type Asset } from '@dc-hub/asset-library'
 import { useAssets } from '../../hooks/useAssets'
 import { useTags, type TagsByDimension, type TagGroup } from '../../hooks/useTags'
-import { deleteDisconnectedAssets } from '../../services/assetService'
+import { deleteDisconnectedAssets, fetchAsset } from '../../services/assetService'
+import { webAssetActions } from '../../lib/assetActions'
 import AssetDetail from './AssetDetail'
+import {
+  MultiAssetHoverGrid,
+  useSiblingPreviews,
+  useDelayedHover,
+  type SiblingPreview,
+} from './MultiAssetHover'
 
 const STATUS_LABELS: Record<string, string> = {
   draft:        'Draft',
@@ -17,36 +24,121 @@ const STATUS_LABELS: Record<string, string> = {
 
 // ── Asset card ────────────────────────────────────────────────
 
-function AssetCard({ asset, onClick, role }: { asset: Asset; onClick: () => void; role: string }) {
+function AssetCard({
+  asset,
+  onOpen,
+  role,
+  accent,
+}: {
+  asset: Asset
+  onOpen: (focusId?: string, opts?: { lightbox?: boolean }) => void
+  role: string
+  accent: string
+}) {
+  const isMulti = (asset.childCount ?? 0) > 0
+  const [pointerIn, setPointerIn] = useState(false)
+  const hovered = useDelayedHover(pointerIn, 100)
+  // Prefetch siblings for multi cards so a click (even before hover) can focus the first child.
+  const { siblings, loading } = useSiblingPreviews(asset, isMulti)
+  const restingThumb =
+    asset.thumbnailUrl || siblings.find(s => s.thumbnailUrl)?.thumbnailUrl
+  const fileCount = siblings.length > 1
+    ? siblings.length
+    : isMulti
+      ? (asset.childCount ?? 0)
+      : 1
+
+  function handleSiblingSelect(s: SiblingPreview) {
+    // Lightbox only for true gallery children (folder-of-images), not format/size variants.
+    onOpen(s.id, { lightbox: !!s.isGalleryChild })
+  }
+
+  function handleCardOpen() {
+    // Multi-asset / gallery: focus the first child or variant in detail (no lightbox).
+    const first = siblings.find(s => s.id !== asset.id) ?? siblings[0]
+    if (isMulti && first && first.id !== asset.id) {
+      onOpen(first.id)
+      return
+    }
+    onOpen()
+  }
+
   return (
     <button
-      onClick={onClick}
-      className="group text-left w-full border border-border rounded-sm overflow-hidden bg-surface hover:border-cosmos-black transition-colors duration-base"
+      type="button"
+      onClick={handleCardOpen}
+      onMouseEnter={() => setPointerIn(true)}
+      onMouseLeave={() => setPointerIn(false)}
+      onFocus={() => setPointerIn(true)}
+      onBlur={() => setPointerIn(false)}
+      className="group text-left w-full border border-border rounded-sm overflow-hidden bg-surface hover:border-cosmos-black transition-colors duration-base cursor-pointer"
     >
-      <div className="relative aspect-video bg-gray-150 overflow-hidden">
-        {asset.thumbnailUrl
-          ? <img referrerPolicy="no-referrer" src={asset.thumbnailUrl} alt={asset.name} className="w-full h-full object-cover" />
-          : <div className="w-full h-full bg-gray-150" />
+      <div className="relative aspect-square overflow-hidden cursor-pointer [transform-style:preserve-3d]">
+        {restingThumb
+          ? (
+            <img
+              referrerPolicy="no-referrer"
+              src={restingThumb}
+              alt={asset.name}
+              className="relative z-[1] w-full h-full object-cover cursor-pointer"
+            />
+          )
+          : <div className="relative z-[1] w-full h-full bg-gray-150" />
         }
-        <div className="absolute top-2 left-2 flex gap-1">
+
+        {isMulti && (
+          <MultiAssetHoverGrid
+            open={hovered}
+            siblings={siblings}
+            loading={loading}
+            accent={accent}
+            onSelect={handleSiblingSelect}
+          />
+        )}
+
+        <div className="absolute top-2 left-2 flex gap-1 z-20 pointer-events-none">
           <span className="text-[10px] font-sans font-bold uppercase tracking-label border border-cosmos-black bg-clear-white px-1.5 py-0.5 rounded-chip">
             {STATUS_LABELS[asset.status]}
           </span>
-          {(asset.childCount ?? 0) > 0 && (
-            <span className="text-[10px] font-sans font-bold uppercase tracking-label border border-cosmos-black bg-cosmos-black text-clear-white px-1.5 py-0.5 rounded-chip">
-              {asset.childCount} files
+          {isMulti && (
+            <span
+              className="text-[10px] font-sans font-bold uppercase tracking-label border border-cosmos-black bg-cosmos-black text-clear-white px-1.5 py-0.5 rounded-chip"
+            >
+              {fileCount} files
             </span>
           )}
         </div>
         {!asset.latest && (
-          <div className="absolute bottom-2 left-2 text-[9px] font-sans font-bold uppercase tracking-label border border-cosmos-black bg-clear-white/90 px-1.5 py-0.5 rounded-chip">
+          <div className="absolute bottom-2 left-2 z-20 text-[9px] font-sans font-bold uppercase tracking-label border border-cosmos-black bg-clear-white/90 px-1.5 py-0.5 rounded-chip pointer-events-none">
             older version
           </div>
         )}
         {asset.approval === 'pending' && (
-          <div className="absolute bottom-2 right-2 text-[9px] font-sans font-bold uppercase tracking-label border border-cosmos-black bg-clear-white/90 px-1.5 py-0.5 rounded-chip">
+          <div className="absolute bottom-2 right-2 z-20 text-[9px] font-sans font-bold uppercase tracking-label border border-cosmos-black bg-clear-white/90 px-1.5 py-0.5 rounded-chip pointer-events-none">
             awaiting you
           </div>
+        )}
+        {!isMulti && canDownload(role as 'public' | 'member' | 'editor' | 'admin', asset) && asset.downloadUrl && (
+          <span
+            role="button"
+            tabIndex={0}
+            title="Download"
+            className="absolute bottom-2 right-2 z-20 w-7 h-7 flex items-center justify-center rounded-[3px] border border-cosmos-black bg-clear-white/95 text-cosmos-black text-xs font-bold opacity-0 group-hover:opacity-100 focus-within:opacity-100 hover:!opacity-100 transition-opacity"
+            onClick={e => {
+              e.stopPropagation()
+              void webAssetActions.download?.(asset)
+            }}
+            onMouseDown={e => e.stopPropagation()}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                e.stopPropagation()
+                void webAssetActions.download?.(asset)
+              }
+            }}
+          >
+            ↓
+          </span>
         )}
       </div>
 
@@ -72,7 +164,6 @@ function AssetCard({ asset, onClick, role }: { asset: Asset; onClick: () => void
             <span>★ {asset.avg.toFixed(1)} ({asset.count})</span>
           )}
           {role !== 'public' && <span>💬 {asset.comments}</span>}
-          <span className="ml-auto">↓</span>
         </div>
       </div>
     </button>
@@ -84,7 +175,7 @@ function AssetCard({ asset, onClick, role }: { asset: Asset; onClick: () => void
 function CardSkeleton() {
   return (
     <div className="border border-border rounded-sm overflow-hidden bg-surface animate-pulse">
-      <div className="aspect-video bg-gray-150" />
+      <div className="aspect-square bg-gray-150" />
       <div className="p-3 space-y-2">
         <div className="h-3.5 bg-gray-150 rounded-chip w-3/4" />
         <div className="h-3 bg-gray-150 rounded-chip w-1/2" />
@@ -299,6 +390,7 @@ function FiltersRail({
   onChange,
   onHide,
   tags,
+  dimensionLabels,
   statusCounts,
   statusKeys,
   isStaff,
@@ -309,6 +401,7 @@ function FiltersRail({
   onChange: (f: FilterState) => void
   onHide: () => void
   tags: TagsByDimension
+  dimensionLabels: { entity: string; format: string; angle: string }
   statusCounts: Record<string, number>
   statusKeys: Asset['status'][]
   isStaff: boolean
@@ -440,7 +533,7 @@ function FiltersRail({
 
       {/* Client tag dimensions */}
       <TagSection
-        label="Entity" filterKey="entities"
+        label={dimensionLabels.entity} filterKey="entities"
         items={tags.entity} groups={tags.groups.entity}
         selected={filters.entities} filterQuery={filterQuery}
         open={sectionsOpen.entity} collapseKey={collapseKey}
@@ -450,7 +543,7 @@ function FiltersRail({
         onToggleItem={toggleTag}
       />
       <TagSection
-        label="Format" filterKey="formats"
+        label={dimensionLabels.format} filterKey="formats"
         items={tags.format} groups={tags.groups.format}
         selected={filters.formats} filterQuery={filterQuery}
         open={sectionsOpen.format} collapseKey={collapseKey}
@@ -460,7 +553,7 @@ function FiltersRail({
         onToggleItem={toggleTag}
       />
       <TagSection
-        label="Angle" filterKey="angles"
+        label={dimensionLabels.angle} filterKey="angles"
         items={tags.angle} groups={tags.groups.angle}
         selected={filters.angles} filterQuery={filterQuery}
         open={sectionsOpen.angle} collapseKey={collapseKey}
@@ -479,10 +572,14 @@ export default function GalleryView() {
   const { role, activeClient } = useRole()
   const [filters, setFilters] = useState<FilterState>(getDefaultFilters())
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [focusSiblingId, setFocusSiblingId] = useState<string | null>(null)
+  const [openLightboxOnFocus, setOpenLightboxOnFocus] = useState(false)
+  const [resolvedDetail, setResolvedDetail] = useState<Asset | null>(null)
   const [railVisible, setRailVisible] = useState(true)
 
   const isStaff = role === 'admin' || role === 'editor'
   const statusKeys = isStaff ? STATUS_KEYS_STAFF : STATUS_KEYS_CLIENT
+  const accent = activeClient?.accent ?? '#161616'
 
   const clientId = activeClient?.id
 
@@ -511,6 +608,12 @@ export default function GalleryView() {
     groups: tags.groups,
   }
 
+  const dimensionLabels = {
+    entity: activeClient?.dimensionLabels?.entity ?? 'Entity',
+    format: activeClient?.dimensionLabels?.format ?? 'Format',
+    angle:  activeClient?.dimensionLabels?.angle  ?? 'Angle',
+  }
+
   const hasFiltersApplied =
     (filters.status?.length ?? 0) > 0 ||
     (filters.entityTypes?.length ?? 0) > 0 ||
@@ -521,7 +624,45 @@ export default function GalleryView() {
     filters.search?.trim() !== '' ||
     filters.latestOnly
 
-  const selectedAsset = selectedId ? assets.find(a => a.id === selectedId) ?? null : null
+  const selectedAsset = selectedId
+    ? assets.find(a => a.id === selectedId) ?? resolvedDetail
+    : null
+
+  /** Open a top-level card, or a hover-tile sibling (child/variant) focused inside the parent detail. */
+  async function openAsset(primary: Asset, focusId?: string, opts?: { lightbox?: boolean }) {
+    const wantLightbox = !!opts?.lightbox
+    const targetId = focusId && focusId !== primary.id ? focusId : primary.id
+    if (targetId === primary.id) {
+      setFocusSiblingId(null)
+      setOpenLightboxOnFocus(wantLightbox)
+      setResolvedDetail(null)
+      setSelectedId(primary.id)
+      return
+    }
+    // Sibling may not be in the top-level list — resolve parent via DB, then focus.
+    const row = await fetchAsset(targetId)
+    if (!row) {
+      setFocusSiblingId(null)
+      setOpenLightboxOnFocus(false)
+      setResolvedDetail(null)
+      setSelectedId(primary.id)
+      return
+    }
+    const parentId = row.parentId || row.variantOf || primary.id
+    const parentInList = assets.find(a => a.id === parentId)
+    if (parentInList) {
+      setResolvedDetail(null)
+      setFocusSiblingId(targetId)
+      setOpenLightboxOnFocus(wantLightbox)
+      setSelectedId(parentInList.id)
+      return
+    }
+    const parent = parentId === primary.id ? primary : await fetchAsset(parentId)
+    setResolvedDetail(parent ?? primary)
+    setFocusSiblingId(targetId)
+    setOpenLightboxOnFocus(wantLightbox)
+    setSelectedId(parent?.id ?? primary.id)
+  }
 
   function emptyReason(): EmptyReason {
     if (hasFiltersApplied) return 'filtered'
@@ -538,6 +679,7 @@ export default function GalleryView() {
           onChange={setFilters}
           onHide={() => setRailVisible(false)}
           tags={effectiveTags}
+          dimensionLabels={dimensionLabels}
           statusCounts={statusCounts}
           statusKeys={statusKeys}
           isStaff={isStaff}
@@ -582,19 +724,20 @@ export default function GalleryView() {
               <p className="font-sans text-sm text-text-muted max-w-sm">{error}</p>
             </div>
           ) : loading ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {Array.from({ length: 6 }).map((_, i) => <CardSkeleton key={i} />)}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {Array.from({ length: 8 }).map((_, i) => <CardSkeleton key={i} />)}
             </div>
           ) : assets.length === 0 ? (
             <EmptyState reason={emptyReason()} />
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {assets.map(asset => (
                 <AssetCard
                   key={asset.id}
                   asset={asset}
-                  onClick={() => setSelectedId(asset.id)}
+                  onOpen={(focusId, opts) => { void openAsset(asset, focusId, opts) }}
                   role={role}
+                  accent={accent}
                 />
               ))}
             </div>
@@ -606,10 +749,17 @@ export default function GalleryView() {
       {selectedAsset && (
         <AssetDetail
           asset={selectedAsset}
-          onClose={() => setSelectedId(null)}
+          onClose={() => {
+            setSelectedId(null)
+            setFocusSiblingId(null)
+            setOpenLightboxOnFocus(false)
+            setResolvedDetail(null)
+          }}
           mount="drawer"
           onStatusChange={() => reload()}
           activeFacets={{ entities: filters.entities, formats: filters.formats, angles: filters.angles }}
+          focusAssetId={focusSiblingId ?? undefined}
+          autoOpenLightbox={openLightboxOnFocus}
         />
       )}
     </div>

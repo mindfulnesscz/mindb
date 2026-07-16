@@ -1,1 +1,9 @@
-{"development":"Daily developer routine","architecture":"Architecture","first-run":"Operator first run","mental-model":"Mental model"}
+{
+  "platform-division": "Platform division",
+  "tags-and-destinations": "Tags & export destinations",
+  "team-dev-setup": "Team staging setup",
+  "development": "Daily developer routine",
+  "architecture": "Architecture",
+  "first-run": "Operator first run",
+  "mental-model": "Mental model"
+}

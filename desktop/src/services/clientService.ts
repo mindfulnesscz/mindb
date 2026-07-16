@@ -15,18 +15,17 @@
 import { readTextFile, writeTextFile, exists, mkdir, copyFile } from '@tauri-apps/plugin-fs';
 import { appDataDir, join } from '@tauri-apps/api/path';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
-import { makeClient } from '../domain/client';
+import { makeClient, normalizeDestination } from '../domain/client';
 import type { Client, CloudDestination } from '../domain/client';
 import type { VocabularyData } from '../domain/vocabulary';
 import type { Environment } from './environmentService';
 import { useEnvironmentStore } from '../store/environmentStore';
-import { getAuthClient } from './authService';
+import { getAuthClient, withTimeout } from './authService';
 import { fetchCloudDestinationDefs, saveCloudDestinationDefs } from './supabaseService';
 
 /* ── Machine-local per-(environment, client) config ─────────────────────── */
 
 export interface LocalClientConfig {
-  logoDataUrl:        string | null;
   sourceFolder:       string;
   targetFolder:       string;
   vaultFolder:        string;
@@ -35,23 +34,19 @@ export interface LocalClientConfig {
 }
 
 interface PendingLocalConfig extends LocalClientConfig {
-  /** the legacy clients.json id — used to re-key the vocab file on adoption */
   legacyClientId: string | null;
 }
 
 interface PersistedLocal {
   version:       2;
-  /** `${envId}:${clientUuid}` → machine-local config */
   entries:       Record<string, LocalClientConfig>;
-  /** legacy configs waiting for a DB client with a matching name: `${envId}:${lowercased name}` */
   pendingByName: Record<string, PendingLocalConfig>;
-  /** last active client per environment */
   activeByEnv:   Record<string, string>;
   migratedFromClientsJson: boolean;
 }
 
 const EMPTY_LOCAL: LocalClientConfig = {
-  logoDataUrl: null, sourceFolder: '', targetFolder: '', vaultFolder: '',
+  sourceFolder: '', targetFolder: '', vaultFolder: '',
   cloudDestinations: [], lastCreationFolder: '',
 };
 
@@ -97,10 +92,7 @@ async function saveLocal(): Promise<void> {
 }
 
 function pickLocalFields(c: Partial<Client>): LocalClientConfig {
-  // Strict shape: pre-Control-API entries carried R2 credentials — re-shaping
-  // through this function scrubs them from client-local.json on the next save.
   return {
-    logoDataUrl:        c.logoDataUrl        ?? null,
     sourceFolder:       c.sourceFolder       ?? '',
     targetFolder:       c.targetFolder       ?? '',
     vaultFolder:        c.vaultFolder        ?? '',
@@ -139,42 +131,67 @@ interface DbClientRow {
   id:                 string;
   name:               string;
   accent:             string | null;
+  slug:               string | null;
+  logo_url:           string | null;
   identity_migrated:  boolean | null;
-  r2_bucket:          string | null;
-  r2_public_domain:   string | null;
+  dimension_labels:   { entity?: string; angle?: string; format?: string } | null;
 }
 
 /** Fetches the clients this user may operate in the ACTIVE environment, using
  * the signed-in session (never the service key). Admins see all clients;
- * everyone else sees their client_members assignments. */
+ * everyone else sees their client_members assignments.
+ * Falls back when prod hasn't applied dimension_labels migration yet. */
 async function fetchDbClients(role: string): Promise<DbClientRow[]> {
   const auth = getAuthClient();
   if (!auth) throw new Error('Not signed in');
-  const select = 'id,name,accent,identity_migrated,r2_bucket,r2_public_domain';
-  if (role === 'admin') {
-    const { data, error } = await auth.from('clients').select(select).order('name');
+  const baseSelect = 'id,name,accent,slug,logo_url,identity_migrated';
+  const fullSelect = `${baseSelect},dimension_labels`;
+  const timeout = (p: PromiseLike<{ data: unknown; error: { message: string } | null }>, label: string) =>
+    withTimeout(Promise.resolve(p), 12_000, label);
+
+  async function query(select: string): Promise<DbClientRow[]> {
+    if (role === 'admin') {
+      const { data, error } = await timeout(
+        auth!.from('clients').select(select).order('name'),
+        'Client list',
+      );
+      if (error) throw new Error(error.message);
+      return (data ?? []) as DbClientRow[];
+    }
+    const { data, error } = await timeout(
+      auth!.from('client_members').select(`clients(${select})`),
+      'Client memberships',
+    );
     if (error) throw new Error(error.message);
-    return (data ?? []) as DbClientRow[];
+    return ((data ?? []) as unknown as Array<{ clients: DbClientRow | null }>)
+      .map(r => r.clients)
+      .filter((c): c is DbClientRow => !!c)
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
-  const { data, error } = await auth
-    .from('client_members')
-    .select(`clients(${select})`);
-  if (error) throw new Error(error.message);
-  // supabase-js types the embedded to-one relation as an array; it's an object at runtime
-  return ((data ?? []) as unknown as Array<{ clients: DbClientRow | null }>)
-    .map(r => r.clients)
-    .filter((c): c is DbClientRow => !!c)
-    .sort((a, b) => a.name.localeCompare(b.name));
+
+  try {
+    return await query(fullSelect);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes('dimension_labels')) return await query(baseSelect);
+    throw e;
+  }
 }
 
 function mergeClient(env: Environment, row: DbClientRow, local: LocalClientConfig): Client {
+  const labels = row.dimension_labels ?? {};
   return makeClient({
     id:                 row.id,
     name:               row.name,
+    slug:               row.slug ?? undefined,
+    logoUrl:            row.logo_url,
     brandColor:         row.accent || '#161616',
     identityMigrated:   !!row.identity_migrated,
-    r2Bucket:           row.r2_bucket ?? '',
-    r2PublicDomain:     row.r2_public_domain ?? '',
+    dimensionLabels:    {
+      entity: labels.entity ?? 'Entity',
+      angle:  labels.angle  ?? 'Angle',
+      format: labels.format ?? 'Format',
+    },
     supabaseUrl:        env.supabaseUrl,
     supabaseAnonKey:    env.anonKey,
     ...local,
@@ -277,26 +294,7 @@ export async function saveClients(data: { clients: Client[]; activeClientId: str
   await saveLocal();
 }
 
-/* ── DB writes (admin, via the user session — RLS enforces the role) ─────── */
-
-export async function createDbClient(name: string, accent: string): Promise<DbClientRow> {
-  const auth = getAuthClient();
-  if (!auth) throw new Error('Not signed in');
-  const { data, error } = await auth
-    .from('clients')
-    .insert({ name: name.trim(), accent })
-    .select('id,name,accent,identity_migrated')
-    .single();
-  if (error) throw new Error(error.message);
-  return data as DbClientRow;
-}
-
-export async function updateDbClient(id: string, patch: { name?: string; accent?: string; r2_bucket?: string | null; r2_public_domain?: string | null }): Promise<void> {
-  const auth = getAuthClient();
-  if (!auth) throw new Error('Not signed in');
-  const { error } = await auth.from('clients').update(patch).eq('id', id);
-  if (error) throw new Error(error.message);
-}
+/* DB client create/edit lives in the web portal — desktop is read-only for identity. */
 
 /* ── Cloud destination sync — Supabase holds the shared definition, this
    machine's local cache holds tokens. See CLOUD_DESTINATIONS.md. ────────── */
@@ -305,14 +303,33 @@ export function mergeCloudDestinations(
   local:  CloudDestination[],
   remote: CloudDestination[],
 ): CloudDestination[] {
-  if (!remote.length) return local;
+  if (!remote.length) return local.map(normalizeDestination);
 
   const localById = new Map(local.map(d => [d.id, d]));
-  return remote.map(def => {
-    if (def.config.type === 'local') return def;
+  return remote.map(raw => {
+    const def = normalizeDestination(raw);
+    if (def.config.type === 'local') {
+      // Prefer a machine-local path override when the portal only has a template.
+      const existing = localById.get(def.id);
+      if (existing?.config.type === 'local' && existing.config.path) {
+        return { ...def, config: { ...def.config, path: existing.config.path } };
+      }
+      return def;
+    }
     const existing = localById.get(def.id);
-    const existingToken = existing && existing.config.type !== 'local' ? existing.config.token : null;
-    return { ...def, config: { ...def.config, token: existingToken } };
+    if (!existing || existing.config.type === 'local') return def;
+    // Portal owns structure; this machine keeps token + optional secret override.
+    const token = existing.config.token;
+    const clientSecret =
+      def.config.type === 'gdrive' && existing.config.type === 'gdrive' && existing.config.clientSecret
+        ? existing.config.clientSecret
+        : def.config.type === 'gdrive'
+          ? def.config.clientSecret
+          : undefined;
+    if (def.config.type === 'gdrive') {
+      return { ...def, config: { ...def.config, token, clientSecret: clientSecret ?? '' } };
+    }
+    return { ...def, config: { ...def.config, token } };
   });
 }
 
@@ -348,8 +365,7 @@ export interface ClientExport {
 function sanitizeForExport(client: Client): Client {
   return {
     ...client,
-    supabaseServiceKey: '',
-    supabaseAnonKey:    '',   // env-owned; harmless but doesn't belong in a client bundle
+    supabaseAnonKey:    '',
     supabaseUrl:        '',
     cloudDestinations: client.cloudDestinations.map(d => {
       if (d.config.type === 'local') return d;
@@ -363,7 +379,7 @@ function sanitizeForExport(client: Client): Client {
 /** True when a parsed bundle still carries credential-bearing fields —
  * i.e. it predates secret-free exports and should trigger a rotation warning. */
 function bundleHasSecrets(client: Partial<Client>): boolean {
-  const legacy = client as Partial<Client> & { r2SecretKey?: string; r2AccessKeyId?: string };
+  const legacy = client as Partial<Client> & { r2SecretKey?: string; r2AccessKeyId?: string; supabaseServiceKey?: string };
   if (legacy.supabaseServiceKey || legacy.r2SecretKey || legacy.r2AccessKeyId) return true;
   return (client.cloudDestinations ?? []).some(d =>
     d.config.type !== 'local' && (d.config.token?.accessToken || d.config.token?.refreshToken ||

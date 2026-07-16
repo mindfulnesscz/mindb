@@ -1,13 +1,24 @@
 # Glossary
 
 - **Asset** — one Supabase delivery record, sometimes a primary with children/variants.
-- **CDN** — R2 public delivery layer for previews and current originals.
+- **CDN** — R2 public delivery layer for previews and current originals (environment bucket, keys under `{client_id}/`).
 - **Child ID** — stable per-file identity within a migrated package.
+- **Cloud destination** — Local / Dropbox / OneDrive / Google Drive delivery target. Structure in `clients.cloud_destinations` (portal); OAuth tokens on the workstation.
+- **Dimension labels** — per-client display names for entity / angle / format.
 - **Disconnected** — known database record no longer represented by current source scan.
-- **Destination role** — `internal` or `client`; controls whether collected provider links enter client metadata.
+- **Destination role** — `internal` or `client`; controls whether collected provider links enter client `download_urls`.
+- **Environment** — desktop connection to a Supabase project (Production / Staging / Local): URL + anon key.
+- **Grant** — short-lived R2 credentials from `r2-grant` for one pipeline run.
+- **Leaf tag** — taxonomy node with a `shortcode` (filename token); editable in portal or desktop Vocabulary Sync.
+- **minRole** — minimum hub role allowed to see a destination’s share links (or Reveal) in the portal.
 - **OUT** — named source directory whose descendants are publish candidates.
 - **Package** — source grouping folder used by collection and, after migration, stable identity.
-- **Shortcode** — legacy version-stripped filename identity.
+- **Parent group** — taxonomy node without `shortcode`; portal-only grouping under a dimension.
+- **Platform division** — web vs desktop field ownership; one admin surface per field group.
+- **Rename task** — DB queue row telling the desktop to apply a filesystem rename after a web tag change (planned).
+- **Reveal bridge** — desktop localhost `:7624` service that opens a package folder from a portal `stableId`.
+- **Shortcode** — tag/token used in filenames; also a column on `tags`.
 - **Sidecar thumbnail** — local `-thumb.webp` beside its source.
+- **Source links** — role-gated provider URLs from `download_urls` on asset detail (not the primary CDN Download).
 - **Stable ID** — persistent package identity stored in folder suffix/manifest.
 - **Variant** — non-primary sibling linked by `variant_of`; distinct from legacy `parent_id` child.

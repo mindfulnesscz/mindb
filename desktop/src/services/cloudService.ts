@@ -326,11 +326,20 @@ export async function uploadOneDriveFile(
 // the signed-in account's own My Drive — required so uploads land in one
 // shared location regardless of which teammate's account authorized the
 // connection. All requests need supportsAllDrives=true for this to work.
+//
+// Folder IDs are memoized for the process lifetime so a pipeline run that
+// uploads many files under the same tree does not re-list every path segment.
+const gdriveFolderCache = new Map<string, string>();
+
 async function getOrCreateGDriveFolder(
   accessToken:   string,
   folderPath:    string,
   sharedDriveId: string,
 ): Promise<string> {
+  const cacheKey = `${sharedDriveId.trim() || 'root'}::${folderPath}`;
+  const cached = gdriveFolderCache.get(cacheKey);
+  if (cached) return cached;
+
   const rootId = sharedDriveId.trim() || 'root';
   let parentId = rootId;
   const parts  = folderPath.split('/').filter(Boolean);
@@ -358,21 +367,116 @@ async function getOrCreateGDriveFolder(
       parentId = folder.id;
     }
   }
+  gdriveFolderCache.set(cacheKey, parentId);
   return parentId;
 }
 
+type GDriveRemoteFile = {
+  id: string
+  size?: string
+  md5Checksum?: string
+  webViewLink?: string
+}
+
+/** Find an existing non-trashed file by exact name under a Drive folder. */
+async function findGDriveFile(
+  accessToken: string,
+  folderId: string,
+  fileName: string,
+  sharedDriveId: string,
+): Promise<GDriveRemoteFile | null> {
+  const q = `name='${fileName.replace(/'/g, "\\'")}' and '${folderId}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'`;
+  const params = new URLSearchParams({
+    q,
+    fields: 'files(id,size,md5Checksum,webViewLink)',
+    pageSize: '1',
+    supportsAllDrives: 'true',
+    includeItemsFromAllDrives: 'true',
+  });
+  if (sharedDriveId.trim()) {
+    params.set('corpora', 'drive');
+    params.set('driveId', sharedDriveId.trim());
+  }
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) throw new Error(`GDrive list failed (${res.status}): ${await res.text()}`);
+  const data = await res.json() as { files?: GDriveRemoteFile[] };
+  return data.files?.[0] ?? null;
+}
+
+async function ensureGDriveShareLink(
+  accessToken: string,
+  fileId: string,
+  existingLink?: string,
+): Promise<string | null> {
+  await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions?supportsAllDrives=true`, {
+    method:  'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ role: 'reader', type: 'anyone' }),
+  }).catch(() => { /* already shared or policy-blocked */ });
+  if (existingLink) return existingLink;
+  const meta = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${fileId}?fields=webViewLink&supportsAllDrives=true`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (!meta.ok) return null;
+  const data = await meta.json() as { webViewLink?: string };
+  return data.webViewLink ?? null;
+}
+
+/**
+ * Sync a file to Google Drive with skip-if-unchanged semantics.
+ * Bytes are loaded lazily via `getBytes` — unchanged remotes never read the local file.
+ * - Same-name file + matching size → skip
+ * - Same-name file + different size → media update in place
+ * - Missing → multipart create
+ */
 export async function uploadGDriveFile(
   accessToken:   string,
-  bytes:         Uint8Array,
+  localSize:     number,
+  getBytes:      () => Promise<Uint8Array>,
   mimeType:      string,
   fileName:      string,
   folderPath:    string,   // e.g. "DC Hub/ESS"
   getLink:       boolean,
   sharedDriveId: string = '',
-): Promise<string | null> {
+): Promise<{ url: string | null; skipped: boolean }> {
   const folderId = await getOrCreateGDriveFolder(accessToken, folderPath, sharedDriveId);
+  const existing = await findGDriveFile(accessToken, folderId, fileName, sharedDriveId);
+  const sizeStr  = String(localSize);
 
-  // Multipart upload: metadata + file bytes
+  if (existing && existing.size === sizeStr) {
+    if (!getLink) return { url: null, skipped: true };
+    if (existing.webViewLink) return { url: existing.webViewLink, skipped: true };
+    const url = await ensureGDriveShareLink(accessToken, existing.id);
+    return { url, skipped: true };
+  }
+
+  const bytes = await getBytes();
+
+  if (existing) {
+    // Content changed — update in place (no second same-name file).
+    const updateRes = await fetch(
+      `https://www.googleapis.com/upload/drive/v3/files/${existing.id}?uploadType=media&fields=id,webViewLink&supportsAllDrives=true`,
+      {
+        method:  'PATCH',
+        headers: {
+          Authorization:  `Bearer ${accessToken}`,
+          'Content-Type': mimeType,
+        },
+        body: bytes,
+      },
+    );
+    if (!updateRes.ok) throw new Error(`GDrive update failed (${updateRes.status}): ${await updateRes.text()}`);
+    const updated = await updateRes.json() as { id?: string; webViewLink?: string };
+    const url = getLink && updated.id
+      ? await ensureGDriveShareLink(accessToken, updated.id, updated.webViewLink)
+      : null;
+    return { url, skipped: false };
+  }
+
+  // Multipart create: metadata + file bytes
   const boundary = '----dc_hub_boundary';
   const meta     = JSON.stringify({ name: fileName, parents: [folderId] });
   const encoder  = new TextEncoder();
@@ -401,15 +505,10 @@ export async function uploadGDriveFile(
   if (!uploadRes.ok) throw new Error(`GDrive upload failed (${uploadRes.status}): ${await uploadRes.text()}`);
   const fileData = await uploadRes.json() as { id?: string; webViewLink?: string };
 
-  if (!getLink || !fileData.id) return null;
-
-  // Make file publicly viewable and return sharing link
-  await fetch(`https://www.googleapis.com/drive/v3/files/${fileData.id}/permissions?supportsAllDrives=true`, {
-    method:  'POST',
-    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ role: 'reader', type: 'anyone' }),
-  });
-  return fileData.webViewLink ?? null;
+  const url = getLink && fileData.id
+    ? await ensureGDriveShareLink(accessToken, fileData.id, fileData.webViewLink)
+    : null;
+  return { url, skipped: false };
 }
 
 /* ── Token refresh dispatcher ────────────────────────────────────────────── */

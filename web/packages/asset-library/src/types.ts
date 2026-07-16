@@ -15,6 +15,7 @@ export interface Client {
   website?: string
   portalBg?: string
   domainWhitelist?: string[]
+  dimensionLabels?: { entity: string; angle: string; format: string }
 }
 
 export interface Asset {
@@ -34,7 +35,12 @@ export interface Asset {
   comments: number
   approval: ApprovalState
   thumbnailUrl?: string
+  /** CDN original — primary Download button. */
   downloadUrl?: string
+  /** Cloud share links (Dropbox / OneDrive / Drive) from pipeline export. */
+  downloadUrls?: { destId?: string; provider: string; name: string; url: string }[]
+  /** Rename-proof package identity — used for Reveal in Finder via desktop bridge. */
+  stableId?: string | null
   updatedAt: string
   parentId?: string | null
   childCount?: number

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { NavRail } from './app/NavRail';
 import { PipelineView } from './features/pipeline/PipelineView';
 import { VocabularyView } from './features/vocabulary/VocabularyView';
@@ -14,7 +15,7 @@ import { loadSettings, saveSettings } from './services/settingsService';
 import { loadClientsForEnvironment, saveLocalClient, pullCloudDestinations } from './services/clientService';
 import { loadEnvironments } from './services/environmentService';
 import { useEnvironmentStore } from './store/environmentStore';
-import { initAuthClient, getSession, loadProfile, DESKTOP_ROLES } from './services/authService';
+import { switchAuthClient, getSession, loadProfile, DESKTOP_ROLES } from './services/authService';
 import './styles/tokens.css';
 import './styles/global.css';
 import css from './App.module.css';
@@ -29,6 +30,7 @@ export default function App() {
 
   /* Boot: load environments once. */
   const envsLoaded = useRef(false);
+  const authRunId = useRef(0);
   useEffect(() => {
     loadEnvironments().then(envs => {
       setEnvironments(envs.list);
@@ -38,28 +40,54 @@ export default function App() {
     }).catch(() => setAuthStatus('unconfigured'));
   }, []);
 
+  /* Localhost reveal bridge for the web portal ("Reveal in Finder"). */
+  useEffect(() => {
+    invoke('start_reveal_bridge').catch(console.error);
+  }, []);
+
+  /* Keep bridge clientId → sourceFolder map in sync with the active client. */
+  useEffect(() => {
+    const client = clients.find(c => c.id === activeClientId) ?? null;
+    if (!client) return;
+    invoke('set_reveal_client_root', {
+      clientId: client.id,
+      sourceFolder: client.sourceFolder ?? '',
+    }).catch(console.error);
+  }, [activeClientId, clients]);
+
   /* The gate: authenticate against the ACTIVE environment. Re-runs on
      environment switch; a cached session for that environment (supabase-js
      keys storage by project) signs straight in without a new magic link. */
   useEffect(() => {
     if (!envsLoaded.current || !activeEnvId) return;
-    const env = environments.find(e => e.id === activeEnvId) ?? null;
+    const env = useEnvironmentStore.getState().environments.find(e => e.id === activeEnvId) ?? null;
     if (!env || !env.supabaseUrl || !env.anonKey) { setAuthStatus('unconfigured'); return; }
+
+    const runId = ++authRunId.current;
     (async () => {
+      setAuthStatus('booting');
+      setProfile(null);
       setServer({ url: env.supabaseUrl, anonKey: env.anonKey });
-      initAuthClient({ url: env.supabaseUrl, anonKey: env.anonKey });
+      useClientStore.getState().setClients([]);
+      useClientStore.getState().setActiveClientId(null);
       try {
+        await switchAuthClient({ url: env.supabaseUrl, anonKey: env.anonKey });
+        if (authRunId.current !== runId) return;
         const session = await getSession();
+        if (authRunId.current !== runId) return;
         if (!session) { setAuthStatus('signedOut'); return; }
         const profile = await loadProfile();
+        if (authRunId.current !== runId) return;
         if (!DESKTOP_ROLES.includes(profile.role)) { setAuthStatus('denied'); return; }
         setProfile(profile);
         setAuthStatus('signedIn');
-      } catch {
+      } catch (e) {
+        if (authRunId.current !== runId) return;
+        console.error('Auth failed for environment:', e);
         setAuthStatus('signedOut');
       }
-    })().catch(() => setAuthStatus('signedOut'));
-  }, [activeEnvId, environments]);
+    })();
+  }, [activeEnvId]);
 
   /* Boot: settings are auth-independent */
   useEffect(() => {
@@ -67,12 +95,11 @@ export default function App() {
   }, []);
 
   /* Clients are DB-first: fetched per environment once signed in, filtered by
-     membership (admins see all), merged with this machine's local config.
-     The env's connection values are part of the deps: editing them in
-     Settings must re-merge, or the pipeline would run on stale values. */
+     membership (admins see all), merged with this machine's local config. */
   const activeEnv = environments.find(e => e.id === activeEnvId) ?? null;
   useEffect(() => {
     if (authStatus !== 'signedIn' || !profile || !activeEnv) return;
+    useClientStore.getState().setLoadError(null);
     loadClientsForEnvironment(activeEnv, profile.role, environments)
       .then(({ clients, activeClientId }) => {
         setClients(clients);
@@ -101,8 +128,17 @@ export default function App() {
 
     /* Reload vocabulary for this client (or the seed when no client selected) */
     if (vocabClientRef.current !== activeClientId) {
+      const prevDirty = useVocabularyStore.getState().dirty;
+      const prevId = vocabClientRef.current;
+      // Flush dirty edits for the client we're leaving before switching.
+      if (prevDirty && prevId && useVocabularyStore.getState().data) {
+        saveVocabulary(useVocabularyStore.getState().data!, prevId).catch(console.error);
+      }
       vocabClientRef.current = activeClientId;
-      loadVocabulary(activeClientId).then(setVocab).catch(console.error);
+      // Default: DB. Unpublished local cache (_unpublished) is kept by loadVocabulary.
+      loadVocabulary(activeClientId)
+        .then(d => setVocab(d, { dirty: !!d._unpublished }))
+        .catch(console.error);
     }
   }, [activeClientId, clients]);
 
@@ -123,15 +159,15 @@ export default function App() {
     }).catch(console.error);
   }, [activeClientId]);
 
-  /* Persist vocabulary on change — scoped to the currently active client.
-     Using the ref instead of the activeClientId closure avoids stale-capture
-     when the client changes while a vocab load is in flight. */
+  /* Persist vocabulary on change — only when dirty (user edits), never overwrite
+     the cache with the empty seed / a mid-load stale store while switching clients. */
   const vocabData = useVocabularyStore(s => s.data);
+  const vocabDirty = useVocabularyStore(s => s.dirty);
   useEffect(() => {
-    if (vocabData && vocabClientRef.current !== undefined) {
-      saveVocabulary(vocabData, vocabClientRef.current).catch(console.error);
+    if (vocabDirty && vocabData && vocabClientRef.current) {
+      saveVocabulary({ ...vocabData, _unpublished: true }, vocabClientRef.current).catch(console.error);
     }
-  }, [vocabData]);
+  }, [vocabData, vocabDirty]);
 
   /* Persist settings when dirty */
   const settings = useSettingsStore(s => s.settings);

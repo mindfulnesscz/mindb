@@ -1,8 +1,9 @@
 import { supabase } from '../lib/supabase'
 import type { Client } from '@dc-hub/asset-library'
-import type { ClientRow } from '../lib/database.types'
+import type { ClientRow, TablesUpdate } from '../lib/database.types'
 
 export function toClient(row: ClientRow): Client {
+  const labels = (row as ClientRow & { dimension_labels?: { entity?: string; angle?: string; format?: string } | null }).dimension_labels
   return {
     id:              row.id,
     name:            row.name,
@@ -13,6 +14,11 @@ export function toClient(row: ClientRow): Client {
     website:         row.website ?? undefined,
     portalBg:        row.portal_bg ?? undefined,
     domainWhitelist: row.domain_whitelist,
+    dimensionLabels: labels ? {
+      entity: labels.entity ?? 'Entity',
+      angle:  labels.angle  ?? 'Angle',
+      format: labels.format ?? 'Format',
+    } : undefined,
   }
 }
 
@@ -31,8 +37,7 @@ export async function fetchClients(): Promise<Client[]> {
 export async function createClient(input: Omit<Client, 'id'>): Promise<Client> {
   if (!supabase) throw new Error('Supabase not configured')
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error } = await (supabase as any)
+  const { data, error } = await supabase
     .from('clients')
     .insert({
       name:             input.name,
@@ -43,19 +48,19 @@ export async function createClient(input: Omit<Client, 'id'>): Promise<Client> {
       website:          input.website ?? null,
       portal_bg:        input.portalBg ?? null,
       domain_whitelist: input.domainWhitelist ?? [],
+      dimension_labels: input.dimensionLabels ?? { entity: 'Entity', angle: 'Angle', format: 'Format' },
     })
     .select()
-    .single() as { data: ClientRow | null; error: { message: string } | null }
+    .single()
 
   if (error || !data) throw new Error(error?.message ?? 'No data returned')
-  return toClient(data)
+  return toClient(data as ClientRow)
 }
 
 export async function updateClient(id: string, input: Partial<Omit<Client, 'id'>>): Promise<Client> {
   if (!supabase) throw new Error('Supabase not configured')
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const patch: Record<string, unknown> = {}
+  const patch: TablesUpdate<'clients'> = {}
   if (input.name      !== undefined) patch.name             = input.name
   if (input.slug      !== undefined) patch.slug             = input.slug || null
   if (input.accent    !== undefined) patch.accent           = input.accent
@@ -64,8 +69,10 @@ export async function updateClient(id: string, input: Partial<Omit<Client, 'id'>
   if (input.website   !== undefined) patch.website          = input.website || null
   if (input.portalBg  !== undefined) patch.portal_bg        = input.portalBg || null
   if (input.domainWhitelist !== undefined) patch.domain_whitelist = input.domainWhitelist
+  const dim = (input as Client & { dimensionLabels?: Client['dimensionLabels'] }).dimensionLabels
+  if (dim !== undefined) patch.dimension_labels = dim
 
-  const { data, error } = await (supabase as any)
+  const { data, error } = await supabase
     .from('clients')
     .update(patch)
     .eq('id', id)
@@ -73,7 +80,7 @@ export async function updateClient(id: string, input: Partial<Omit<Client, 'id'>
     .single() as { data: ClientRow | null; error: { message: string } | null }
 
   if (error || !data) throw new Error(error?.message ?? 'No data returned')
-  return toClient(data)
+  return toClient(data as ClientRow)
 }
 
 export async function deleteClient(id: string): Promise<void> {

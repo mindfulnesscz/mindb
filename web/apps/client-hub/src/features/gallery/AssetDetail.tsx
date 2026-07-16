@@ -8,6 +8,14 @@ import { updateAssetStatus, fetchChildAssets, fetchVariants, updateAssetPerm, de
 import { fetchComments, addComment, deleteComment, type RealComment } from '../../services/commentService'
 import { fetchMyRating, upsertRating } from '../../services/ratingService'
 import { trackEvent, fetchEventCounts, type EventCounts } from '../../services/eventService'
+import {
+  fetchDestinations,
+  destinationsVisibleToRole,
+  roleAtLeast,
+  type PortalDestination,
+} from '../../services/destinationService'
+import { revealInDesktop } from '../../services/revealService'
+import { ImageLightbox } from './ImageLightbox'
 import { isConfigured } from '../../lib/supabase'
 
 // Good-practice naming convention: variants of one asset share the same tags and differ
@@ -60,6 +68,10 @@ interface Props {
   // actually matched the filter (e.g. a tag that only lives on one variant) instead of leaving
   // it buried in alphabetical order.
   activeFacets?: { entities?: string[]; formats?: string[]; angles?: string[] }
+  /** When opening from a hover tile, focus this child/variant id inside the detail. */
+  focusAssetId?: string
+  /** Also open the lightbox on the focused child (gallery tile click). */
+  autoOpenLightbox?: boolean
 }
 
 function matchesActiveFacets(a: Asset, facets?: Props['activeFacets']): boolean {
@@ -102,7 +114,7 @@ function StarRating({ value, onChange }: { value: number; onChange?: (v: number)
 }
 
 
-export default function AssetDetail({ asset, onClose, mount, onStatusChange, activeFacets }: Props) {
+export default function AssetDetail({ asset, onClose, mount, onStatusChange, activeFacets, focusAssetId, autoOpenLightbox }: Props) {
   const { role, activeClient } = useRole()
   const { session } = useAuth()
   const userId = session?.user?.id ?? null
@@ -145,9 +157,47 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
   const [commentThanks, setCommentThanks] = useState(false)
   const thanksTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [eventCounts, setEventCounts] = useState<EventCounts>({ views: 0, downloads: 0 })
+  const [destinations, setDestinations] = useState<PortalDestination[]>([])
+  const [revealBusy, setRevealBusy] = useState(false)
+  const [revealMsg, setRevealMsg] = useState('')
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
 
   const accent = activeClient?.accent ?? '#161616'
   const isStaff = role === 'admin' || role === 'editor'
+
+  // Portal destination defs — role-gate cloud share links + Reveal
+  useEffect(() => {
+    if (!activeClient?.id || !isConfigured()) return
+    fetchDestinations(activeClient.id).then(setDestinations).catch(() => setDestinations([]))
+  }, [activeClient?.id])
+
+  const visibleDests = useMemo(
+    () => destinationsVisibleToRole(destinations, role),
+    [destinations, role],
+  )
+
+  const cloudLinks = useMemo(() => {
+    const urls = selectedAsset.downloadUrls ?? []
+    if (urls.length === 0) return []
+    return urls.filter(link => {
+      const dest = visibleDests.find(d =>
+        (link.destId && d.id === link.destId) || d.name === link.name,
+      )
+      // Unknown dest (legacy link without matching def): show to staff only
+      if (!dest) return isStaff
+      return true
+    })
+  }, [selectedAsset.downloadUrls, visibleDests, isStaff])
+
+  const canReveal = useMemo(() => {
+    const sid = selectedAsset.stableId ?? asset.stableId
+    if (!sid) return false
+    // Staff can always try Reveal when the package has a stable id (desktop bridge).
+    if (isStaff) return true
+    return destinations.some(d =>
+      d.enabled && d.allowRevealLocal && roleAtLeast(role, d.minRole),
+    )
+  }, [destinations, role, selectedAsset.stableId, asset.stableId, isStaff])
 
   // Track view + load event counts
   useEffect(() => {
@@ -159,15 +209,44 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
   // Load children (legacy gallery preview images) and variants (Task 3 format/size siblings)
   useEffect(() => {
     if ((asset.childCount ?? 0) > 0) {
-      fetchChildAssets(asset.id).then(setChildren).catch(console.error)
-      fetchVariants(asset.id).then(setVariants).catch(console.error)
+      Promise.all([
+        fetchChildAssets(asset.id).catch(() => [] as Asset[]),
+        fetchVariants(asset.id).catch(() => [] as Asset[]),
+      ]).then(([kids, vars]) => {
+        setChildren(kids)
+        setVariants(vars)
+        if (focusAssetId) {
+          const childIdx = kids.findIndex(c => c.id === focusAssetId)
+          if (childIdx >= 0) {
+            setChildView('carousel')
+            setCarouselIdx(childIdx)
+            setSelectedVariantId(asset.id)
+            if (autoOpenLightbox) {
+              const withSrc = kids.filter(c => c.thumbnailUrl || c.downloadUrl)
+              const lbIdx = withSrc.findIndex(c => c.id === focusAssetId)
+              if (lbIdx >= 0) setLightboxIndex(lbIdx)
+            }
+            return
+          }
+          if (vars.some(v => v.id === focusAssetId) || focusAssetId === asset.id) {
+            setSelectedVariantId(focusAssetId)
+          }
+        }
+        if (autoOpenLightbox && kids.length === 0) {
+          // Single / variant focus — open lightbox on the selected asset when it has media
+          if (asset.thumbnailUrl || asset.downloadUrl) setLightboxIndex(0)
+        }
+      })
     } else {
       setChildren([])
       setVariants([])
+      if (autoOpenLightbox && (asset.thumbnailUrl || asset.downloadUrl)) {
+        setLightboxIndex(0)
+      }
     }
     setCarouselIdx(0)
-    setSelectedVariantId(asset.id)
-  }, [asset.id, asset.childCount])
+    setSelectedVariantId(focusAssetId && focusAssetId !== asset.id ? focusAssetId : asset.id)
+  }, [asset.id, asset.childCount, focusAssetId, autoOpenLightbox])
 
   // Reset local status/perm when asset changes
   useEffect(() => {
@@ -358,22 +437,40 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
             {childView === 'grid' ? (
               <div className="grid grid-cols-2 gap-2">
                 {children.map((child, i) => (
-                  <div key={child.id} className="aspect-video bg-gray-150 rounded-sm overflow-hidden relative">
+                  <button
+                    key={child.id}
+                    type="button"
+                    onClick={() => {
+                      const withSrc = children.filter(c => c.thumbnailUrl || c.downloadUrl)
+                      const idx = withSrc.findIndex(c => c.id === child.id)
+                      if (idx >= 0) setLightboxIndex(idx)
+                    }}
+                    className="aspect-square rounded-sm overflow-hidden relative text-left cursor-zoom-in hover:ring-1 hover:ring-cosmos-black transition-shadow bg-gray-150"
+                  >
                     {child.thumbnailUrl
                       ? <img referrerPolicy="no-referrer" src={child.thumbnailUrl} alt={child.name} className="w-full h-full object-cover" />
-                      : <div className="w-full h-full bg-gray-150 flex items-center justify-center text-text-muted text-xs font-sans">{i + 1}</div>
+                      : <div className="w-full h-full flex items-center justify-center text-text-muted text-xs font-sans">{i + 1}</div>
                     }
-                  </div>
+                  </button>
                 ))}
               </div>
             ) : (
               <div className="relative">
-                <div className="aspect-video bg-gray-150 rounded-sm overflow-hidden">
+                <button
+                  type="button"
+                  className="aspect-square w-full rounded-sm overflow-hidden cursor-zoom-in"
+                  style={{ backgroundColor: `color-mix(in srgb, ${accent} 10%, #000)` }}
+                  onClick={() => {
+                    const withSrc = children.filter(c => c.thumbnailUrl || c.downloadUrl)
+                    const idx = withSrc.findIndex(c => c.id === children[carouselIdx]?.id)
+                    if (idx >= 0) setLightboxIndex(idx)
+                  }}
+                >
                   {children[carouselIdx]?.thumbnailUrl
-                    ? <img referrerPolicy="no-referrer" src={children[carouselIdx].thumbnailUrl} alt={children[carouselIdx].name} className="w-full h-full object-cover" />
+                    ? <img referrerPolicy="no-referrer" src={children[carouselIdx].thumbnailUrl} alt={children[carouselIdx].name} className="w-full h-full object-contain" />
                     : <div className="w-full h-full bg-gray-150" />
                   }
-                </div>
+                </button>
                 <div className="flex items-center justify-between mt-2">
                   <button
                     onClick={() => setCarouselIdx(i => Math.max(0, i - 1))}
@@ -397,12 +494,59 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
             )}
           </div>
         ) : (
-          <div className="aspect-video bg-gray-150 rounded-sm overflow-hidden">
+          <button
+            type="button"
+            className="aspect-square w-full rounded-sm overflow-hidden cursor-zoom-in"
+            style={{ backgroundColor: `color-mix(in srgb, ${accent} 10%, #000)` }}
+            onClick={() => selectedAsset.thumbnailUrl && setLightboxIndex(0)}
+          >
             {selectedAsset.thumbnailUrl
-              ? <img referrerPolicy="no-referrer" src={selectedAsset.thumbnailUrl} alt={selectedAsset.name} className="w-full h-full object-cover" />
+              ? <img referrerPolicy="no-referrer" src={selectedAsset.thumbnailUrl} alt={selectedAsset.name} className="w-full h-full object-contain" />
               : <div className="w-full h-full bg-gray-150" />
             }
-          </div>
+          </button>
+        )}
+
+        {lightboxIndex !== null && (
+          <ImageLightbox
+            items={(children.length > 0 ? children : [selectedAsset])
+              .filter(a => a.thumbnailUrl || a.downloadUrl)
+              .map(a => {
+                const urls = a.downloadUrls ?? []
+                const links = urls.filter(link => {
+                  const dest = visibleDests.find(d =>
+                    (link.destId && d.id === link.destId) || d.name === link.name,
+                  )
+                  if (!dest) return isStaff
+                  return true
+                })
+                return {
+                  src: a.downloadUrl || a.thumbnailUrl || '',
+                  thumbSrc: a.thumbnailUrl,
+                  alt: a.name,
+                  title: a.name,
+                  downloadUrl: canDownload(role, asset) ? a.downloadUrl : undefined,
+                  cloudLinks: links.map(l => ({
+                    label: l.name || l.provider || 'Cloud',
+                    url: l.url,
+                  })),
+                  assetId: a.id,
+                }
+              })
+              .filter(i => i.src)}
+            index={lightboxIndex}
+            onClose={() => setLightboxIndex(null)}
+            onIndexChange={setLightboxIndex}
+            onDownload={item => {
+              const pool = children.length > 0 ? children : [selectedAsset]
+              const target = pool.find(a => a.id === item.assetId)
+                ?? pool.find(a => a.downloadUrl === item.downloadUrl)
+                ?? selectedAsset
+              trackEvent(target.id, 'download', userId, role).catch(() => {})
+              setEventCounts(c => ({ ...c, downloads: c.downloads + 1 }))
+              webAssetActions.download?.(target)
+            }}
+          />
         )}
 
         {/* Title + meta */}
@@ -587,20 +731,96 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
 
         {/* Download — tracks/downloads whichever variant is selected above, defaulting to this asset */}
         {canDownload(role, asset) && (
-          <button
-            onClick={() => {
-              trackEvent(selectedAsset.id, 'download', userId, role).catch(() => {})
-              setEventCounts(c => ({ ...c, downloads: c.downloads + 1 }))
-              webAssetActions.download?.(selectedAsset)
-            }}
-            className="w-full py-3 text-sm font-sans font-semibold text-clear-white rounded-sm transition-all active:translate-y-px"
-            style={{
-              backgroundColor: accent,
-              boxShadow: `5px 5px 0 #161616`,
-            }}
-          >
-            ↓ Download
-          </button>
+          <div className="space-y-2">
+            <button
+              onClick={() => {
+                trackEvent(selectedAsset.id, 'download', userId, role).catch(() => {})
+                setEventCounts(c => ({ ...c, downloads: c.downloads + 1 }))
+                webAssetActions.download?.(selectedAsset)
+              }}
+              className="w-full py-3 text-sm font-sans font-semibold text-clear-white rounded-sm transition-all active:translate-y-px"
+              style={{
+                backgroundColor: accent,
+                boxShadow: `5px 5px 0 #161616`,
+              }}
+            >
+              ↓ Download
+            </button>
+
+            {cloudLinks.length > 0 && (
+              <div className="space-y-1.5">
+                <p className="text-[10px] font-sans font-bold uppercase tracking-label text-text-muted">
+                  Source links
+                </p>
+                {cloudLinks.map(link => (
+                  <a
+                    key={`${link.destId ?? link.name}-${link.url}`}
+                    href={link.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-between gap-2 w-full px-3 py-2 text-[12px] font-sans border border-border rounded-sm hover:border-cosmos-black transition-colors"
+                  >
+                    <span className="font-semibold truncate">{link.name || link.provider}</span>
+                    <span className="text-[10px] uppercase tracking-label text-text-muted shrink-0">
+                      {link.provider}
+                    </span>
+                  </a>
+                ))}
+              </div>
+            )}
+
+            {canReveal && (
+              <div className="space-y-1">
+                <button
+                  type="button"
+                  disabled={revealBusy}
+                  onClick={async () => {
+                    const sid = selectedAsset.stableId ?? asset.stableId
+                    if (!sid || !activeClient?.id) return
+                    setRevealBusy(true)
+                    setRevealMsg('')
+                    const result = await revealInDesktop(activeClient.id, sid)
+                    setRevealBusy(false)
+                    setRevealMsg(result.ok ? 'Opened in Finder / Explorer' : result.error)
+                  }}
+                  className="w-full py-2.5 text-sm font-sans font-semibold border border-cosmos-black rounded-sm text-cosmos-black hover:bg-gray-100 transition-colors disabled:opacity-50"
+                >
+                  {revealBusy ? 'Revealing…' : 'Reveal in Finder'}
+                </button>
+                {revealMsg && (
+                  <p className="text-[11px] font-sans text-text-muted">{revealMsg}</p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Reveal for staff even when download is gated (e.g. draft) */}
+        {!canDownload(role, asset) && canReveal && isStaff && (
+          <div className="space-y-1">
+            <button
+              type="button"
+              disabled={revealBusy}
+              onClick={async () => {
+                const sid = selectedAsset.stableId ?? asset.stableId
+                if (!sid || !activeClient?.id) return
+                setRevealBusy(true)
+                setRevealMsg('')
+                const result = await revealInDesktop(activeClient.id, sid)
+                setRevealBusy(false)
+                setRevealMsg(result.ok ? 'Opened in Finder / Explorer' : result.error)
+              }}
+              className="w-full py-2.5 text-sm font-sans font-semibold border border-cosmos-black rounded-sm text-cosmos-black hover:bg-gray-100 transition-colors disabled:opacity-50"
+            >
+              {revealBusy ? 'Revealing…' : 'Reveal in Finder'}
+            </button>
+            {revealMsg && (
+              <p className="text-[11px] font-sans text-text-muted">{revealMsg}</p>
+            )}
+            <p className="text-[10px] font-sans text-text-subtle">
+              Requires the desktop app running with this client’s source folder set.
+            </p>
+          </div>
         )}
 
         {/* Comments — only for non-public roles */}

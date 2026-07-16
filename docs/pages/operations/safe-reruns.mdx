@@ -8,7 +8,7 @@
 | R2 thumbnails | May shortcut from DB inventory before hash check |
 | Dropbox | Remote path existence skip; may retain stale content |
 | OneDrive | Same path overwritten |
-| Google Drive | New file created; duplicates possible |
+| Google Drive | Skip if same-name + same size; else update in place |
 | Supabase stable identity | Upsert/reconnect by stable IDs |
 | Supabase legacy identity | Rename may look like delete plus insert |
 

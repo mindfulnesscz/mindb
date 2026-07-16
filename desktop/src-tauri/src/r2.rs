@@ -1,3 +1,5 @@
+// Sprint 9 (deferred): replace hand-rolled SigV4 with aws-sdk-s3 or aws-sigv4 crate.
+// See docs/pages/getting-started/platform-division.mdx — do not block feature work on this.
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 

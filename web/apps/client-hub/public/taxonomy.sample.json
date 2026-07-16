@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "name": "Sample taxonomy",
+  "description": "Minimal starter: display names for the three dimensions, plus one subcategory and one leaf tag in each. Node key is used as the Obsidian tag on desktop export.",
+  "dimension_labels": {
+    "entity": "Entity",
+    "angle": "Angle",
+    "format": "Format"
+  },
+  "nodes": [
+    {
+      "key": "entity.sample-group",
+      "dimension": "entity",
+      "name": "Sample group",
+      "parent_key": null,
+      "sort_order": 1
+    },
+    {
+      "key": "entity.sample-group.sample-tag",
+      "dimension": "entity",
+      "name": "Sample tag",
+      "parent_key": "entity.sample-group",
+      "shortcode": "Sam",
+      "sort_order": 1
+    },
+    {
+      "key": "angle.sample-group",
+      "dimension": "angle",
+      "name": "Sample group",
+      "parent_key": null,
+      "sort_order": 1
+    },
+    {
+      "key": "angle.sample-group.sample-tag",
+      "dimension": "angle",
+      "name": "Sample tag",
+      "parent_key": "angle.sample-group",
+      "shortcode": "Ang",
+      "sort_order": 1
+    },
+    {
+      "key": "format.sample-group",
+      "dimension": "format",
+      "name": "Sample group",
+      "parent_key": null,
+      "sort_order": 1
+    },
+    {
+      "key": "format.sample-group.sample-tag",
+      "dimension": "format",
+      "name": "Sample tag",
+      "parent_key": "format.sample-group",
+      "shortcode": "Fmt",
+      "sort_order": 1
+    }
+  ]
+}

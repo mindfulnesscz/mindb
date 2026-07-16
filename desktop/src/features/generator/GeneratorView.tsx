@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { Check } from 'lucide-react';
 import {
-  type Slot, SUBTYPES, SLOT_LABELS,
+  type Slot, dimensionLabelForSlot, parentGroupsForSlot,
   buildFilenameCode, buildObsidianTags,
   type VocabTag,
 } from '../../domain/vocabulary';
 import { useVocabularyStore } from '../../store/vocabularyStore';
+import { useClientStore } from '../../store/clientStore';
 import css from './GeneratorView.module.css';
 
 const SLOTS: Slot[] = ['entity', 'angle', 'format'];
@@ -15,6 +16,9 @@ interface VersionState { major: string; minor: string; patch: string }
 export function GeneratorView() {
   const data = useVocabularyStore(s => s.data);
   const tags = data?.tags ?? [];
+  const activeClient = useClientStore(s =>
+    s.clients.find(c => c.id === s.activeClientId) ?? null,
+  );
 
   /* Selection: shortcode → tag */
   const [selected, setSelected] = useState<Map<string, VocabTag>>(new Map());
@@ -69,20 +73,22 @@ export function GeneratorView() {
         <div className={css.dimPanels}>
           {SLOTS.map(slot => {
             const slotTags = tags.filter(t => t.slot === slot);
-            const subtypes = SUBTYPES[slot];
+            const groups = parentGroupsForSlot(slotTags, slot, data?.parentGroups);
 
             return (
               <div key={slot} className={css.dimPanel}>
                 <div className={css.dimPanelHead}>
-                  <span className={css.dimPanelLabel}>{SLOT_LABELS[slot]}</span>
+                  <span className={css.dimPanelLabel}>{dimensionLabelForSlot(activeClient, slot)}</span>
                 </div>
                 <div className={css.dimPanelScroll}>
-                  {subtypes.map(sub => {
-                    const group = slotTags.filter(t => t.subtype === sub);
+                  {groups.map(groupName => {
+                    const group = slotTags.filter(t =>
+                      groupName === 'Ungrouped' ? !t.parentGroup : t.parentGroup === groupName
+                    );
                     if (!group.length) return null;
                     return (
-                      <div key={sub}>
-                        <div className={css.dimSubgroup}>{sub}</div>
+                      <div key={groupName}>
+                        <div className={css.dimSubgroup}>{groupName}</div>
                         {group.map(tag => {
                           const isSelected = selected.has(tag.shortcode);
                           return (

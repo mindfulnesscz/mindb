@@ -1,9 +1,7 @@
 # Supabase synchronization
 
-The desktop uses the service-role key through REST/native request helpers, resolves/creates a client row, parses scanned filenames, and upserts current assets. It also synchronizes taxonomy and version history. CDN and provider URL maps produced earlier in the run are attached to corresponding records.
+After the local pipeline returns, the UI syncs metadata as the **signed-in staff user** (JWT under RLS). Clients are DB-first — the desktop does not create client rows. Filename parsing derives shortcodes and taxonomy arrays for asset upserts; CDN and provider URL maps from the run are attached to records.
 
-Legacy identity matches by shortcode and can delete stale rows. Migrated identity matches stable/child IDs, preserves rename continuity, and marks missing records disconnected. Targeted R2 cleanup protects object keys still referenced by active rows, particularly shared/gallery thumbnail cases.
+Tags are **not** pushed from vocabulary JSON as source of truth — administer them on the web (TagsAdmin). Pending `rename_tasks` from web tag edits may be processed on the next run.
 
-Synchronization is not an atomic transaction with filesystem, R2, or provider APIs. A retry must reconcile partial state. Service-role access also means a bug can bypass normal RLS, so test new synchronization changes on a non-production client and keep backups.
-
-See [Safe reruns](/operations/safe-reruns) and [Stable identity](/desktop/identity).
+Continue with [Taxonomy](/data-model/taxonomy), [Stable identity](/desktop/identity), and [Platform division](/getting-started/platform-division).

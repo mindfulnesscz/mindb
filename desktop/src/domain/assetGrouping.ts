@@ -1,13 +1,17 @@
-/* Groups scanned OUT-folder file paths into single assets vs. gallery groups (files
-   nested one level under OUT share a parent folder and form one logical asset).
+/* Groups scanned OUT-folder file paths into single assets vs. gallery groups.
+
+   A gallery is any nested folder under OUT that contains publishable files.
+   The gallery name is the full relative path under OUT (excluding the filename),
+   so `Selected/a.jpg` and `All/a.jpg` become two galleries — and so do nested
+   `Galleries/Selected/…` vs `Galleries/All/…`.
 
    Also resolves each group's "package dir" — the OUT folder's parent, which is where a
    folder-based stable identity hash (see domain/stableId.ts) lives once assigned. Assets
    with no OUT ancestor at all (legacy/orphan layout) fall back to their direct parent. */
 
 export interface GalleryGroup {
-  name:       string    // folder name — parsed for metadata (entity/format/angle/tags)
-  childStems: string[]  // file stems inside the folder
+  name:       string    // folder path under OUT — parsed for metadata (entity/format/angle/tags)
+  childStems: string[]  // unique file stems inside the folder (path-qualified when needed)
 }
 
 export interface GroupedAssets {
@@ -21,12 +25,17 @@ export interface GroupedAssets {
   orphanKeys:  Set<string>;
 }
 
+/** Stem key unique within a package: plain filename stem, or `folder/…/stem` when nested. */
+function childStemKey(relativeDir: string, fileStem: string): string {
+  return relativeDir ? `${relativeDir}/${fileStem}` : fileStem;
+}
+
 export function groupAssets(
   paths: string[],
   outFolderName: string,
 ): GroupedAssets {
   const singles: string[] = [];
-  const folderMap = new Map<string, string[]>(); // folderName → childStems[]
+  const folderMap = new Map<string, string[]>(); // galleryPath → childStemKeys[]
   const packageDirs = new Map<string, string>();
   const filePaths   = new Map<string, string>();
   const orphanKeys  = new Set<string>();
@@ -39,22 +48,26 @@ export function groupAssets(
       if (parts[i].toLowerCase() === outFolderName.toLowerCase()) { outIdx = i; break; }
     }
     const relative   = outIdx >= 0 ? parts.slice(outIdx + 1) : [parts[parts.length - 1]];
-    const stem       = relative[relative.length - 1].replace(/\.[^.]+$/, '');
+    const fileName   = relative[relative.length - 1];
+    const stem       = fileName.replace(/\.[^.]+$/, '');
     // Package dir: OUT's parent when an OUT ancestor exists, else the file's direct parent (orphan).
     const packageDir = outIdx >= 0 ? parts.slice(0, outIdx).join('/') : parts.slice(0, -1).join('/');
 
-    filePaths.set(stem, absPath);
-
     if (relative.length === 1) {
+      filePaths.set(stem, absPath);
       singles.push(stem);
       packageDirs.set(stem, packageDir);
       if (outIdx < 0) orphanKeys.add(stem);
     } else {
-      const folderName = relative[0]; // immediate child folder of OUT
-      const existing = folderMap.get(folderName) ?? [];
-      folderMap.set(folderName, [...existing, stem]);
-      packageDirs.set(folderName, packageDir);
-      if (outIdx < 0) orphanKeys.add(folderName);
+      // Gallery = every directory segment under OUT except the file itself.
+      // `Selected/a.jpg` → "Selected"; `Galleries/All/a.jpg` → "Galleries/All"
+      const galleryPath = relative.slice(0, -1).join('/');
+      const key = childStemKey(galleryPath, stem);
+      filePaths.set(key, absPath);
+      const existing = folderMap.get(galleryPath) ?? [];
+      folderMap.set(galleryPath, [...existing, key]);
+      packageDirs.set(galleryPath, packageDir);
+      if (outIdx < 0) orphanKeys.add(galleryPath);
     }
   }
 

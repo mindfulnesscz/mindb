@@ -20,8 +20,10 @@ import { uploadDropboxFile, uploadOneDriveFile, uploadGDriveFile } from './cloud
 import type { CloudDestination } from '../domain/client';
 import { stripStableId } from '../domain/stableId';
 import { resolveCdnIdentity } from './supabaseService';
+import { storageKey } from './pipeline/storageKey';
 
 export interface CloudUrlEntry {
+  destId?:  string;  // CloudDestination.id — preferred match key in the portal
   provider: string;  // 'dropbox' | 'onedrive' | 'gdrive'
   name:     string;  // destination name (from CloudDestination.name)
   url:      string;  // sharing link
@@ -31,9 +33,10 @@ export interface R2Config {
   endpoint:     string;
   accessKeyId:  string;
   secretKey:    string;
-  sessionToken: string;  // short-lived grant credentials (Control API) — always present
+  sessionToken: string;
   bucket:       string;
   publicDomain: string;
+  keyPrefix:    string;  // e.g. "{client_id}/" — prepended to all object keys
 }
 
 export interface RunContext {
@@ -50,8 +53,9 @@ export interface RunContext {
   originalUrls?:     Map<string, string>;                  // stem → public CDN URL of the original file (version-stable key)
   cloudUrls?:        Map<string, CloudUrlEntry[]>;         // stem → cloud sharing URLs, populated by cloud export
   cloudDestinations?: CloudDestination[];                  // active cloud destinations to export to
-  identityMigrated?: boolean;                              // client.identityMigrated — gates stable-identity CDN keying
-  cdnIdentity?:      Map<string, { stableId: string; childId: string }>; // stem → rename-proof identity, populated pre-CDN-upload
+  identityMigrated?: boolean;
+  cdnIdentity?:      Map<string, { stableId: string; childId: string }>;
+  storageKeyPrefix?: string;  // mirrors r2.keyPrefix when CDN enabled
 }
 
 /* ── Naming helpers ─────────────────────────────────────────────────────── */
@@ -703,6 +707,50 @@ function r2PublicUrl(publicDomain: string, objectKey: string): string {
   return `${publicDomain.replace(/\/+$/, '')}/${objectKey}`;
 }
 
+/* ── Local cloud-export cache — same idea as R2: mtime+size fast-path so
+   unchanged files skip without readFile / Drive list / Dropbox metadata.
+   Network skip/upload remains the backstop on cache miss. ────────────────── */
+interface CloudCacheEntry { mtimeMs: number; size: number; url?: string | null }
+type CloudCache = Record<string, CloudCacheEntry>
+
+let cloudCacheMemo: CloudCache | null = null
+
+async function getCloudCachePath(): Promise<string> {
+  return await join(await appDataDir(), 'cloud-upload-cache.json')
+}
+
+async function loadCloudCache(): Promise<CloudCache> {
+  if (cloudCacheMemo) return cloudCacheMemo
+  try {
+    const path = await getCloudCachePath()
+    cloudCacheMemo = (await exists(path)) ? JSON.parse(await readTextFile(path)) : {}
+  } catch {
+    cloudCacheMemo = {}
+  }
+  return cloudCacheMemo!
+}
+
+async function saveCloudCache(cache: CloudCache): Promise<void> {
+  try {
+    await writeTextFile(await getCloudCachePath(), JSON.stringify(cache))
+  } catch { /* best-effort */ }
+}
+
+function cloudCacheKey(destId: string, nestedName: string): string {
+  return `${destId}::${nestedName}`
+}
+
+function rememberCloudUpload(
+  cache: CloudCache,
+  destId: string,
+  nestedName: string,
+  mtimeMs: number,
+  size: number,
+  url: string | null,
+): void {
+  cache[cloudCacheKey(destId, nestedName)] = { mtimeMs, size, url: url ?? null }
+}
+
 /* One ListObjectsV2 sweep of a key prefix at the start of an upload phase.
    Existence can then be decided locally — without it, every cache miss pays a
    per-file HEAD and every upload a per-file LIST for the sibling cleanup.
@@ -788,7 +836,7 @@ async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<void> {
 
   const r2Cache = await loadR2Cache();
   let r2CacheDirty = false;
-  const remoteKeys = await fetchR2KeyManifest(r2, 'thumbnails/', appendLog);
+  const remoteKeys = await fetchR2KeyManifest(r2, storageKey(r2.keyPrefix, 'thumbnails/'), appendLog);
 
   const CONCURRENCY = 8;
   for (let i = 0; i < thumbFiles.length; i += CONCURRENCY) {
@@ -810,9 +858,12 @@ async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<void> {
       const fileName = thumbPath.split('/').pop()!;
       const identity = ctx.cdnIdentity?.get(stem);
       // Stable-identity key when resolved (rename-proof) — else today's filename-based key.
-      const objectKey = identity
-        ? `thumbnails/${identity.stableId}/${identity.childId}.webp`
-        : `thumbnails/${fileName}`;
+      const objectKey = storageKey(
+        r2.keyPrefix,
+        identity
+          ? `thumbnails/${identity.stableId}/${identity.childId}.webp`
+          : `thumbnails/${fileName}`,
+      );
 
       // Cheap local check (mtime+size, no file read/hash/network) before the real thing.
       // A manifest that says the key is gone from R2 overrides the cache — re-upload.
@@ -920,14 +971,15 @@ async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promise<void
 
   const r2Cache = await loadR2Cache();
   let r2CacheDirty = false;
-  const remoteKeys = await fetchR2KeyManifest(r2, 'originals/', appendLog);
+  const remoteKeys = await fetchR2KeyManifest(r2, storageKey(r2.keyPrefix, 'originals/'), appendLog);
 
   // Identity by full filename first — extension-only variants (foo.pdf + foo.webp)
   // share a stem but carry distinct child ids in the manifest. Falling back to the
   // stem covers files scanned before per-file resolution existed.
   const withKeys = files.map(f => {
     const identity  = ctx.cdnIdentity?.get(`${f.stem}${f.ext}`) ?? ctx.cdnIdentity?.get(f.stem);
-    const keyPrefix = identity ? `originals/${identity.stableId}/${identity.childId}` : `originals/${f.shortcode}`;
+    const rel = identity ? `originals/${identity.stableId}/${identity.childId}` : `originals/${f.shortcode}`;
+    const keyPrefix = storageKey(r2.keyPrefix, rel);
     return { ...f, keyPrefix, objectKey: `${keyPrefix}${f.ext}` };
   });
   // Keys claimed by any file this run — the stale-sibling cleanup must never delete
@@ -1051,9 +1103,12 @@ export async function reconcileCdn(ctx: RunContext, stats: RunStats): Promise<vo
       const fileName = srcPath.split('/').pop()!;
       const stem     = fileName.substring(0, fileName.lastIndexOf('.'));
       const identity = ctx.cdnIdentity?.get(stem);
-      return identity
-        ? `thumbnails/${identity.stableId}/${identity.childId}.webp`
-        : `thumbnails/${stem}-thumb.webp`;
+      return storageKey(
+        r2.keyPrefix,
+        identity
+          ? `thumbnails/${identity.stableId}/${identity.childId}.webp`
+          : `thumbnails/${stem}-thumb.webp`,
+      );
     }),
   );
 
@@ -1065,7 +1120,7 @@ export async function reconcileCdn(ctx: RunContext, stats: RunStats): Promise<vo
       accessKeyId:  r2.accessKeyId,
       secretKey:    r2.secretKey,
           sessionToken: r2.sessionToken,
-      prefix:       'thumbnails/',
+      prefix:       storageKey(r2.keyPrefix, 'thumbnails/'),
     });
   } catch (e) {
     appendLog('error', `  ✕  Could not list R2 objects: ${e}`);
@@ -1161,8 +1216,21 @@ function mimeFromExt(ext: string): string {
   return m[ext.toLowerCase()] ?? 'application/octet-stream';
 }
 
+function relativeUnderOut(srcPath: string, outFolderName: string): { dir: string; fileName: string } {
+  const parts = srcPath.replace(/\\/g, '/').split('/');
+  let outIdx = -1;
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (parts[i].toLowerCase() === outFolderName.toLowerCase()) { outIdx = i; break; }
+  }
+  const fileName = parts[parts.length - 1] ?? '';
+  if (outIdx < 0) return { dir: '', fileName };
+  const relative = parts.slice(outIdx + 1);
+  if (relative.length <= 1) return { dir: '', fileName };
+  return { dir: relative.slice(0, -1).join('/'), fileName };
+}
+
 async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
-  const { vocab, appendLog, collectedAssets, cloudDestinations, cloudUrls } = ctx;
+  const { vocab, appendLog, collectedAssets, cloudDestinations, cloudUrls, settings } = ctx;
 
   appendLog('section', '━━━ CLOUD EXPORT ━━━');
 
@@ -1182,12 +1250,14 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
     return;
   }
 
+  const outFolder = settings.outFolder || 'OUT';
   const files = (collectedAssets ?? []).map(srcPath => {
     const fileName = srcPath.split('/').pop()!;
     const dotIdx   = fileName.lastIndexOf('.');
     const ext      = dotIdx > 0 ? fileName.slice(dotIdx) : '';
     const stem     = dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName;
-    return { srcPath, stem, ext, fileName };
+    const { dir: relativeDir } = relativeUnderOut(srcPath, outFolder);
+    return { srcPath, stem, ext, fileName, relativeDir };
   });
 
   if (!files.length) {
@@ -1197,10 +1267,20 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
 
   appendLog('info', `  ${activeDests.length} destination(s) · ${files.length} asset(s)`);
   const vocabMap = buildVocabContext(vocab);
+  const cloudCache = await loadCloudCache();
+  let cloudCacheDirty = false;
 
   for (const dest of activeDests) {
     const cfg = dest.config;
     if (cfg.type === 'local') continue;
+
+    // Preserve OUT-relative folders by default; dest.flatExport dumps everything into remotePath.
+    const flatten = dest.flatExport === true;
+    if (flatten) {
+      appendLog('dim', `  ${dest.name}: flat export (folder structure ignored)`);
+    } else {
+      appendLog('dim', `  ${dest.name}: preserving folders under OUT`);
+    }
 
     if (!dest.generateLink) {
       appendLog('info', `  → ${dest.name} (${cfg.type}) — uploading without link collection`);
@@ -1210,64 +1290,140 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
 
     let uploaded = 0;
     let skipped  = 0;
+    let cached   = 0;
     let errors   = 0;
+    let uploadLogged = 0;
 
-    const CONCURRENCY = 2;
+    // Match CDN: high concurrency; cache hits stay silent (summary only).
+    const CONCURRENCY = 8;
     for (let i = 0; i < files.length; i += CONCURRENCY) {
       const batch = files.slice(i, i + CONCURRENCY);
-      await Promise.all(batch.map(async ({ srcPath, stem, ext, fileName }) => {
+      await Promise.all(batch.map(async ({ srcPath, stem, ext, relativeDir }) => {
         const translated = translateExportName(stem, ext, vocabMap);
+        const nestedName = !flatten && relativeDir
+          ? `${relativeDir}/${translated}`
+          : translated;
         let url: string | null = null;
         try {
+          // Cheap local fast-path (CDN-style): matching mtime+size → skip with no
+          // file read and no provider API. Requires a prior successful upload/skip
+          // that wrote this cache entry; first run still hits the network.
+          let srcInfo: Awaited<ReturnType<typeof stat>>;
+          try {
+            srcInfo = await stat(srcPath);
+          } catch (e) {
+            throw new Error(`Cannot stat ${srcPath}: ${e}`);
+          }
+          const mtimeMs = srcInfo.mtime?.getTime() ?? -1;
+          const cacheEntry = cloudCache[cloudCacheKey(dest.id, nestedName)];
+          // URL is optional — missing link must not force a network round-trip every run.
+          if (cacheEntry && cacheEntry.size === srcInfo.size && cacheEntry.mtimeMs === mtimeMs) {
+            url = dest.generateLink ? (cacheEntry.url ?? null) : null;
+            cached += 1;
+            skipped += 1;
+            if (url && cloudUrls && dest.role === 'client') {
+              const mapKey = relativeDir ? `${relativeDir}/${stem}` : stem;
+              const existing = cloudUrls.get(mapKey) ?? cloudUrls.get(stem) ?? [];
+              const idx = existing.findIndex(e => e.destId === dest.id || e.name === dest.name);
+              const entry = { destId: dest.id, provider: cfg.type, name: dest.name, url };
+              if (idx >= 0) existing[idx] = entry; else existing.push(entry);
+              cloudUrls.set(mapKey, existing);
+              if (mapKey !== stem) cloudUrls.set(stem, existing);
+            }
+            return;
+          }
+
           if (cfg.type === 'dropbox') {
-            // Rust command reads the file natively — no readFile() / WKWebView body limits.
-            // Skips upload if the file already exists on Dropbox.
             const base   = cfg.remotePath.replace(/\/$/, '');
-            const remote = (base.startsWith('/') ? base : '/' + base) + '/' + translated;
+            const remote = (base.startsWith('/') ? base : '/' + base) + '/' + nestedName;
             const result = await uploadDropboxFile(cfg.token!.accessToken, srcPath, remote, dest.generateLink);
             url = result.url;
             if (result.skipped) {
-              appendLog('dim', `  ↷  ${fileName} (already on Dropbox)`);
               skipped += 1;
             } else {
-              appendLog('success', `  ✓  ${fileName}`);
+              if (uploadLogged < 3) {
+                appendLog('success', `  ✓  ${nestedName}`);
+                uploadLogged += 1;
+              } else if (uploadLogged === 3) {
+                appendLog('dim', `  … further uploads omitted from log`);
+                uploadLogged += 1;
+              }
               uploaded += 1;
               stats.published += 1;
             }
-          } else {
+          } else if (cfg.type === 'onedrive') {
             const bytes = await readFile(srcPath);
-            if (cfg.type === 'onedrive') {
-              const base   = cfg.remotePath.replace(/^\//, '').replace(/\/$/, '');
-              const remote = base ? `${base}/${translated}` : translated;
-              url = await uploadOneDriveFile(cfg.token!.accessToken, bytes, remote, dest.generateLink);
-            } else if (cfg.type === 'gdrive') {
-              url = await uploadGDriveFile(
-                cfg.token!.accessToken, bytes, mimeFromExt(ext),
-                translated, cfg.remotePath, dest.generateLink, cfg.sharedDriveId,
-              );
+            const base   = cfg.remotePath.replace(/^\//, '').replace(/\/$/, '');
+            const remote = base ? `${base}/${nestedName}` : nestedName;
+            url = await uploadOneDriveFile(cfg.token!.accessToken, bytes, remote, dest.generateLink);
+            if (uploadLogged < 3) {
+              appendLog('success', `  ✓  ${nestedName}`);
+              uploadLogged += 1;
+            } else if (uploadLogged === 3) {
+              appendLog('dim', `  … further uploads omitted from log`);
+              uploadLogged += 1;
             }
-            appendLog('success', `  ✓  ${fileName}`);
             uploaded += 1;
             stats.published += 1;
+          } else if (cfg.type === 'gdrive') {
+            const folderPath = !flatten && relativeDir
+              ? [cfg.remotePath.replace(/\/$/, ''), relativeDir].filter(Boolean).join('/')
+              : cfg.remotePath;
+            // Lazy bytes: unchanged Drive files never leave disk into the webview.
+            const result = await uploadGDriveFile(
+              cfg.token!.accessToken,
+              srcInfo.size,
+              () => readFile(srcPath),
+              mimeFromExt(ext),
+              translated,
+              folderPath,
+              dest.generateLink,
+              cfg.sharedDriveId,
+            );
+            url = result.url;
+            if (result.skipped) {
+              skipped += 1;
+            } else {
+              if (uploadLogged < 3) {
+                appendLog('success', `  ✓  ${nestedName}`);
+                uploadLogged += 1;
+              } else if (uploadLogged === 3) {
+                appendLog('dim', `  … further uploads omitted from log`);
+                uploadLogged += 1;
+              }
+              uploaded += 1;
+              stats.published += 1;
+            }
           }
+
+          rememberCloudUpload(cloudCache, dest.id, nestedName, mtimeMs, srcInfo.size, url);
+          cloudCacheDirty = true;
+
           // Only client-role destinations feed the client-facing web portal —
           // internal-team links should never end up there.
           if (url && cloudUrls && dest.role === 'client') {
-            const existing = cloudUrls.get(stem) ?? [];
-            const idx      = existing.findIndex(e => e.name === dest.name);
-            const entry    = { provider: cfg.type, name: dest.name, url };
+            const mapKey = relativeDir ? `${relativeDir}/${stem}` : stem;
+            const existing = cloudUrls.get(mapKey) ?? cloudUrls.get(stem) ?? [];
+            const idx      = existing.findIndex(e => e.destId === dest.id || e.name === dest.name);
+            const entry    = { destId: dest.id, provider: cfg.type, name: dest.name, url };
             if (idx >= 0) existing[idx] = entry; else existing.push(entry);
-            cloudUrls.set(stem, existing);
+            cloudUrls.set(mapKey, existing);
+            if (mapKey !== stem) cloudUrls.set(stem, existing);
           }
         } catch (e) {
-          appendLog('error', `  ✕  ${fileName}: ${e}`);
+          appendLog('error', `  ✕  ${nestedName}: ${e}`);
           errors += 1;
           stats.errors += 1;
         }
       }));
     }
-    appendLog('dim', `     ${uploaded} uploaded · ${skipped} skipped · ${errors} errors`);
+    appendLog(
+      'section',
+      `  ${dest.name} DONE — ${uploaded} uploaded · ${cached} cached · ${skipped - cached} remote-skip · ${errors} errors`,
+    );
   }
+
+  if (cloudCacheDirty) await saveCloudCache(cloudCache);
 
   const totalLinks = [...(cloudUrls?.values() ?? [])].reduce((n, arr) => n + arr.length, 0);
   if (totalLinks === 0 && activeDests.some(d => !d.generateLink)) {

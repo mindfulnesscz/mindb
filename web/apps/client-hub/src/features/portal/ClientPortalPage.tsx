@@ -281,6 +281,11 @@ export default function ClientPortalPage() {
             <p className="font-sans text-sm text-text-muted mb-10">
               Asset portal — request access or sign in below.
             </p>
+            {import.meta.env.MODE !== 'production' && (
+              <p className="font-mono text-[10px] text-text-subtle mb-4">
+                {import.meta.env.MODE} · {String(import.meta.env.VITE_SUPABASE_URL ?? '').replace(/^https?:\/\//, '').split('.')[0] || 'no-supabase'}
+              </p>
+            )}
             <button
               onClick={() => { setShowModal(true); setLinkError(null) }}
               className="px-8 py-3 text-sm font-sans font-semibold bg-cosmos-black text-clear-white rounded-sm hover:bg-ink-800 transition-colors"
