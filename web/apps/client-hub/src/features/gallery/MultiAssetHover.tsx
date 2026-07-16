@@ -61,8 +61,8 @@ export function gridGeometry(count: number): { cols: number; className: string }
   return { cols: 4, className: 'grid-cols-4' }
 }
 
-const mosaicIn = { duration: 0.87, ease: [0.65, 0, 0.35, 1] as const } // easeInOutCubic
-const mosaicOut = { duration: 0.36, ease: [0.4, 0, 1, 1] as const }
+const mosaicIn = { duration: 0.7, ease: [0.65, 0, 0.35, 1] as const } // easeInOutCubic
+const mosaicOut = { duration: 0.29, ease: [0.4, 0, 1, 1] as const }
 const tileStart = 0.58
 
 function ShimmerBlock() {
@@ -128,7 +128,7 @@ export function MultiAssetHoverGrid({
         className={`absolute inset-0 z-[11] flex items-center justify-center p-2 ${open ? '' : 'pointer-events-none'}`}
         onClick={e => e.stopPropagation()}
       >
-        <div className={`grid ${cols} gap-1.5 w-full ${n === 2 ? 'items-center' : ''}`}>
+        <div className={`grid ${cols} gap-[2px] w-full ${n === 2 ? 'items-center' : ''}`}>
           <AnimatePresence>
             {open && showShimmer && Array.from({ length: 4 }).map((_, i) => (
               <motion.div
