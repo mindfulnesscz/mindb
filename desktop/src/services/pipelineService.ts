@@ -23,6 +23,7 @@ import { resolveCdnIdentity } from './supabaseService';
 import { storageKey } from './pipeline/storageKey';
 
 export interface CloudUrlEntry {
+  destId?:  string;  // CloudDestination.id — preferred match key in the portal
   provider: string;  // 'dropbox' | 'onedrive' | 'gdrive'
   name:     string;  // destination name (from CloudDestination.name)
   url:      string;  // sharing link
@@ -1264,8 +1265,8 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
           // internal-team links should never end up there.
           if (url && cloudUrls && dest.role === 'client') {
             const existing = cloudUrls.get(stem) ?? [];
-            const idx      = existing.findIndex(e => e.name === dest.name);
-            const entry    = { provider: cfg.type, name: dest.name, url };
+            const idx      = existing.findIndex(e => e.destId === dest.id || e.name === dest.name);
+            const entry    = { destId: dest.id, provider: cfg.type, name: dest.name, url };
             if (idx >= 0) existing[idx] = entry; else existing.push(entry);
             cloudUrls.set(stem, existing);
           }

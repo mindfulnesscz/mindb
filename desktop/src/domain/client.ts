@@ -46,12 +46,20 @@ export type DestConfig =
   | OneDriveDestConfig
   | GDriveDestConfig;
 
+export type HubRole = 'public' | 'member' | 'editor' | 'admin';
+
 export interface CloudDestination {
   id:           string;
   name:         string;
   role:         DestRole;
+  /** Minimum hub role that may see this destination's share links in the portal. */
+  minRole:      HubRole;
   flatExport:   boolean;
   generateLink: boolean;
+  /** Show sharing links from this dest on asset detail in the portal. */
+  showInPortal: boolean;
+  /** Allow "Reveal in Finder" for roles ≥ minRole (desktop localhost bridge). */
+  allowRevealLocal: boolean;
   enabled:      boolean;   // whether this destination is checked for pipeline runs; missing/legacy = enabled
   config:       DestConfig;
 }
@@ -94,14 +102,31 @@ export function makeClient(partial: Partial<Client> = {}): Client {
 
 export function makeDestination(partial: Partial<CloudDestination> = {}): CloudDestination {
   return {
-    id:           crypto.randomUUID(),
-    name:         '',
-    role:         'internal',
-    flatExport:   false,
-    generateLink: false,
-    enabled:      true,
-    config:       { type: 'local', path: '' },
+    id:               crypto.randomUUID(),
+    name:             '',
+    role:             'internal',
+    minRole:          'member',
+    flatExport:       false,
+    generateLink:     false,
+    showInPortal:     true,
+    allowRevealLocal: false,
+    enabled:          true,
+    config:           { type: 'local', path: '' },
     ...partial,
+  };
+}
+
+/** Normalize portal / legacy JSON into a full CloudDestination. */
+export function normalizeDestination(raw: Partial<CloudDestination> & { id?: string }): CloudDestination {
+  const base = makeDestination(raw);
+  return {
+    ...base,
+    minRole:          (['public', 'member', 'editor', 'admin'] as HubRole[]).includes(raw.minRole as HubRole)
+      ? (raw.minRole as HubRole)
+      : 'member',
+    showInPortal:     raw.showInPortal !== false,
+    allowRevealLocal: Boolean(raw.allowRevealLocal),
+    enabled:          raw.enabled !== false,
   };
 }
 

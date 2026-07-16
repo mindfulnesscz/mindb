@@ -15,7 +15,7 @@
 import { readTextFile, writeTextFile, exists, mkdir, copyFile } from '@tauri-apps/plugin-fs';
 import { appDataDir, join } from '@tauri-apps/api/path';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
-import { makeClient } from '../domain/client';
+import { makeClient, normalizeDestination } from '../domain/client';
 import type { Client, CloudDestination } from '../domain/client';
 import type { VocabularyData } from '../domain/vocabulary';
 import type { Environment } from './environmentService';
@@ -303,14 +303,33 @@ export function mergeCloudDestinations(
   local:  CloudDestination[],
   remote: CloudDestination[],
 ): CloudDestination[] {
-  if (!remote.length) return local;
+  if (!remote.length) return local.map(normalizeDestination);
 
   const localById = new Map(local.map(d => [d.id, d]));
-  return remote.map(def => {
-    if (def.config.type === 'local') return def;
+  return remote.map(raw => {
+    const def = normalizeDestination(raw);
+    if (def.config.type === 'local') {
+      // Prefer a machine-local path override when the portal only has a template.
+      const existing = localById.get(def.id);
+      if (existing?.config.type === 'local' && existing.config.path) {
+        return { ...def, config: { ...def.config, path: existing.config.path } };
+      }
+      return def;
+    }
     const existing = localById.get(def.id);
-    const existingToken = existing && existing.config.type !== 'local' ? existing.config.token : null;
-    return { ...def, config: { ...def.config, token: existingToken } };
+    if (!existing || existing.config.type === 'local') return def;
+    // Portal owns structure; this machine keeps token + optional secret override.
+    const token = existing.config.token;
+    const clientSecret =
+      def.config.type === 'gdrive' && existing.config.type === 'gdrive' && existing.config.clientSecret
+        ? existing.config.clientSecret
+        : def.config.type === 'gdrive'
+          ? def.config.clientSecret
+          : undefined;
+    if (def.config.type === 'gdrive') {
+      return { ...def, config: { ...def.config, token, clientSecret: clientSecret ?? '' } };
+    }
+    return { ...def, config: { ...def.config, token } };
   });
 }
 

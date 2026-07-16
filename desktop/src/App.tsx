@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { NavRail } from './app/NavRail';
 import { PipelineView } from './features/pipeline/PipelineView';
 import { VocabularyView } from './features/vocabulary/VocabularyView';
@@ -38,6 +39,21 @@ export default function App() {
       if (!envs.activeId) setAuthStatus('unconfigured');
     }).catch(() => setAuthStatus('unconfigured'));
   }, []);
+
+  /* Localhost reveal bridge for the web portal ("Reveal in Finder"). */
+  useEffect(() => {
+    invoke('start_reveal_bridge').catch(console.error);
+  }, []);
+
+  /* Keep bridge clientId → sourceFolder map in sync with the active client. */
+  useEffect(() => {
+    const client = clients.find(c => c.id === activeClientId) ?? null;
+    if (!client) return;
+    invoke('set_reveal_client_root', {
+      clientId: client.id,
+      sourceFolder: client.sourceFolder ?? '',
+    }).catch(console.error);
+  }, [activeClientId, clients]);
 
   /* The gate: authenticate against the ACTIVE environment. Re-runs on
      environment switch; a cached session for that environment (supabase-js

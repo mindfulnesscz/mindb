@@ -12,7 +12,7 @@ import { runPipeline, scanVersionMap, type RunContext } from '../../services/pip
 import type { CloudUrlEntry } from '../../services/pipelineService';
 import { exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary, fetchClientInventory, requestR2Grant, processRenameTasks } from '../../services/supabaseService';
 import { deleteCdnObjects } from '../../services/pipelineService';
-import { saveClients, pushCloudDestinations } from '../../services/clientService';
+import { saveClients } from '../../services/clientService';
 import { notifyRunComplete } from '../../services/notifyService';
 import { groupAssets } from '../../domain/assetGrouping';
 import css from './PipelineView.module.css';
@@ -280,7 +280,7 @@ function ConfigSidebar() {
       );
       updateClient(activeClient.id, { cloudDestinations: updatedDestinations });
       saveClients({ clients: useClientStore.getState().clients, activeClientId: activeClient.id }).catch(console.error);
-      pushCloudDestinations({ ...activeClient, cloudDestinations: updatedDestinations }).catch(console.error);
+      // enabled is machine/pipeline preference — portal owns destination structure.
     }
   }
 

@@ -5,6 +5,7 @@ import { useAssets } from '../../hooks/useAssets'
 import { useTags, type TagsByDimension, type TagGroup } from '../../hooks/useTags'
 import { deleteDisconnectedAssets } from '../../services/assetService'
 import AssetDetail from './AssetDetail'
+import { MultiAssetHoverGrid, useSiblingPreviews, useDelayedHover } from './MultiAssetHover'
 
 const STATUS_LABELS: Record<string, string> = {
   draft:        'Draft',
@@ -18,33 +19,62 @@ const STATUS_LABELS: Record<string, string> = {
 // ── Asset card ────────────────────────────────────────────────
 
 function AssetCard({ asset, onClick, role }: { asset: Asset; onClick: () => void; role: string }) {
+  const isMulti = (asset.childCount ?? 0) > 0
+  const fileCount = isMulti ? (asset.childCount ?? 0) + 1 : 1
+  const [pointerIn, setPointerIn] = useState(false)
+  const hovered = useDelayedHover(pointerIn, 80)
+  const { siblings, loading } = useSiblingPreviews(asset, isMulti && hovered)
+
   return (
     <button
+      type="button"
       onClick={onClick}
+      onMouseEnter={() => setPointerIn(true)}
+      onMouseLeave={() => setPointerIn(false)}
+      onFocus={() => setPointerIn(true)}
+      onBlur={() => setPointerIn(false)}
       className="group text-left w-full border border-border rounded-sm overflow-hidden bg-surface hover:border-cosmos-black transition-colors duration-base"
     >
-      <div className="relative aspect-video bg-gray-150 overflow-hidden">
+      <div className="relative aspect-video bg-gray-150 overflow-hidden [transform-style:preserve-3d]">
         {asset.thumbnailUrl
-          ? <img referrerPolicy="no-referrer" src={asset.thumbnailUrl} alt={asset.name} className="w-full h-full object-cover" />
+          ? (
+            <img
+              referrerPolicy="no-referrer"
+              src={asset.thumbnailUrl}
+              alt={asset.name}
+              className={`w-full h-full object-cover transition-[transform,filter] duration-500 ease-out will-change-transform ${
+                isMulti && hovered ? 'scale-[1.06] blur-[1.5px] brightness-75' : 'scale-100'
+              }`}
+            />
+          )
           : <div className="w-full h-full bg-gray-150" />
         }
-        <div className="absolute top-2 left-2 flex gap-1">
+
+        {isMulti && (
+          <MultiAssetHoverGrid open={hovered} siblings={siblings} loading={loading} />
+        )}
+
+        <div className="absolute top-2 left-2 flex gap-1 z-20 pointer-events-none">
           <span className="text-[10px] font-sans font-bold uppercase tracking-label border border-cosmos-black bg-clear-white px-1.5 py-0.5 rounded-chip">
             {STATUS_LABELS[asset.status]}
           </span>
-          {(asset.childCount ?? 0) > 0 && (
-            <span className="text-[10px] font-sans font-bold uppercase tracking-label border border-cosmos-black bg-cosmos-black text-clear-white px-1.5 py-0.5 rounded-chip">
-              {asset.childCount} files
+          {isMulti && (
+            <span
+              className={`text-[10px] font-sans font-bold uppercase tracking-label border border-cosmos-black bg-cosmos-black text-clear-white px-1.5 py-0.5 rounded-chip transition-transform duration-300 ${
+                hovered ? 'scale-105' : 'scale-100'
+              }`}
+            >
+              {fileCount} files
             </span>
           )}
         </div>
         {!asset.latest && (
-          <div className="absolute bottom-2 left-2 text-[9px] font-sans font-bold uppercase tracking-label border border-cosmos-black bg-clear-white/90 px-1.5 py-0.5 rounded-chip">
+          <div className="absolute bottom-2 left-2 z-20 text-[9px] font-sans font-bold uppercase tracking-label border border-cosmos-black bg-clear-white/90 px-1.5 py-0.5 rounded-chip pointer-events-none">
             older version
           </div>
         )}
         {asset.approval === 'pending' && (
-          <div className="absolute bottom-2 right-2 text-[9px] font-sans font-bold uppercase tracking-label border border-cosmos-black bg-clear-white/90 px-1.5 py-0.5 rounded-chip">
+          <div className="absolute bottom-2 right-2 z-20 text-[9px] font-sans font-bold uppercase tracking-label border border-cosmos-black bg-clear-white/90 px-1.5 py-0.5 rounded-chip pointer-events-none">
             awaiting you
           </div>
         )}

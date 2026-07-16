@@ -8,6 +8,13 @@ import { updateAssetStatus, fetchChildAssets, fetchVariants, updateAssetPerm, de
 import { fetchComments, addComment, deleteComment, type RealComment } from '../../services/commentService'
 import { fetchMyRating, upsertRating } from '../../services/ratingService'
 import { trackEvent, fetchEventCounts, type EventCounts } from '../../services/eventService'
+import {
+  fetchDestinations,
+  destinationsVisibleToRole,
+  roleAtLeast,
+  type PortalDestination,
+} from '../../services/destinationService'
+import { revealInDesktop } from '../../services/revealService'
 import { isConfigured } from '../../lib/supabase'
 
 // Good-practice naming convention: variants of one asset share the same tags and differ
@@ -145,9 +152,43 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
   const [commentThanks, setCommentThanks] = useState(false)
   const thanksTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [eventCounts, setEventCounts] = useState<EventCounts>({ views: 0, downloads: 0 })
+  const [destinations, setDestinations] = useState<PortalDestination[]>([])
+  const [revealBusy, setRevealBusy] = useState(false)
+  const [revealMsg, setRevealMsg] = useState('')
 
   const accent = activeClient?.accent ?? '#161616'
   const isStaff = role === 'admin' || role === 'editor'
+
+  // Portal destination defs — role-gate cloud share links + Reveal
+  useEffect(() => {
+    if (!activeClient?.id || !isConfigured()) return
+    fetchDestinations(activeClient.id).then(setDestinations).catch(() => setDestinations([]))
+  }, [activeClient?.id])
+
+  const visibleDests = useMemo(
+    () => destinationsVisibleToRole(destinations, role),
+    [destinations, role],
+  )
+
+  const cloudLinks = useMemo(() => {
+    const urls = selectedAsset.downloadUrls ?? []
+    if (urls.length === 0) return []
+    return urls.filter(link => {
+      const dest = visibleDests.find(d =>
+        (link.destId && d.id === link.destId) || d.name === link.name,
+      )
+      // Unknown dest (legacy link without matching def): show to staff only
+      if (!dest) return isStaff
+      return true
+    })
+  }, [selectedAsset.downloadUrls, visibleDests, isStaff])
+
+  const canReveal = useMemo(() => {
+    if (!selectedAsset.stableId && !asset.stableId) return false
+    return destinations.some(d =>
+      d.enabled && d.allowRevealLocal && roleAtLeast(role, d.minRole),
+    )
+  }, [destinations, role, selectedAsset.stableId, asset.stableId])
 
   // Track view + load event counts
   useEffect(() => {
@@ -587,20 +628,68 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
 
         {/* Download — tracks/downloads whichever variant is selected above, defaulting to this asset */}
         {canDownload(role, asset) && (
-          <button
-            onClick={() => {
-              trackEvent(selectedAsset.id, 'download', userId, role).catch(() => {})
-              setEventCounts(c => ({ ...c, downloads: c.downloads + 1 }))
-              webAssetActions.download?.(selectedAsset)
-            }}
-            className="w-full py-3 text-sm font-sans font-semibold text-clear-white rounded-sm transition-all active:translate-y-px"
-            style={{
-              backgroundColor: accent,
-              boxShadow: `5px 5px 0 #161616`,
-            }}
-          >
-            ↓ Download
-          </button>
+          <div className="space-y-2">
+            <button
+              onClick={() => {
+                trackEvent(selectedAsset.id, 'download', userId, role).catch(() => {})
+                setEventCounts(c => ({ ...c, downloads: c.downloads + 1 }))
+                webAssetActions.download?.(selectedAsset)
+              }}
+              className="w-full py-3 text-sm font-sans font-semibold text-clear-white rounded-sm transition-all active:translate-y-px"
+              style={{
+                backgroundColor: accent,
+                boxShadow: `5px 5px 0 #161616`,
+              }}
+            >
+              ↓ Download
+            </button>
+
+            {cloudLinks.length > 0 && (
+              <div className="space-y-1.5">
+                <p className="text-[10px] font-sans font-bold uppercase tracking-label text-text-muted">
+                  Source links
+                </p>
+                {cloudLinks.map(link => (
+                  <a
+                    key={`${link.destId ?? link.name}-${link.url}`}
+                    href={link.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-between gap-2 w-full px-3 py-2 text-[12px] font-sans border border-border rounded-sm hover:border-cosmos-black transition-colors"
+                  >
+                    <span className="font-semibold truncate">{link.name || link.provider}</span>
+                    <span className="text-[10px] uppercase tracking-label text-text-muted shrink-0">
+                      {link.provider}
+                    </span>
+                  </a>
+                ))}
+              </div>
+            )}
+
+            {canReveal && (
+              <div className="space-y-1">
+                <button
+                  type="button"
+                  disabled={revealBusy}
+                  onClick={async () => {
+                    const sid = selectedAsset.stableId ?? asset.stableId
+                    if (!sid || !activeClient?.id) return
+                    setRevealBusy(true)
+                    setRevealMsg('')
+                    const result = await revealInDesktop(activeClient.id, sid)
+                    setRevealBusy(false)
+                    setRevealMsg(result.ok ? 'Opened in Finder / Explorer' : result.error)
+                  }}
+                  className="w-full py-2.5 text-sm font-sans font-semibold border border-cosmos-black rounded-sm text-cosmos-black hover:bg-gray-100 transition-colors disabled:opacity-50"
+                >
+                  {revealBusy ? 'Revealing…' : 'Reveal in Finder'}
+                </button>
+                {revealMsg && (
+                  <p className="text-[11px] font-sans text-text-muted">{revealMsg}</p>
+                )}
+              </div>
+            )}
+          </div>
         )}
 
         {/* Comments — only for non-public roles */}

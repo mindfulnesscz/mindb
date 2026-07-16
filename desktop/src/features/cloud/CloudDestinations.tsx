@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { open as openBrowser } from '@tauri-apps/plugin-shell';
-import { Pencil, Trash2, Plus, ChevronLeft, Copy, Check, RefreshCw } from 'lucide-react';
+import { Pencil, ChevronLeft, Copy, Check, RefreshCw, RefreshCcw } from 'lucide-react';
 import { useClientStore } from '../../store/clientStore';
-import { saveClients, pushCloudDestinations } from '../../services/clientService';
+import { saveClients, pullCloudDestinations } from '../../services/clientService';
+import { useEnvironmentStore } from '../../store/environmentStore';
+import { saveLocalClient } from '../../services/clientService';
 import {
   connectDropbox, checkDropboxConnection, refreshDropboxToken,
   startOneDriveDeviceCode, pollOneDriveToken, checkOneDriveConnection, refreshOneDriveToken,
@@ -11,20 +13,23 @@ import {
   type DeviceCodeInfo, delay,
 } from '../../services/cloudService';
 import {
-  makeDestination, tokenStatus, cloudToken,
-  type CloudDestination, type DestConfig, type DestType, type DestRole,
+  tokenStatus, cloudToken,
+  type CloudDestination, type DestConfig, type DestType,
   type LocalDestConfig, type DropboxDestConfig, type OneDriveDestConfig, type GDriveDestConfig,
   type CloudToken,
 } from '../../domain/client';
 import css from './CloudDestinations.module.css';
 
-/* ── Main container ──────────────────────────────────────────────────────── */
+/* ── Main container — portal owns structure; this UI is credentials only ─── */
 
 export function CloudDestinations() {
   const { clients, activeClientId, updateClient } = useClientStore();
+  const activeEnvId = useEnvironmentStore(s => s.activeEnvId);
   const activeClient = clients.find(c => c.id === activeClientId) ?? null;
-  const [view, setView]   = useState<'list' | 'form'>('list');
+  const [view, setView] = useState<'list' | 'form'>('list');
   const [editing, setEditing] = useState<CloudDestination | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState('');
 
   if (!activeClient) {
     return <p className={css.noClient}>Select a client to manage cloud destinations.</p>;
@@ -32,28 +37,42 @@ export function CloudDestinations() {
 
   const dests = activeClient.cloudDestinations;
 
-  function persist(updated: CloudDestination[]) {
+  function persistLocal(updated: CloudDestination[]) {
     if (!activeClient) return;
     updateClient(activeClient.id, { cloudDestinations: updated });
     const updatedClients = clients.map(c => c.id === activeClientId
       ? { ...c, cloudDestinations: updated } : c);
     saveClients({ clients: updatedClients, activeClientId }).catch(console.error);
-    pushCloudDestinations({ ...activeClient, cloudDestinations: updated }).catch(console.error);
+    if (activeEnvId) {
+      const next = updatedClients.find(c => c.id === activeClient.id);
+      if (next) saveLocalClient(activeEnvId, next).catch(console.error);
+    }
   }
 
   function handleSave(dest: CloudDestination) {
-    const isNew = !dests.find(d => d.id === dest.id);
-    persist(isNew ? [...dests, dest] : dests.map(d => d.id === dest.id ? dest : d));
+    persistLocal(dests.map(d => d.id === dest.id ? dest : d));
     setView('list');
   }
 
-  function handleDelete(id: string) {
-    persist(dests.filter(d => d.id !== id));
-  }
-
-  function startAdd() {
-    setEditing(null);
-    setView('form');
+  async function handleSync() {
+    if (!activeClient || syncing) return;
+    setSyncing(true);
+    setSyncMsg('');
+    try {
+      const merged = await pullCloudDestinations(activeClient);
+      if (!merged) {
+        setSyncMsg('Could not reach portal — check environment connection.');
+        return;
+      }
+      persistLocal(merged);
+      setSyncMsg(merged.length
+        ? `Synced ${merged.length} destination${merged.length === 1 ? '' : 's'} from portal.`
+        : 'No destinations in portal yet — add them under Admin → client.');
+    } catch (e) {
+      setSyncMsg(String(e).replace(/^Error:\s*/i, ''));
+    } finally {
+      setSyncing(false);
+    }
   }
 
   function startEdit(dest: CloudDestination) {
@@ -62,30 +81,38 @@ export function CloudDestinations() {
   }
 
   return view === 'list'
-    ? <DestList
+    ? (
+      <DestList
         dests={dests}
         clientName={activeClient.name}
-        onAdd={startAdd}
+        syncing={syncing}
+        syncMsg={syncMsg}
+        onSync={handleSync}
         onEdit={startEdit}
-        onDelete={handleDelete}
       />
-    : <DestForm
-        dest={editing ?? makeDestination()}
-        onSave={handleSave}
-        onBack={() => setView('list')}
-      />;
+    )
+    : editing
+      ? (
+        <DestCredentialsForm
+          dest={editing}
+          onSave={handleSave}
+          onBack={() => setView('list')}
+        />
+      )
+      : null;
 }
 
 /* ── Destination list ────────────────────────────────────────────────────── */
 
 function DestList({
-  dests, clientName, onAdd, onEdit, onDelete,
+  dests, clientName, syncing, syncMsg, onSync, onEdit,
 }: {
   dests: CloudDestination[];
   clientName: string;
-  onAdd: () => void;
+  syncing: boolean;
+  syncMsg: string;
+  onSync: () => void;
   onEdit: (d: CloudDestination) => void;
-  onDelete: (id: string) => void;
 }) {
   return (
     <>
@@ -94,10 +121,19 @@ function DestList({
           Cloud destinations
           {clientName && <span className={css.clientLabel}>— {clientName}</span>}
         </span>
+        <button className={css.outlineBtn} onClick={onSync} disabled={syncing} title="Pull from portal">
+          <RefreshCcw size={13} style={{ marginRight: 4, verticalAlign: 'middle' }} />
+          {syncing ? 'Syncing…' : 'Sync'}
+        </button>
       </div>
 
+      <p className={css.empty} style={{ marginBottom: 'var(--sp-3)' }}>
+        Structure (name, paths, roles) is managed in the web portal. Connect OAuth accounts here — tokens stay on this machine.
+      </p>
+      {syncMsg && <p className={css.empty} style={{ marginTop: 0 }}>{syncMsg}</p>}
+
       {dests.length === 0
-        ? <p className={css.empty}>No destinations yet. Add one to enable cloud export.</p>
+        ? <p className={css.empty}>No destinations yet. Add them in the portal Admin drawer, then Sync.</p>
         : (
           <div className={css.destList}>
             {dests.map(dest => {
@@ -116,8 +152,9 @@ function DestList({
                   <span className={css.roleBadge}>{dest.role}</span>
                   <span className={`${css.statusDot} ${statusClass(status)}`} title={statusTitle(status, token)} />
                   <div className={css.rowActions}>
-                    <button className={css.iconBtn} onClick={() => onEdit(dest)} title="Edit"><Pencil size={14} /></button>
-                    <button className={`${css.iconBtn} ${css.iconBtnDanger}`} onClick={() => onDelete(dest.id)} title="Delete"><Trash2 size={14} /></button>
+                    <button className={css.iconBtn} onClick={() => onEdit(dest)} title="Connect / credentials">
+                      <Pencil size={14} />
+                    </button>
                   </div>
                 </div>
               );
@@ -125,33 +162,29 @@ function DestList({
           </div>
         )
       }
-
-      <button className={css.addBtn} onClick={onAdd}>
-        <Plus size={14} /> Add destination
-      </button>
     </>
   );
 }
 
-/* ── Destination form ────────────────────────────────────────────────────── */
+/* ── Credentials form (structure is read-only) ───────────────────────────── */
 
 type AuthPhase = 'idle' | 'connecting' | 'device-code' | 'checking' | 'refreshing' | 'done' | 'error';
 
-function DestForm({
+function DestCredentialsForm({
   dest, onSave, onBack,
 }: {
   dest:   CloudDestination;
   onSave: (d: CloudDestination) => void;
   onBack: () => void;
 }) {
-  const [form, setForm]     = useState<CloudDestination>(dest);
-  const [authPhase, setAuthPhase]   = useState<AuthPhase>(() => {
+  const [form, setForm] = useState<CloudDestination>(dest);
+  const [authPhase, setAuthPhase] = useState<AuthPhase>(() => {
     const tok = cloudToken(dest.config);
     return tok ? 'done' : 'idle';
   });
   const [deviceInfo, setDeviceInfo] = useState<DeviceCodeInfo | null>(null);
-  const [authError, setAuthError]   = useState<string | null>(null);
-  const [copied, setCopied]         = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const cancelRef = useRef({ cancelled: false });
 
   useEffect(() => {
@@ -159,25 +192,8 @@ function DestForm({
     return () => { sig.cancelled = true; };
   }, []);
 
-  function patch(changes: Partial<CloudDestination>) {
-    setForm(f => ({ ...f, ...changes }));
-  }
-
   function patchConfig(changes: Partial<DestConfig>) {
     setForm(f => ({ ...f, config: { ...f.config, ...changes } as DestConfig }));
-  }
-
-  function setType(type: DestType) {
-    const base = { id: form.config.type === type ? (form.config as any).clientId ?? '' : '', remotePath: '', token: null };
-    let config: DestConfig;
-    if (type === 'local')    config = { type, path: (form.config as LocalDestConfig).path ?? '' };
-    else if (type === 'dropbox')  config = { type, clientId: base.id, remotePath: base.remotePath, token: null };
-    else if (type === 'onedrive') config = { type, clientId: base.id, tenantId: form.config.type === 'onedrive' ? form.config.tenantId : 'common', remotePath: base.remotePath, token: null };
-    else                          config = { type, clientId: base.id, clientSecret: '', sharedDriveId: form.config.type === 'gdrive' ? form.config.sharedDriveId : '', remotePath: base.remotePath, token: null };
-    setForm(f => ({ ...f, config }));
-    setAuthPhase('idle');
-    setAuthError(null);
-    setDeviceInfo(null);
   }
 
   async function pickFolder() {
@@ -203,7 +219,6 @@ function DestForm({
         const info = await startOneDriveDeviceCode(cfg.clientId, cfg.tenantId);
         setDeviceInfo(info);
         setAuthPhase('device-code');
-        // Poll until token or cancelled
         token = null!;
         const deadline = Date.now() + info.expiresIn * 1000;
         const intervalMs = (info.interval + 1) * 1000;
@@ -279,67 +294,37 @@ function DestForm({
   const existingToken = isCloud ? (cfg as DropboxDestConfig | OneDriveDestConfig | GDriveDestConfig).token : null;
   const tStatus = existingToken ? tokenStatus(existingToken) : 'none';
   const busy = authPhase === 'connecting' || authPhase === 'device-code' || authPhase === 'checking' || authPhase === 'refreshing';
+  const path = cfg.type === 'local' ? cfg.path : cfg.remotePath;
 
   return (
     <>
       <div className={css.formHeader}>
         <button className={css.iconBtn} onClick={onBack} title="Back"><ChevronLeft size={16} /></button>
-        <span className={css.formTitle}>{dest.name ? `Edit — ${dest.name}` : 'New destination'}</span>
+        <span className={css.formTitle}>Connect — {dest.name || 'destination'}</span>
       </div>
 
       <div className={css.formBody}>
-
-        {/* ── Identity ── */}
         <div className={css.formSection}>
-          <div className={css.sectionLabel}>Identity</div>
+          <div className={css.sectionLabel}>From portal</div>
           <div className={css.fieldGroup}>
             <div className={css.field}>
               <span className={css.fieldLabel}>Name</span>
-              <input
-                className={css.input}
-                value={form.name}
-                onChange={e => patch({ name: e.target.value })}
-                placeholder="e.g. Internal Team, Client Deliverables"
-                autoFocus
-              />
+              <input className={css.input} value={form.name} disabled />
             </div>
             <div className={css.field}>
-              <span className={css.fieldLabel}>Role</span>
-              <div className={css.segRow}>
-                {(['internal', 'client'] as DestRole[]).map(r => (
-                  <button
-                    key={r}
-                    className={`${css.seg}${form.role === r ? ` ${css.segActive}` : ''}`}
-                    onClick={() => patch({ role: r })}
-                  >
-                    {r.charAt(0).toUpperCase() + r.slice(1)}
-                  </button>
-                ))}
-              </div>
+              <span className={css.fieldLabel}>Type / role / path</span>
+              <input
+                className={`${css.input} ${css.inputMono}`}
+                value={`${typeLabel(cfg.type)} · ${form.role} · ${path || '—'}`}
+                disabled
+              />
             </div>
           </div>
         </div>
 
-        {/* ── Type ── */}
-        <div className={css.formSection}>
-          <div className={css.sectionLabel}>Type</div>
-          <div className={css.typeRow}>
-            {(['local', 'dropbox', 'onedrive', 'gdrive'] as DestType[]).map(t => (
-              <button
-                key={t}
-                className={`${css.typeBtn}${cfg.type === t ? ` ${css.typeBtnActive}` : ''}`}
-                onClick={() => setType(t)}
-              >
-                {typeLabel(t)}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* ── Local config ── */}
         {cfg.type === 'local' && (
           <div className={css.formSection}>
-            <div className={css.sectionLabel}>Folder</div>
+            <div className={css.sectionLabel}>Local folder (this machine)</div>
             <div className={css.field}>
               <div className={css.folderRow}>
                 <input
@@ -354,11 +339,10 @@ function DestForm({
           </div>
         )}
 
-        {/* ── Cloud config ── */}
         {isCloud && (
           <>
             <div className={css.formSection}>
-              <div className={css.sectionLabel}>Credentials</div>
+              <div className={css.sectionLabel}>Credentials (this machine)</div>
               <div className={css.fieldGroup}>
                 <div className={css.field}>
                   <span className={css.fieldLabel}>
@@ -369,12 +353,8 @@ function DestForm({
                   <input
                     className={`${css.input} ${css.inputMono}`}
                     value={(cfg as DropboxDestConfig).clientId}
-                    onChange={e => patchConfig({ clientId: e.target.value } as any)}
-                    placeholder={
-                      cfg.type === 'dropbox'  ? 'From Dropbox App Console → Settings' :
-                      cfg.type === 'onedrive' ? 'From Azure Portal → App registrations' :
-                                                'From Google Cloud Console → Credentials'
-                    }
+                    onChange={e => patchConfig({ clientId: e.target.value } as Partial<DropboxDestConfig>)}
+                    placeholder="From portal, or override locally"
                   />
                   <span className={css.fieldHint}>{credHint(cfg.type)}</span>
                 </div>
@@ -387,10 +367,6 @@ function DestForm({
                       onChange={e => patchConfig({ tenantId: e.target.value } as Partial<OneDriveDestConfig>)}
                       placeholder="common"
                     />
-                    <span className={css.fieldHint}>
-                      Use "common" for personal/multi-tenant apps. If the app registration's Supported account types
-                      is "Single tenant" / "My organization only", enter the Directory (tenant) ID from the app's Overview page instead.
-                    </span>
                   </div>
                 )}
                 {cfg.type === 'gdrive' && (
@@ -401,95 +377,28 @@ function DestForm({
                       type="password"
                       value={(cfg as GDriveDestConfig).clientSecret}
                       onChange={e => patchConfig({ clientSecret: e.target.value } as Partial<GDriveDestConfig>)}
-                      placeholder="From Google Cloud Console → Credentials"
+                      placeholder="Stored only on this machine"
                     />
                   </div>
                 )}
-                {cfg.type === 'gdrive' && (
-                  <div className={css.field}>
-                    <span className={css.fieldLabel}>Shared Drive ID</span>
-                    <input
-                      className={`${css.input} ${css.inputMono}`}
-                      value={(cfg as GDriveDestConfig).sharedDriveId ?? ''}
-                      onChange={e => patchConfig({ sharedDriveId: e.target.value } as Partial<GDriveDestConfig>)}
-                      placeholder="Leave blank to use the signed-in account's own My Drive"
-                    />
-                    <span className={css.fieldHint}>
-                      Set this so every teammate's uploads land in one shared Drive instead of whoever connected's
-                      personal My Drive. Find it in Google Drive → open the Shared Drive → copy the ID from the URL
-                      (after /folders/).
-                    </span>
-                  </div>
-                )}
               </div>
             </div>
 
-            <div className={css.formSection}>
-              <div className={css.sectionLabel}>Remote folder</div>
-              <div className={css.field}>
-                <input
-                  className={`${css.input} ${css.inputMono}`}
-                  value={(cfg as DropboxDestConfig).remotePath}
-                  onChange={e => patchConfig({ remotePath: e.target.value } as any)}
-                  placeholder={
-                    cfg.type === 'dropbox'  ? '/DC Hub/ClientName/Exports' :
-                    cfg.type === 'onedrive' ? '/DC Hub/ClientName/Exports' :
-                                              'DC Hub/ClientName/Exports'
-                  }
-                />
-                <span className={css.fieldHint}>Path within your cloud storage where files will be uploaded.</span>
-              </div>
-            </div>
-
-            <div className={css.formSection}>
-              <div className={css.sectionLabel}>Export options</div>
-              <div className={css.fieldGroup}>
-                <label className={css.toggleRow}>
-                  <input
-                    type="checkbox"
-                    className={css.toggle}
-                    checked={form.flatExport}
-                    onChange={e => patch({ flatExport: e.target.checked })}
-                  />
-                  <span className={css.toggleLabel}>Flat export — dump all files into one folder (ignore subfolder structure)</span>
-                </label>
-                <label className={css.toggleRow}>
-                  <input
-                    type="checkbox"
-                    className={css.toggle}
-                    checked={form.generateLink}
-                    onChange={e => patch({ generateLink: e.target.checked })}
-                  />
-                  <span className={css.toggleLabel}>Generate sharing link after upload</span>
-                </label>
-              </div>
-            </div>
-
-            {/* ── Auth section ── */}
             <div className={css.formSection}>
               <div className={css.sectionLabel}>Connection</div>
               <div className={css.authBox}>
-
-                {/* Error */}
                 {authError && <p className={css.authError}>{authError}</p>}
 
-                {/* Connected */}
                 {authPhase === 'done' && existingToken && (
                   <div className={css.authStatus}>
                     <span className={`${css.statusDot} ${statusClass(tStatus)}`} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div className={css.authEmail}>{existingToken.email || 'Connected'}</div>
                       {existingToken.displayName && <div className={css.authName}>{existingToken.displayName}</div>}
-                      {tStatus !== 'fresh' && (
-                        <div className={css.authName} style={{ color: tStatus === 'expired' ? 'var(--signal-error)' : '#facc15' }}>
-                          {tStatus === 'expired' ? 'Token expired — refresh or reconnect' : 'Expires soon'}
-                        </div>
-                      )}
                     </div>
                   </div>
                 )}
 
-                {/* Connecting / checking */}
                 {(authPhase === 'connecting' || authPhase === 'checking' || authPhase === 'refreshing') && (
                   <div className={css.authStatus}>
                     <span className={css.spinner} />
@@ -499,19 +408,9 @@ function DestForm({
                        cfg.type === 'onedrive'    ? 'Requesting device code…' :
                                                     'Complete sign-in in the browser…'}
                     </span>
-                    {(authPhase === 'connecting') && (
-                      <button
-                        className={`${css.outlineBtn} ${css.outlineBtnDanger}`}
-                        onClick={handleDisconnect}
-                        style={{ marginLeft: 'auto', flexShrink: 0 }}
-                      >
-                        Cancel
-                      </button>
-                    )}
                   </div>
                 )}
 
-                {/* OneDrive device code */}
                 {authPhase === 'device-code' && deviceInfo && (
                   <div className={css.deviceCode}>
                     <div className={css.deviceCodeRow}>
@@ -521,15 +420,12 @@ function DestForm({
                       </button>
                     </div>
                     <p className={css.deviceHint}>
-                      Go to <strong>{deviceInfo.verificationUri}</strong>, enter the code above, then sign in with your Microsoft account.
-                      The app will detect when you've authorised it.
+                      Go to <strong>{deviceInfo.verificationUri}</strong>, enter the code, then sign in.
                     </p>
                     <div className={css.authBtns}>
                       <button className={css.outlineBtn} onClick={() => openBrowser(deviceInfo.verificationUri)}>
                         Open browser…
                       </button>
-                      <span className={css.spinner} style={{ marginLeft: 'var(--sp-2)' }} />
-                      <span className={css.authName} style={{ marginLeft: 'var(--sp-1)' }}>Waiting…</span>
                       <button className={`${css.outlineBtn} ${css.outlineBtnDanger}`} onClick={handleDisconnect} style={{ marginLeft: 'auto' }}>
                         Cancel
                       </button>
@@ -537,7 +433,6 @@ function DestForm({
                   </div>
                 )}
 
-                {/* Idle / error state — show connect button */}
                 {(authPhase === 'idle' || authPhase === 'error') && (
                   <div className={css.authBtns}>
                     <button
@@ -551,27 +446,22 @@ function DestForm({
                   </div>
                 )}
 
-                {/* Connected — refresh / reconnect / disconnect */}
                 {authPhase === 'done' && (
                   <div className={css.authBtns}>
-                    <button className={css.outlineBtn} onClick={handleRefresh} title="Refresh token without re-authorising">
+                    <button className={css.outlineBtn} onClick={handleRefresh}>
                       <RefreshCw size={13} style={{ marginRight: 4, verticalAlign: 'middle' }} />
                       Refresh token
                     </button>
-                    <button className={css.outlineBtn} onClick={handleConnect}>
-                      Reconnect
-                    </button>
+                    <button className={css.outlineBtn} onClick={handleConnect}>Reconnect</button>
                     <button className={`${css.outlineBtn} ${css.outlineBtnDanger}`} onClick={handleDisconnect}>
                       Disconnect
                     </button>
                   </div>
                 )}
-
               </div>
             </div>
           </>
         )}
-
       </div>
 
       <div className={css.formFooter}>
@@ -579,16 +469,14 @@ function DestForm({
         <button
           className={css.saveBtn}
           onClick={() => onSave(form)}
-          disabled={!form.name.trim() || busy}
+          disabled={busy}
         >
-          Save destination
+          Save credentials
         </button>
       </div>
     </>
   );
 }
-
-/* ── Helpers ─────────────────────────────────────────────────────────────── */
 
 function typeLabel(t: DestType): string {
   return t === 'local' ? 'Local' : t === 'dropbox' ? 'Dropbox' : t === 'onedrive' ? 'OneDrive' : 'Google Drive';
@@ -611,7 +499,7 @@ function statusTitle(s: ReturnType<typeof tokenStatus>, token: CloudToken | null
 }
 
 function credHint(type: DestType): string {
-  if (type === 'dropbox')  return 'Create an app at dropbox.com/developers → App Console. Use PKCE, redirect URI: http://localhost:7623/callback';
-  if (type === 'onedrive') return 'Register an app in Azure Portal, enable "Allow public client flows" (Authentication), and add Mobile/Desktop redirect URIs. Set the Tenant ID below to match the app\'s Supported account types.';
-  return 'Create OAuth 2.0 credentials in Google Cloud Console. Add http://localhost:7623/callback as an authorised redirect URI.';
+  if (type === 'dropbox')  return 'PKCE redirect URI: http://localhost:7623/callback';
+  if (type === 'onedrive') return 'Enable public client flows in Azure; use tenant id for single-tenant apps.';
+  return 'Add http://localhost:7623/callback as an authorised redirect URI. Client secret stays on this machine.';
 }

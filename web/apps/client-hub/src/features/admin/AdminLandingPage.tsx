@@ -11,6 +11,7 @@ import {
   parseAndValidateTaxonomyJson,
 } from '../../services/taxonomyImport'
 import { TagsAdmin } from './TagsAdmin'
+import { DestinationsAdmin } from './DestinationsAdmin'
 import { fetchAllUsers, updateUserAccess, createUser, normalizeRole, type UserProfile } from '../../services/userService'
 import { isConfigured } from '../../lib/supabase'
 
@@ -506,9 +507,15 @@ function ClientDrawer({ editing, onClose, onSaved }: {
           </div>
 
           {editing && (
-            <div className="pt-4 border-t border-border">
-              <p className="text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-3">Tags (source of truth)</p>
-              <TagsAdmin client={editing} onClientUpdated={onSaved} />
+            <div className="pt-4 border-t border-border space-y-8">
+              <div>
+                <p className="text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-3">Tags (source of truth)</p>
+                <TagsAdmin client={editing} onClientUpdated={onSaved} />
+              </div>
+              <div>
+                <p className="text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-3">Export destinations</p>
+                <DestinationsAdmin client={editing} />
+              </div>
             </div>
           )}
 

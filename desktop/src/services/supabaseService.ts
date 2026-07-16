@@ -1,6 +1,7 @@
 import { readFile, readTextFile, writeTextFile, exists as fsExists } from '@tauri-apps/plugin-fs';
 import { parseFilename, buildVocabContext } from '../domain/filenameTranslator';
 import type { CloudDestination } from '../domain/client';
+import { normalizeDestination } from '../domain/client';
 import { extractStableId } from '../domain/stableId';
 import { filterHighestVersions, parseVersion, compareVersions } from '../domain/version';
 import type { VocabularyData } from '../domain/vocabulary';
@@ -173,7 +174,8 @@ export async function fetchCloudDestinationDefs(
     );
     if (!res.ok) return [];
     const rows = await res.json() as Array<{ cloud_destinations: CloudDestination[] | null }>;
-    return rows[0]?.cloud_destinations ?? [];
+    const raw = rows[0]?.cloud_destinations ?? [];
+    return raw.map(d => normalizeDestination(d));
   } catch {
     return [];
   }
