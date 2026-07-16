@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { Check } from 'lucide-react';
 import {
-  type Slot, SLOT_LABELS, parentGroupsForSlot,
+  type Slot, dimensionLabelForSlot, parentGroupsForSlot,
   buildFilenameCode, buildObsidianTags,
   type VocabTag,
 } from '../../domain/vocabulary';
 import { useVocabularyStore } from '../../store/vocabularyStore';
+import { useClientStore } from '../../store/clientStore';
 import css from './GeneratorView.module.css';
 
 const SLOTS: Slot[] = ['entity', 'angle', 'format'];
@@ -15,6 +16,9 @@ interface VersionState { major: string; minor: string; patch: string }
 export function GeneratorView() {
   const data = useVocabularyStore(s => s.data);
   const tags = data?.tags ?? [];
+  const activeClient = useClientStore(s =>
+    s.clients.find(c => c.id === s.activeClientId) ?? null,
+  );
 
   /* Selection: shortcode → tag */
   const [selected, setSelected] = useState<Map<string, VocabTag>>(new Map());
@@ -74,7 +78,7 @@ export function GeneratorView() {
             return (
               <div key={slot} className={css.dimPanel}>
                 <div className={css.dimPanelHead}>
-                  <span className={css.dimPanelLabel}>{SLOT_LABELS[slot]}</span>
+                  <span className={css.dimPanelLabel}>{dimensionLabelForSlot(activeClient, slot)}</span>
                 </div>
                 <div className={css.dimPanelScroll}>
                   {groups.map(groupName => {

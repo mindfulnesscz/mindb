@@ -37,6 +37,14 @@ export const SLOT_LABELS: Record<Slot, string> = {
   format: 'Format',
 };
 
+/** Per-client display name for a dimension (falls back to SLOT_LABELS). */
+export function dimensionLabelForSlot(
+  client: { dimensionLabels?: Partial<Record<Slot, string>> } | null | undefined,
+  slot: Slot,
+): string {
+  return client?.dimensionLabels?.[slot]?.trim() || SLOT_LABELS[slot];
+}
+
 export const SLOT_DESCRIPTIONS: Record<Slot, string> = {
   entity: "Tags that answer 'Who or what is this about?'",
   angle: "Tags that answer 'What is the purpose or angle?'",

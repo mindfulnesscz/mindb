@@ -299,6 +299,7 @@ function FiltersRail({
   onChange,
   onHide,
   tags,
+  dimensionLabels,
   statusCounts,
   statusKeys,
   isStaff,
@@ -309,6 +310,7 @@ function FiltersRail({
   onChange: (f: FilterState) => void
   onHide: () => void
   tags: TagsByDimension
+  dimensionLabels: { entity: string; format: string; angle: string }
   statusCounts: Record<string, number>
   statusKeys: Asset['status'][]
   isStaff: boolean
@@ -440,7 +442,7 @@ function FiltersRail({
 
       {/* Client tag dimensions */}
       <TagSection
-        label="Entity" filterKey="entities"
+        label={dimensionLabels.entity} filterKey="entities"
         items={tags.entity} groups={tags.groups.entity}
         selected={filters.entities} filterQuery={filterQuery}
         open={sectionsOpen.entity} collapseKey={collapseKey}
@@ -450,7 +452,7 @@ function FiltersRail({
         onToggleItem={toggleTag}
       />
       <TagSection
-        label="Format" filterKey="formats"
+        label={dimensionLabels.format} filterKey="formats"
         items={tags.format} groups={tags.groups.format}
         selected={filters.formats} filterQuery={filterQuery}
         open={sectionsOpen.format} collapseKey={collapseKey}
@@ -460,7 +462,7 @@ function FiltersRail({
         onToggleItem={toggleTag}
       />
       <TagSection
-        label="Angle" filterKey="angles"
+        label={dimensionLabels.angle} filterKey="angles"
         items={tags.angle} groups={tags.groups.angle}
         selected={filters.angles} filterQuery={filterQuery}
         open={sectionsOpen.angle} collapseKey={collapseKey}
@@ -511,6 +513,12 @@ export default function GalleryView() {
     groups: tags.groups,
   }
 
+  const dimensionLabels = {
+    entity: activeClient?.dimensionLabels?.entity ?? 'Entity',
+    format: activeClient?.dimensionLabels?.format ?? 'Format',
+    angle:  activeClient?.dimensionLabels?.angle  ?? 'Angle',
+  }
+
   const hasFiltersApplied =
     (filters.status?.length ?? 0) > 0 ||
     (filters.entityTypes?.length ?? 0) > 0 ||
@@ -538,6 +546,7 @@ export default function GalleryView() {
           onChange={setFilters}
           onHide={() => setRailVisible(false)}
           tags={effectiveTags}
+          dimensionLabels={dimensionLabels}
           statusCounts={statusCounts}
           statusKeys={statusKeys}
           isStaff={isStaff}

@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { ChevronRight, Pencil, Trash2, Check, Plus, Search, X, FolderOpen, Upload, Download } from 'lucide-react';
+import { ChevronRight, Pencil, Trash2, Check, Plus, Search, X, FolderOpen, RefreshCw } from 'lucide-react';
 import { mkdir, writeTextFile } from '@tauri-apps/plugin-fs';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import {
   type Slot, type VocabTag,
-  SLOT_LABELS, parentGroupsForSlot,
+  dimensionLabelForSlot, parentGroupsForSlot,
   buildFilenameCode, buildObsidianTags,
 } from '../../domain/vocabulary';
 import { generateStableId, appendStableId } from '../../domain/stableId';
@@ -12,7 +12,7 @@ import { useVocabularyStore } from '../../store/vocabularyStore';
 import { useClientStore } from '../../store/clientStore';
 import { saveClients } from '../../services/clientService';
 import { createDraftAsset, fetchExistingStableIds, syncTagsFromVocabulary } from '../../services/supabaseService';
-import { loadVocabulary, saveVocabulary } from '../../services/vocabService';
+import { loadVocabulary } from '../../services/vocabService';
 import { writeReadme, README_FILENAME } from '../../services/readmeService';
 import { FolderTargetPicker } from '../../components/FolderTargetPicker';
 import { TagModal } from './TagModal';
@@ -41,8 +41,7 @@ export function VocabularyView() {
   const [modalSlot,  setModalSlot]  = useState<Slot>('entity');
   const [editIndex,  setEditIndex]  = useState<number | undefined>(undefined);
   const [search,     setSearch]     = useState('');
-  const [publishing, setPublishing] = useState(false);
-  const [reloading,  setReloading]  = useState(false);
+  const [syncing,    setSyncing]    = useState(false);
   const [syncMsg,    setSyncMsg]    = useState<string | null>(null);
   const [syncError,  setSyncError]  = useState<string | null>(null);
 
@@ -103,56 +102,50 @@ export function VocabularyView() {
     setVersion({ major: '', minor: '', patch: '' });
   }
 
-  async function handlePublish() {
-    if (!activeClient || !data) return;
+  async function handleSync() {
+    if (!activeClientId || !activeClient) return;
     if (!activeClient.supabaseUrl || !activeClient.supabaseAnonKey) {
       setSyncError('Client has no Supabase connection.');
       return;
     }
-    if (!window.confirm(
-      `Publish ${data.tags.length} local tag(s) to the portal for "${activeClient.name}"?\n\n` +
-      'This upserts groups and leaves, and removes portal shortcoded tags that are no longer in your local vocabulary.',
+    if (!data) return;
+
+    const willPublish = dirty;
+    if (willPublish && !window.confirm(
+      `Sync with portal for "${activeClient.name}"?\n\n` +
+      'Local leaf changes will be published, then vocabulary is reloaded from the database.',
+    )) return;
+    if (!willPublish && !window.confirm(
+      `Reload vocabulary from portal for "${activeClient.name}"?`,
     )) return;
 
-    setPublishing(true);
+    setSyncing(true);
     setSyncMsg(null);
     setSyncError(null);
     const lines: string[] = [];
     try {
-      const result = await syncTagsFromVocabulary(
-        data,
-        activeClient.id,
-        { url: activeClient.supabaseUrl, anonKey: activeClient.supabaseAnonKey },
-        (_type, msg) => { lines.push(msg); },
+      if (willPublish) {
+        const result = await syncTagsFromVocabulary(
+          data,
+          activeClient.id,
+          { url: activeClient.supabaseUrl, anonKey: activeClient.supabaseAnonKey },
+          (_type, msg) => { lines.push(msg); },
+        );
+        markClean();
+        lines.push(`Published: ${result.created} created · ${result.updated} updated · ${result.deleted} deleted`);
+      }
+      const fresh = await loadVocabulary(activeClientId, { forceFromDb: true });
+      setData(fresh, { dirty: false });
+      setSyncMsg(
+        willPublish
+          ? `Synced — ${fresh.tags.length} leaf tag(s), ${fresh.parentGroups?.length ?? 0} group(s) from portal`
+          : `Reloaded ${fresh.tags.length} leaf tag(s) from portal`,
       );
-      markClean();
-      await saveVocabulary({ ...data, _unpublished: false }, activeClient.id).catch(console.warn);
-      setSyncMsg(`Published: ${result.created} created · ${result.updated} updated · ${result.deleted} deleted`);
     } catch (e) {
       setSyncError(e instanceof Error ? e.message : String(e));
       if (lines.length) console.warn(lines.join('\n'));
     } finally {
-      setPublishing(false);
-    }
-  }
-
-  async function handleReloadFromPortal() {
-    if (!activeClientId) return;
-    if (!window.confirm(
-      'Reload tags from the portal?\n\nThis replaces your local vocabulary cache for this client. Unpublished local edits will be lost.',
-    )) return;
-
-    setReloading(true);
-    setSyncMsg(null);
-    setSyncError(null);
-    try {
-      const fresh = await loadVocabulary(activeClientId, { forceFromDb: true });
-      setData(fresh, { dirty: false });
-      setSyncMsg(`Reloaded ${fresh.tags.length} tag(s) from portal`);
-    } catch (e) {
-      setSyncError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setReloading(false);
+      setSyncing(false);
     }
   }
 
@@ -274,22 +267,15 @@ export function VocabularyView() {
             )}
           </div>
           <button
-            className={css.btnSync}
-            onClick={handleReloadFromPortal}
-            disabled={reloading || publishing || !activeClientId}
-            title="Replace local cache with portal tags"
-          >
-            <Download size={13} />
-            {reloading ? 'Reloading…' : 'Reload'}
-          </button>
-          <button
             className={css.btnPublish}
-            onClick={handlePublish}
-            disabled={publishing || reloading || !activeClient?.supabaseUrl}
-            title="Push local vocabulary to portal (public.tags)"
+            onClick={handleSync}
+            disabled={syncing || !activeClient?.supabaseUrl}
+            title={dirty
+              ? 'Publish local leaf changes, then reload from portal'
+              : 'Reload vocabulary from portal'}
           >
-            <Upload size={13} />
-            {publishing ? 'Publishing…' : dirty ? 'Publish*' : 'Publish'}
+            <RefreshCw size={13} />
+            {syncing ? 'Syncing…' : dirty ? 'Sync*' : 'Sync'}
           </button>
         </div>
       </div>
@@ -308,6 +294,7 @@ export function VocabularyView() {
           <DimColumn
             key={slot}
             slot={slot}
+            dimLabel={dimensionLabelForSlot(activeClient, slot)}
             allTags={allTags}
             selected={selected}
             searchQuery={q}
@@ -413,6 +400,7 @@ export function VocabularyView() {
 
 interface DimColProps {
   slot:            Slot;
+  dimLabel:        string;
   allTags:         VocabTag[];
   selected:        Map<string, VocabTag>;
   searchQuery:     string;
@@ -425,7 +413,7 @@ interface DimColProps {
 }
 
 function DimColumn({
-  slot, allTags, selected, searchQuery, collapsedGroups,
+  slot, dimLabel, allTags, selected, searchQuery, collapsedGroups,
   onToggleGroup, onToggleTag, onAdd, onEdit, onDelete,
 }: DimColProps) {
   const portalGroups = useVocabularyStore(s => s.data?.parentGroups);
@@ -442,7 +430,7 @@ function DimColumn({
   return (
     <div className={css.dimCol}>
       <div className={css.dimColHead}>
-        <span className={css.dimColLabel}>{SLOT_LABELS[slot]}</span>
+        <span className={css.dimColLabel}>{dimLabel}</span>
         <button className={css.btnAddCol} onClick={onAdd} title={`Add ${slot} tag`}>
           <Plus size={13} />
         </button>
