@@ -15,40 +15,39 @@ export interface SiblingPreview {
 /** Max tiles in the hover mosaic (4×4). Beyond this, last tile shows +N. */
 export const MAX_HOVER_TILES = 16
 
-/** Primary + children + variants for hover preview (deduped). */
+/** Primary + children + variants for hover preview (deduped).
+ * Gallery shells without their own thumb are omitted so the mosaic starts with real images. */
 export async function fetchSiblingPreviews(primary: Asset): Promise<SiblingPreview[]> {
   const [children, variants] = await Promise.all([
     fetchChildAssets(primary.id).catch(() => [] as Asset[]),
     fetchVariants(primary.id).catch(() => [] as Asset[]),
   ])
-  const seen = new Set<string>([primary.id])
-  const list: SiblingPreview[] = [{
-    id: primary.id,
-    name: primary.name,
-    thumbnailUrl: primary.thumbnailUrl,
-    downloadUrl: primary.downloadUrl,
-  }]
-  for (const a of children) {
-    if (seen.has(a.id)) continue
+  const seen = new Set<string>()
+  const list: SiblingPreview[] = []
+
+  const push = (a: Asset, opts?: { isGalleryChild?: boolean; requireThumb?: boolean }) => {
+    if (seen.has(a.id)) return
+    if (opts?.requireThumb && !a.thumbnailUrl) return
     seen.add(a.id)
     list.push({
       id: a.id,
       name: a.name,
       thumbnailUrl: a.thumbnailUrl,
       downloadUrl: a.downloadUrl,
-      isGalleryChild: true,
+      isGalleryChild: opts?.isGalleryChild,
     })
   }
-  for (const a of variants) {
-    if (seen.has(a.id)) continue
-    seen.add(a.id)
-    list.push({
-      id: a.id,
-      name: a.name,
-      thumbnailUrl: a.thumbnailUrl,
-      downloadUrl: a.downloadUrl,
-    })
-  }
+
+  // If this is a gallery parent (has children), mosaic is the images only — skip the shell tile.
+  const isGalleryShell = children.length > 0
+  if (!isGalleryShell) push(primary)
+
+  for (const a of children) push(a, { isGalleryChild: true })
+  for (const a of variants) push(a)
+
+  // Fallback: if somehow empty, show primary anyway
+  if (list.length === 0) push(primary)
+
   return list
 }
 
@@ -65,11 +64,16 @@ export function gridGeometry(count: number): { cols: number; className: string }
 const springIn = { type: 'spring' as const, stiffness: 380, damping: 26, mass: 0.65 }
 const springHover = { type: 'spring' as const, stiffness: 460, damping: 24, mass: 0.55 }
 
+/** Accent used only as contain letterbox — darkened ~50% so artwork stays readable. */
+export function thumbLetterbox(accent: string): string {
+  return `color-mix(in srgb, ${accent} 50%, #000)`
+}
+
 function ShimmerBlock() {
   return (
-    <div className="absolute inset-0 overflow-hidden rounded-[2px] bg-white/10">
+    <div className="absolute inset-0 overflow-hidden rounded-[2px] bg-black/20">
       <motion.div
-        className="absolute inset-y-0 w-1/2 bg-gradient-to-r from-transparent via-white/35 to-transparent"
+        className="absolute inset-y-0 w-1/2 bg-gradient-to-r from-transparent via-white/25 to-transparent"
         initial={{ x: '-120%' }}
         animate={{ x: '220%' }}
         transition={{ duration: 1.1, repeat: Infinity, ease: 'linear' }}
@@ -88,14 +92,12 @@ export function MultiAssetHoverGrid({
   loading,
   accent = '#161616',
   onSelect,
-  onDownload,
 }: {
   open: boolean
   siblings: SiblingPreview[]
   loading: boolean
   accent?: string
   onSelect?: (sibling: SiblingPreview) => void
-  onDownload?: (sibling: SiblingPreview) => void
 }) {
   const reduceMotion = useReducedMotion()
   const overflow = Math.max(0, siblings.length - MAX_HOVER_TILES)
@@ -103,6 +105,7 @@ export function MultiAssetHoverGrid({
   const n = visible.length
   const { className: cols } = gridGeometry(Math.max(n, 1))
   const showShimmer = loading && n <= 1
+  const letterbox = thumbLetterbox(accent)
 
   return (
     <AnimatePresence>
@@ -110,20 +113,19 @@ export function MultiAssetHoverGrid({
         <motion.div
           className="absolute inset-0 z-10 flex items-center justify-center p-2"
           style={{
-            background:
-              'radial-gradient(ellipse at center, rgba(22,22,22,0.32) 0%, rgba(22,22,22,0.78) 100%)',
+            background: 'rgba(22,22,22,0.18)',
             perspective: 900,
           }}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0, transition: { duration: 0.15 } }}
-          transition={{ duration: reduceMotion ? 0.01 : 0.22 }}
+          transition={{ duration: reduceMotion ? 0.01 : 0.18 }}
           onClick={e => e.stopPropagation()}
         >
           {showShimmer ? (
             <div className={`grid ${cols} gap-1.5 w-full place-items-center`}>
               {Array.from({ length: 4 }).map((_, i) => (
-                <div key={i} className="relative aspect-square w-full rounded-[2px] overflow-hidden" style={{ backgroundColor: accent }}>
+                <div key={i} className="relative aspect-square w-full rounded-[2px] overflow-hidden" style={{ backgroundColor: letterbox }}>
                   <ShimmerBlock />
                 </div>
               ))}
@@ -156,10 +158,10 @@ export function MultiAssetHoverGrid({
                   <motion.button
                     type="button"
                     key={s.id}
-                    className="relative aspect-square rounded-[2px] overflow-hidden origin-center cursor-pointer ring-1 ring-white/15 text-left group/tile"
+                    className="relative aspect-square rounded-[2px] overflow-hidden origin-center cursor-pointer ring-1 ring-black/10 text-left group/tile"
                     style={{
-                      backgroundColor: accent,
-                      boxShadow: '0 8px 20px rgba(0,0,0,0.32), 0 2px 6px rgba(0,0,0,0.2)',
+                      backgroundColor: letterbox,
+                      boxShadow: '0 6px 16px rgba(0,0,0,0.22)',
                       transformStyle: 'preserve-3d',
                     }}
                     variants={{
@@ -170,14 +172,12 @@ export function MultiAssetHoverGrid({
                             scale: 0.42,
                             y: 14,
                             rotateX: 10,
-                            filter: 'brightness(0.55)',
                           },
                       show: {
                         opacity: 1,
                         scale: 1,
                         y: 0,
                         rotateX: 0,
-                        filter: 'brightness(1)',
                         transition: springIn,
                       },
                     }}
@@ -185,11 +185,10 @@ export function MultiAssetHoverGrid({
                       reduceMotion
                         ? undefined
                         : {
-                            scale: 1.1,
-                            y: -3,
+                            scale: 1.08,
+                            y: -2,
                             zIndex: 3,
-                            boxShadow:
-                              '0 18px 40px rgba(0,0,0,0.48), 0 6px 12px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.22)',
+                            boxShadow: '0 14px 28px rgba(0,0,0,0.35)',
                             transition: springHover,
                           }
                     }
@@ -219,30 +218,8 @@ export function MultiAssetHoverGrid({
                       <span className="absolute top-1 left-1 z-[1] w-3.5 h-3.5 rounded-[2px] border border-white/50 bg-cosmos-black/35 shadow-[2px_2px_0_rgba(0,0,0,0.25)] pointer-events-none" />
                     )}
 
-                    {s.downloadUrl && !isLastOverflow && (
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        title="Download"
-                        className="absolute bottom-1 right-1 z-[2] w-6 h-6 flex items-center justify-center rounded-[3px] bg-cosmos-black/70 text-clear-white text-[11px] font-sans font-bold opacity-0 group-hover/tile:opacity-100 focus:opacity-100 hover:bg-cosmos-black transition-opacity"
-                        onClick={e => {
-                          e.stopPropagation()
-                          onDownload?.(s)
-                        }}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault()
-                            e.stopPropagation()
-                            onDownload?.(s)
-                          }
-                        }}
-                      >
-                        ↓
-                      </span>
-                    )}
-
                     {isLastOverflow && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-cosmos-black/55">
+                      <div className="absolute inset-0 flex items-center justify-center bg-cosmos-black/45">
                         <span className="text-sm font-sans font-semibold text-clear-white">
                           +{overflow}
                         </span>

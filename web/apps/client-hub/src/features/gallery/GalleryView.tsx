@@ -10,6 +10,7 @@ import {
   MultiAssetHoverGrid,
   useSiblingPreviews,
   useDelayedHover,
+  thumbLetterbox,
   type SiblingPreview,
 } from './MultiAssetHover'
 
@@ -26,19 +27,20 @@ const STATUS_LABELS: Record<string, string> = {
 
 function StackBackdrop({ accent, count }: { accent: string; count: number }) {
   const layers = Math.min(3, Math.max(1, count > 1 ? 3 : 1))
+  const fill = thumbLetterbox(accent)
   return (
     <div className="absolute inset-0 pointer-events-none" aria-hidden>
       {Array.from({ length: layers }).map((_, i) => {
-        const offset = (layers - 1 - i) * 4
+        const offset = (layers - 1 - i) * 3
         return (
           <div
             key={i}
-            className="absolute rounded-[2px] border border-black/10"
+            className="absolute rounded-[2px] border border-black/15"
             style={{
               inset: 0,
               transform: `translate(${offset}px, ${-offset}px)`,
-              backgroundColor: accent,
-              opacity: 0.35 + i * 0.2,
+              backgroundColor: fill,
+              opacity: 0.25 + i * 0.12,
               zIndex: i,
             }}
           />
@@ -60,21 +62,19 @@ function AssetCard({
   accent: string
 }) {
   const isMulti = (asset.childCount ?? 0) > 0
-  const fileCount = isMulti ? (asset.childCount ?? 0) + 1 : 1
   const [pointerIn, setPointerIn] = useState(false)
   const hovered = useDelayedHover(pointerIn, 80)
   const { siblings, loading } = useSiblingPreviews(asset, isMulti && hovered)
-  const galleryKids = siblings.filter(s => s.isGalleryChild).length
-  const showStack = isMulti || galleryKids > 0
+  const showStack = isMulti
+  const fileCount = siblings.length > 1
+    ? siblings.length
+    : isMulti
+      ? (asset.childCount ?? 0)
+      : 1
+  const letterbox = thumbLetterbox(accent)
 
   function handleSiblingSelect(s: SiblingPreview) {
     onOpen(s.id)
-  }
-
-  function handleSiblingDownload(s: SiblingPreview) {
-    if (!s.downloadUrl) return
-    const stub = { ...asset, id: s.id, name: s.name, downloadUrl: s.downloadUrl, thumbnailUrl: s.thumbnailUrl }
-    void webAssetActions.download?.(stub)
   }
 
   return (
@@ -89,7 +89,7 @@ function AssetCard({
     >
       <div
         className="relative aspect-square overflow-hidden [transform-style:preserve-3d]"
-        style={{ backgroundColor: accent }}
+        style={{ backgroundColor: letterbox }}
       >
         {showStack && !hovered && <StackBackdrop accent={accent} count={fileCount} />}
 
@@ -100,7 +100,7 @@ function AssetCard({
               src={asset.thumbnailUrl}
               alt={asset.name}
               className={`relative z-[1] w-full h-full object-contain transition-[transform,filter] duration-500 ease-out will-change-transform ${
-                isMulti && hovered ? 'scale-[1.04] blur-[1.5px] brightness-75' : 'scale-100'
+                isMulti && hovered ? 'scale-[1.02] brightness-[0.92]' : 'scale-100'
               }`}
             />
           )
@@ -114,7 +114,6 @@ function AssetCard({
             loading={loading}
             accent={accent}
             onSelect={handleSiblingSelect}
-            onDownload={canDownload(role as 'public' | 'member' | 'editor' | 'admin', asset) ? handleSiblingDownload : undefined}
           />
         )}
 
@@ -142,16 +141,17 @@ function AssetCard({
             awaiting you
           </div>
         )}
-        {canDownload(role as 'public' | 'member' | 'editor' | 'admin', asset) && asset.downloadUrl && !hovered && (
+        {!isMulti && canDownload(role as 'public' | 'member' | 'editor' | 'admin', asset) && asset.downloadUrl && (
           <span
             role="button"
             tabIndex={0}
             title="Download"
-            className="absolute bottom-2 right-2 z-20 w-7 h-7 flex items-center justify-center rounded-[3px] border border-cosmos-black bg-clear-white/95 text-cosmos-black text-xs font-bold opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+            className="absolute bottom-2 right-2 z-20 w-7 h-7 flex items-center justify-center rounded-[3px] border border-cosmos-black bg-clear-white/95 text-cosmos-black text-xs font-bold opacity-0 group-hover:opacity-100 focus-within:opacity-100 hover:!opacity-100 transition-opacity"
             onClick={e => {
               e.stopPropagation()
               void webAssetActions.download?.(asset)
             }}
+            onMouseDown={e => e.stopPropagation()}
             onKeyDown={e => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault()
@@ -741,13 +741,13 @@ export default function GalleryView() {
               <p className="font-sans text-sm text-text-muted max-w-sm">{error}</p>
             </div>
           ) : loading ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {Array.from({ length: 6 }).map((_, i) => <CardSkeleton key={i} />)}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {Array.from({ length: 8 }).map((_, i) => <CardSkeleton key={i} />)}
             </div>
           ) : assets.length === 0 ? (
             <EmptyState reason={emptyReason()} />
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {assets.map(asset => (
                 <AssetCard
                   key={asset.id}

@@ -15,6 +15,7 @@ import {
   type PortalDestination,
 } from '../../services/destinationService'
 import { revealInDesktop } from '../../services/revealService'
+import { ImageLightbox } from './ImageLightbox'
 import { isConfigured } from '../../lib/supabase'
 
 // Good-practice naming convention: variants of one asset share the same tags and differ
@@ -157,6 +158,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
   const [destinations, setDestinations] = useState<PortalDestination[]>([])
   const [revealBusy, setRevealBusy] = useState(false)
   const [revealMsg, setRevealMsg] = useState('')
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
 
   const accent = activeClient?.accent ?? '#161616'
   const isStaff = role === 'admin' || role === 'editor'
@@ -421,22 +423,41 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
             {childView === 'grid' ? (
               <div className="grid grid-cols-2 gap-2">
                 {children.map((child, i) => (
-                  <div key={child.id} className="aspect-video bg-gray-150 rounded-sm overflow-hidden relative">
+                  <button
+                    key={child.id}
+                    type="button"
+                    onClick={() => {
+                      const withSrc = children.filter(c => c.thumbnailUrl || c.downloadUrl)
+                      const idx = withSrc.findIndex(c => c.id === child.id)
+                      if (idx >= 0) setLightboxIndex(idx)
+                    }}
+                    className="aspect-square rounded-sm overflow-hidden relative text-left cursor-zoom-in hover:ring-1 hover:ring-cosmos-black transition-shadow"
+                    style={{ backgroundColor: `color-mix(in srgb, ${accent} 50%, #000)` }}
+                  >
                     {child.thumbnailUrl
-                      ? <img referrerPolicy="no-referrer" src={child.thumbnailUrl} alt={child.name} className="w-full h-full object-cover" />
-                      : <div className="w-full h-full bg-gray-150 flex items-center justify-center text-text-muted text-xs font-sans">{i + 1}</div>
+                      ? <img referrerPolicy="no-referrer" src={child.thumbnailUrl} alt={child.name} className="w-full h-full object-contain" />
+                      : <div className="w-full h-full flex items-center justify-center text-text-muted text-xs font-sans">{i + 1}</div>
                     }
-                  </div>
+                  </button>
                 ))}
               </div>
             ) : (
               <div className="relative">
-                <div className="aspect-video bg-gray-150 rounded-sm overflow-hidden">
+                <button
+                  type="button"
+                  className="aspect-square w-full rounded-sm overflow-hidden cursor-zoom-in"
+                  style={{ backgroundColor: `color-mix(in srgb, ${accent} 50%, #000)` }}
+                  onClick={() => {
+                    const withSrc = children.filter(c => c.thumbnailUrl || c.downloadUrl)
+                    const idx = withSrc.findIndex(c => c.id === children[carouselIdx]?.id)
+                    if (idx >= 0) setLightboxIndex(idx)
+                  }}
+                >
                   {children[carouselIdx]?.thumbnailUrl
-                    ? <img referrerPolicy="no-referrer" src={children[carouselIdx].thumbnailUrl} alt={children[carouselIdx].name} className="w-full h-full object-cover" />
+                    ? <img referrerPolicy="no-referrer" src={children[carouselIdx].thumbnailUrl} alt={children[carouselIdx].name} className="w-full h-full object-contain" />
                     : <div className="w-full h-full bg-gray-150" />
                   }
-                </div>
+                </button>
                 <div className="flex items-center justify-between mt-2">
                   <button
                     onClick={() => setCarouselIdx(i => Math.max(0, i - 1))}
@@ -460,12 +481,33 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
             )}
           </div>
         ) : (
-          <div className="aspect-video bg-gray-150 rounded-sm overflow-hidden">
+          <button
+            type="button"
+            className="aspect-square w-full rounded-sm overflow-hidden cursor-zoom-in"
+            style={{ backgroundColor: `color-mix(in srgb, ${accent} 50%, #000)` }}
+            onClick={() => selectedAsset.thumbnailUrl && setLightboxIndex(0)}
+          >
             {selectedAsset.thumbnailUrl
-              ? <img referrerPolicy="no-referrer" src={selectedAsset.thumbnailUrl} alt={selectedAsset.name} className="w-full h-full object-cover" />
+              ? <img referrerPolicy="no-referrer" src={selectedAsset.thumbnailUrl} alt={selectedAsset.name} className="w-full h-full object-contain" />
               : <div className="w-full h-full bg-gray-150" />
             }
-          </div>
+          </button>
+        )}
+
+        {lightboxIndex !== null && (
+          <ImageLightbox
+            items={(children.length > 0 ? children : [selectedAsset])
+              .filter(a => a.thumbnailUrl || a.downloadUrl)
+              .map(a => ({
+                src: a.downloadUrl || a.thumbnailUrl || '',
+                alt: a.name,
+                title: a.name,
+              }))
+              .filter(i => i.src)}
+            index={lightboxIndex}
+            onClose={() => setLightboxIndex(null)}
+            onIndexChange={setLightboxIndex}
+          />
         )}
 
         {/* Title + meta */}

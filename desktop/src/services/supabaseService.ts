@@ -2,7 +2,7 @@ import { readFile, readTextFile, writeTextFile, exists as fsExists } from '@taur
 import { parseFilename, buildVocabContext } from '../domain/filenameTranslator';
 import type { CloudDestination } from '../domain/client';
 import { normalizeDestination } from '../domain/client';
-import { extractStableId } from '../domain/stableId';
+import { extractStableId, stripStableId } from '../domain/stableId';
 import { filterHighestVersions, parseVersion, compareVersions } from '../domain/version';
 import type { VocabularyData } from '../domain/vocabulary';
 import type { GalleryGroup } from '../domain/assetGrouping';
@@ -957,7 +957,17 @@ export async function exportAssetsToSupabase(
       const firstChildCloudUrls    = firstStableChild ? (cloudUrls?.get(firstStableChild) ?? []) : [];
       // Nested gallery paths (Galleries/Selected) — parse the leaf folder for tags/name.
       const leafFolder = group.name.includes('/') ? group.name.slice(group.name.lastIndexOf('/') + 1) : group.name;
-      const pp        = parseAssetForSupabase(leafFolder, vocab);
+      const pp         = parseAssetForSupabase(leafFolder, vocab);
+      // Package folder (OUT's parent) carries the searchable description — prefix it so
+      // "Figurative Gallery Sculpture — Studio Retouches" stays findable as one concept.
+      const packageFolder = stripStableId(packageDir.split('/').pop() ?? '');
+      const pkg           = packageFolder ? parseAssetForSupabase(packageFolder, vocab) : null;
+      const galleryLabel  = (pp.name || leafFolder).trim();
+      const packageLabel  = (pkg?.name || '').trim();
+      const displayName   = packageLabel && galleryLabel && packageLabel !== galleryLabel
+        ? `${packageLabel} — ${galleryLabel}`
+        : (packageLabel || galleryLabel);
+      const uniq = (arr: string[]) => [...new Set(arr.filter(Boolean))];
       const parentKey = `${stableId}:${parentChildId}`;
       currentStableKeys.add(parentKey);
       readmeTargets.push({ packageDir, stableId, stem: group.name });
@@ -965,10 +975,13 @@ export async function exportAssetsToSupabase(
         key: parentKey,
         record: {
           client_id: clientId, stable_id: stableId, child_id: parentChildId,
-          shortcode: `${pp.shortcode} __${parentKey}`,
-          name: group.name.includes('/') ? `${pp.name || leafFolder} · ${group.name}` : pp.name,
-          entities: pp.entities, formats: pp.formats,
-          angles: pp.angles, tags: pp.tags, version: pp.version,
+          shortcode: `${pp.shortcode || pkg?.shortcode || leafFolder} __${parentKey}`,
+          name: displayName,
+          entities: uniq([...(pkg?.entities ?? []), ...pp.entities]),
+          formats:  uniq([...(pkg?.formats ?? []),  ...pp.formats]),
+          angles:   uniq([...(pkg?.angles ?? []),   ...pp.angles]),
+          tags:     uniq([...(pkg?.tags ?? []),     ...pp.tags]),
+          version: pp.version || pkg?.version || '1-0-0',
           status: 'published', perm: 'public', thumbnail_url: firstChildThumb,
           download_url: firstChildOriginalUrl, download_urls: firstChildCloudUrls,
         },
