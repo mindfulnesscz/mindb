@@ -459,7 +459,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
                 <button
                   type="button"
                   className="aspect-square w-full rounded-sm overflow-hidden cursor-zoom-in"
-                  style={{ backgroundColor: `color-mix(in srgb, ${accent} 50%, #000)` }}
+                  style={{ backgroundColor: `color-mix(in srgb, ${accent} 10%, #000)` }}
                   onClick={() => {
                     const withSrc = children.filter(c => c.thumbnailUrl || c.downloadUrl)
                     const idx = withSrc.findIndex(c => c.id === children[carouselIdx]?.id)
@@ -497,7 +497,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
           <button
             type="button"
             className="aspect-square w-full rounded-sm overflow-hidden cursor-zoom-in"
-            style={{ backgroundColor: `color-mix(in srgb, ${accent} 50%, #000)` }}
+            style={{ backgroundColor: `color-mix(in srgb, ${accent} 10%, #000)` }}
             onClick={() => selectedAsset.thumbnailUrl && setLightboxIndex(0)}
           >
             {selectedAsset.thumbnailUrl

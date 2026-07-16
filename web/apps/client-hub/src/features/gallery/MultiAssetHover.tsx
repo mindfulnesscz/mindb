@@ -61,7 +61,9 @@ export function gridGeometry(count: number): { cols: number; className: string }
   return { cols: 4, className: 'grid-cols-4' }
 }
 
-const enterAll = { duration: 0.18, ease: 'easeOut' as const }
+const mosaicIn = { duration: 0.42, ease: [0.22, 1, 0.36, 1] as const }
+const mosaicOut = { duration: 0.36, ease: [0.4, 0, 1, 1] as const }
+const tileStart = 0.58
 
 function ShimmerBlock() {
   return (
@@ -79,6 +81,7 @@ function ShimmerBlock() {
 /**
  * Hover mosaic: all tiles fade+scale in together (no stagger, no per-tile hover scale).
  * Dark accent veil sits behind the tiles only while the mosaic is open.
+ * Enter/exit scale lives on the mosaic root so hover-out animates reliably.
  */
 export function MultiAssetHoverGrid({
   open,
@@ -101,86 +104,97 @@ export function MultiAssetHoverGrid({
   const showShimmer = loading && n <= 1
   // Client accent darkened ~90%, opacity 0.8 — only while mosaic is open.
   const veil = `color-mix(in srgb, ${accent} 10%, #000)`
+  const tIn = reduceMotion ? { duration: 0 } : mosaicIn
+  const tOut = reduceMotion ? { duration: 0 } : mosaicOut
 
   return (
-    <AnimatePresence>
-      {open && (
-        <motion.div
-          className="absolute inset-0 z-10 flex items-center justify-center p-2"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0, transition: { duration: 0.12 } }}
-          transition={{ duration: reduceMotion ? 0.01 : 0.14 }}
-          onClick={e => e.stopPropagation()}
-        >
-          <div
-            className="absolute inset-0 pointer-events-none"
-            style={{ backgroundColor: veil, opacity: 0.8 }}
+    <>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            key="mosaic-veil"
+            className="absolute inset-0 z-10 pointer-events-none"
+            style={{ backgroundColor: veil }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 0.8 }}
+            exit={{ opacity: 0, transition: tOut }}
+            transition={tIn}
             aria-hidden
           />
+        )}
+      </AnimatePresence>
 
-          {showShimmer ? (
-            <div className={`relative z-[1] grid ${cols} gap-1.5 w-full place-items-center`}>
-              {Array.from({ length: 4 }).map((_, i) => (
-                <div key={i} className="relative aspect-square w-full rounded-[2px] overflow-hidden bg-cosmos-black/40">
-                  <ShimmerBlock />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className={`relative z-[1] grid ${cols} gap-1.5 w-full ${n === 2 ? 'items-center' : ''}`}>
-              {visible.map((s, i) => {
-                const isLastOverflow = overflow > 0 && i === visible.length - 1
-                return (
-                  <motion.button
-                    type="button"
-                    key={s.id}
-                    className="relative aspect-square rounded-[2px] overflow-hidden cursor-pointer ring-1 ring-black/10 text-left group/tile shadow-[0_6px_16px_rgba(0,0,0,0.22)]"
-                    initial={reduceMotion ? false : { opacity: 0, scale: 0.82 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={reduceMotion ? { duration: 0 } : enterAll}
-                    title={s.name}
-                    onClick={e => {
-                      e.stopPropagation()
-                      onSelect?.(s)
-                    }}
-                  >
-                    {loading && !s.thumbnailUrl ? (
-                      <ShimmerBlock />
-                    ) : s.thumbnailUrl ? (
-                      <img
-                        referrerPolicy="no-referrer"
-                        src={s.thumbnailUrl}
-                        alt={s.name}
-                        className="w-full h-full object-cover pointer-events-none"
-                        draggable={false}
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            key="mosaic-grid"
+            className="absolute inset-0 z-[11] flex items-center justify-center p-2 origin-center"
+            initial={reduceMotion ? false : { opacity: 0, scale: tileStart }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: tileStart, transition: tOut }}
+            transition={tIn}
+            onClick={e => e.stopPropagation()}
+          >
+            {showShimmer ? (
+              <div className={`grid ${cols} gap-1.5 w-full place-items-center`}>
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="relative aspect-square w-full rounded-[2px] overflow-hidden bg-cosmos-black/40">
+                    <ShimmerBlock />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className={`grid ${cols} gap-1.5 w-full ${n === 2 ? 'items-center' : ''}`}>
+                {visible.map((s, i) => {
+                  const isLastOverflow = overflow > 0 && i === visible.length - 1
+                  return (
+                    <button
+                      type="button"
+                      key={s.id}
+                      className="relative aspect-square rounded-[2px] overflow-hidden cursor-pointer ring-1 ring-black/10 text-left group/tile shadow-[0_6px_16px_rgba(0,0,0,0.22)]"
+                      title={s.name}
+                      onClick={e => {
+                        e.stopPropagation()
+                        onSelect?.(s)
+                      }}
+                    >
+                      {loading && !s.thumbnailUrl ? (
+                        <ShimmerBlock />
+                      ) : s.thumbnailUrl ? (
+                        <img
+                          referrerPolicy="no-referrer"
+                          src={s.thumbnailUrl}
+                          alt={s.name}
+                          className="w-full h-full object-cover pointer-events-none"
+                          draggable={false}
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-[10px] font-sans text-clear-white/70 bg-cosmos-black/40">
+                          {i + 1}
+                        </div>
+                      )}
+
+                      <span
+                        aria-hidden
+                        className="pointer-events-none absolute inset-0 box-border border-2 border-transparent group-hover/tile:border-clear-white transition-colors duration-150"
                       />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-[10px] font-sans text-clear-white/70 bg-cosmos-black/40">
-                        {i + 1}
-                      </div>
-                    )}
 
-                    <span
-                      aria-hidden
-                      className="pointer-events-none absolute inset-0 box-border border-2 border-transparent group-hover/tile:border-clear-white transition-colors duration-150"
-                    />
-
-                    {isLastOverflow && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-cosmos-black/55">
-                        <span className="text-sm font-sans font-semibold text-clear-white">
-                          +{overflow}
-                        </span>
-                      </div>
-                    )}
-                  </motion.button>
-                )
-              })}
-            </div>
-          )}
-        </motion.div>
-      )}
-    </AnimatePresence>
+                      {isLastOverflow && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-cosmos-black/55">
+                          <span className="text-sm font-sans font-semibold text-clear-white">
+                            +{overflow}
+                          </span>
+                        </div>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
   )
 }
 
