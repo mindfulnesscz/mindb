@@ -445,11 +445,10 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
                       const idx = withSrc.findIndex(c => c.id === child.id)
                       if (idx >= 0) setLightboxIndex(idx)
                     }}
-                    className="aspect-square rounded-sm overflow-hidden relative text-left cursor-zoom-in hover:ring-1 hover:ring-cosmos-black transition-shadow"
-                    style={{ backgroundColor: `color-mix(in srgb, ${accent} 50%, #000)` }}
+                    className="aspect-square rounded-sm overflow-hidden relative text-left cursor-zoom-in hover:ring-1 hover:ring-cosmos-black transition-shadow bg-gray-150"
                   >
                     {child.thumbnailUrl
-                      ? <img referrerPolicy="no-referrer" src={child.thumbnailUrl} alt={child.name} className="w-full h-full object-contain" />
+                      ? <img referrerPolicy="no-referrer" src={child.thumbnailUrl} alt={child.name} className="w-full h-full object-cover" />
                       : <div className="w-full h-full flex items-center justify-center text-text-muted text-xs font-sans">{i + 1}</div>
                     }
                   </button>

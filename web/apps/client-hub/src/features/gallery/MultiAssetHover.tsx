@@ -61,13 +61,7 @@ export function gridGeometry(count: number): { cols: number; className: string }
   return { cols: 4, className: 'grid-cols-4' }
 }
 
-const springIn = { type: 'spring' as const, stiffness: 380, damping: 26, mass: 0.65 }
-const springHover = { type: 'spring' as const, stiffness: 460, damping: 24, mass: 0.55 }
-
-/** Accent used only as contain letterbox — darkened ~50% so artwork stays readable. */
-export function thumbLetterbox(accent: string): string {
-  return `color-mix(in srgb, ${accent} 50%, #000)`
-}
+const fadeIn = { duration: 0.16, ease: 'easeOut' as const }
 
 function ShimmerBlock() {
   return (
@@ -90,13 +84,11 @@ export function MultiAssetHoverGrid({
   open,
   siblings,
   loading,
-  accent = '#161616',
   onSelect,
 }: {
   open: boolean
   siblings: SiblingPreview[]
   loading: boolean
-  accent?: string
   onSelect?: (sibling: SiblingPreview) => void
 }) {
   const reduceMotion = useReducedMotion()
@@ -105,90 +97,38 @@ export function MultiAssetHoverGrid({
   const n = visible.length
   const { className: cols } = gridGeometry(Math.max(n, 1))
   const showShimmer = loading && n <= 1
-  const letterbox = thumbLetterbox(accent)
 
   return (
     <AnimatePresence>
       {open && (
         <motion.div
-          className="absolute inset-0 z-10 flex items-center justify-center p-2"
-          style={{ perspective: 900 }}
+          className="absolute inset-0 z-10 flex items-center justify-center p-2 bg-gray-150"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          exit={{ opacity: 0, transition: { duration: 0.15 } }}
-          transition={{ duration: reduceMotion ? 0.01 : 0.18 }}
+          exit={{ opacity: 0, transition: { duration: 0.12 } }}
+          transition={{ duration: reduceMotion ? 0.01 : 0.16 }}
           onClick={e => e.stopPropagation()}
         >
           {showShimmer ? (
             <div className={`grid ${cols} gap-1.5 w-full place-items-center`}>
               {Array.from({ length: 4 }).map((_, i) => (
-                <div key={i} className="relative aspect-square w-full rounded-[2px] overflow-hidden" style={{ backgroundColor: letterbox }}>
+                <div key={i} className="relative aspect-square w-full rounded-[2px] overflow-hidden bg-gray-200">
                   <ShimmerBlock />
                 </div>
               ))}
             </div>
           ) : (
-            <motion.div
-              className={`grid ${cols} gap-1.5 w-full ${n === 2 ? 'items-center' : ''}`}
-              style={{ transformStyle: 'preserve-3d' }}
-              initial="hidden"
-              animate="show"
-              exit="hidden"
-              variants={{
-                hidden: {
-                  transition: {
-                    staggerChildren: reduceMotion ? 0 : 0.02,
-                    staggerDirection: -1,
-                  },
-                },
-                show: {
-                  transition: {
-                    staggerChildren: reduceMotion ? 0 : 0.035,
-                    delayChildren: reduceMotion ? 0 : 0.04,
-                  },
-                },
-              }}
-            >
+            <div className={`grid ${cols} gap-1.5 w-full ${n === 2 ? 'items-center' : ''}`}>
               {visible.map((s, i) => {
                 const isLastOverflow = overflow > 0 && i === visible.length - 1
                 return (
                   <motion.button
                     type="button"
                     key={s.id}
-                    className="relative aspect-square rounded-[2px] overflow-hidden origin-center cursor-pointer ring-1 ring-black/10 text-left group/tile"
-                    style={{
-                      backgroundColor: letterbox,
-                      boxShadow: '0 6px 16px rgba(0,0,0,0.22)',
-                      transformStyle: 'preserve-3d',
-                    }}
-                    variants={{
-                      hidden: reduceMotion
-                        ? { opacity: 0 }
-                        : {
-                            opacity: 0,
-                            scale: 0.42,
-                            y: 14,
-                            rotateX: 10,
-                          },
-                      show: {
-                        opacity: 1,
-                        scale: 1,
-                        y: 0,
-                        rotateX: 0,
-                        transition: springIn,
-                      },
-                    }}
-                    whileHover={
-                      reduceMotion
-                        ? undefined
-                        : {
-                            scale: 1.08,
-                            y: -2,
-                            zIndex: 3,
-                            boxShadow: '0 14px 28px rgba(0,0,0,0.35)',
-                            transition: springHover,
-                          }
-                    }
+                    className="relative aspect-square rounded-[2px] overflow-hidden cursor-pointer ring-1 ring-black/10 bg-gray-200 text-left group/tile shadow-[0_6px_16px_rgba(0,0,0,0.22)]"
+                    initial={reduceMotion ? false : { opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={reduceMotion ? { duration: 0 } : fadeIn}
                     title={s.name}
                     onClick={e => {
                       e.stopPropagation()
@@ -202,21 +142,24 @@ export function MultiAssetHoverGrid({
                         referrerPolicy="no-referrer"
                         src={s.thumbnailUrl}
                         alt={s.name}
-                        className="w-full h-full object-contain pointer-events-none"
+                        className="w-full h-full object-cover pointer-events-none"
                         draggable={false}
                       />
                     ) : (
-                      <div className="w-full h-full flex items-center justify-center text-[10px] font-sans text-clear-white/70">
+                      <div className="w-full h-full flex items-center justify-center text-[10px] font-sans text-text-muted">
                         {i + 1}
                       </div>
                     )}
 
+                    {/* Inset hover ring — no scale (avoids colliding with enter fade). */}
+                    <span
+                      aria-hidden
+                      className="pointer-events-none absolute inset-0 box-border border-2 border-transparent group-hover/tile:border-clear-white transition-colors duration-150"
+                    />
+
                     {isLastOverflow && (
-                      <div
-                        className="absolute inset-0 flex items-center justify-center"
-                        style={{ backgroundColor: letterbox }}
-                      >
-                        <span className="text-sm font-sans font-semibold text-clear-white drop-shadow">
+                      <div className="absolute inset-0 flex items-center justify-center bg-cosmos-black/55">
+                        <span className="text-sm font-sans font-semibold text-clear-white">
                           +{overflow}
                         </span>
                       </div>
@@ -224,7 +167,7 @@ export function MultiAssetHoverGrid({
                   </motion.button>
                 )
               })}
-            </motion.div>
+            </div>
           )}
         </motion.div>
       )}

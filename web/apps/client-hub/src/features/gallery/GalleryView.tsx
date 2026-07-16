@@ -10,7 +10,6 @@ import {
   MultiAssetHoverGrid,
   useSiblingPreviews,
   useDelayedHover,
-  thumbLetterbox,
   type SiblingPreview,
 } from './MultiAssetHover'
 
@@ -25,9 +24,8 @@ const STATUS_LABELS: Record<string, string> = {
 
 // ── Asset card ────────────────────────────────────────────────
 
-function StackBackdrop({ accent, count }: { accent: string; count: number }) {
+function StackBackdrop({ count }: { count: number }) {
   const layers = Math.min(3, Math.max(1, count > 1 ? 3 : 1))
-  const fill = thumbLetterbox(accent)
   return (
     <div className="absolute inset-0 pointer-events-none" aria-hidden>
       {Array.from({ length: layers }).map((_, i) => {
@@ -35,12 +33,11 @@ function StackBackdrop({ accent, count }: { accent: string; count: number }) {
         return (
           <div
             key={i}
-            className="absolute rounded-[2px] border border-black/15"
+            className="absolute rounded-[2px] border border-black/10 bg-gray-150"
             style={{
               inset: 0,
               transform: `translate(${offset}px, ${-offset}px)`,
-              backgroundColor: fill,
-              opacity: 0.25 + i * 0.12,
+              opacity: 0.35 + i * 0.15,
               zIndex: i,
             }}
           />
@@ -54,19 +51,16 @@ function AssetCard({
   asset,
   onOpen,
   role,
-  accent,
 }: {
   asset: Asset
   onOpen: (focusId?: string, opts?: { lightbox?: boolean }) => void
   role: string
-  accent: string
 }) {
   const isMulti = (asset.childCount ?? 0) > 0
   const [pointerIn, setPointerIn] = useState(false)
   const hovered = useDelayedHover(pointerIn, 80)
-  // Prefetch siblings when hovering, or immediately when the gallery shell has no thumb.
-  const needsRestingThumb = isMulti && !asset.thumbnailUrl
-  const { siblings, loading } = useSiblingPreviews(asset, isMulti && (hovered || needsRestingThumb))
+  // Prefetch siblings for multi cards so a click (even before hover) can focus the first child.
+  const { siblings, loading } = useSiblingPreviews(asset, isMulti)
   const restingThumb =
     asset.thumbnailUrl || siblings.find(s => s.thumbnailUrl)?.thumbnailUrl
   const showStack = isMulti
@@ -75,27 +69,34 @@ function AssetCard({
     : isMulti
       ? (asset.childCount ?? 0)
       : 1
-  const letterbox = thumbLetterbox(accent)
 
   function handleSiblingSelect(s: SiblingPreview) {
-    onOpen(s.id, { lightbox: true })
+    // Lightbox only for true gallery children (folder-of-images), not format/size variants.
+    onOpen(s.id, { lightbox: !!s.isGalleryChild })
+  }
+
+  function handleCardOpen() {
+    // Multi-asset / gallery: focus the first child or variant in detail (no lightbox).
+    const first = siblings.find(s => s.id !== asset.id) ?? siblings[0]
+    if (isMulti && first && first.id !== asset.id) {
+      onOpen(first.id)
+      return
+    }
+    onOpen()
   }
 
   return (
     <button
       type="button"
-      onClick={() => onOpen()}
+      onClick={handleCardOpen}
       onMouseEnter={() => setPointerIn(true)}
       onMouseLeave={() => setPointerIn(false)}
       onFocus={() => setPointerIn(true)}
       onBlur={() => setPointerIn(false)}
-      className="group text-left w-full border border-border rounded-sm overflow-hidden bg-surface hover:border-cosmos-black transition-colors duration-base"
+      className="group text-left w-full border border-border rounded-sm overflow-hidden bg-surface hover:border-cosmos-black transition-colors duration-base cursor-pointer"
     >
-      <div
-        className="relative aspect-square overflow-hidden [transform-style:preserve-3d]"
-        style={{ backgroundColor: letterbox }}
-      >
-        {showStack && !hovered && <StackBackdrop accent={accent} count={fileCount} />}
+      <div className="relative aspect-square overflow-hidden bg-gray-150 cursor-pointer [transform-style:preserve-3d]">
+        {showStack && !hovered && <StackBackdrop count={fileCount} />}
 
         {restingThumb
           ? (
@@ -103,9 +104,7 @@ function AssetCard({
               referrerPolicy="no-referrer"
               src={restingThumb}
               alt={asset.name}
-              className={`relative z-[1] w-full h-full object-contain transition-transform duration-500 ease-out will-change-transform ${
-                isMulti && hovered ? 'scale-[1.02]' : 'scale-100'
-              }`}
+              className="relative z-[1] w-full h-full object-cover cursor-pointer"
             />
           )
           : <div className="relative z-[1] w-full h-full" />
@@ -116,7 +115,6 @@ function AssetCard({
             open={hovered}
             siblings={siblings}
             loading={loading}
-            accent={accent}
             onSelect={handleSiblingSelect}
           />
         )}
@@ -127,9 +125,7 @@ function AssetCard({
           </span>
           {isMulti && (
             <span
-              className={`text-[10px] font-sans font-bold uppercase tracking-label border border-cosmos-black bg-cosmos-black text-clear-white px-1.5 py-0.5 rounded-chip transition-transform duration-300 ${
-                hovered ? 'scale-105' : 'scale-100'
-              }`}
+              className="text-[10px] font-sans font-bold uppercase tracking-label border border-cosmos-black bg-cosmos-black text-clear-white px-1.5 py-0.5 rounded-chip"
             >
               {fileCount} files
             </span>
@@ -606,7 +602,6 @@ export default function GalleryView() {
 
   const isStaff = role === 'admin' || role === 'editor'
   const statusKeys = isStaff ? STATUS_KEYS_STAFF : STATUS_KEYS_CLIENT
-  const accent = activeClient?.accent ?? '#161616'
 
   const clientId = activeClient?.id
 
@@ -764,7 +759,6 @@ export default function GalleryView() {
                   asset={asset}
                   onOpen={(focusId, opts) => { void openAsset(asset, focusId, opts) }}
                   role={role}
-                  accent={accent}
                 />
               ))}
             </div>
