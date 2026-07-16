@@ -71,8 +71,6 @@ function AssetCard({
     : isMulti
       ? (asset.childCount ?? 0)
       : 1
-  // Client accent darkened ~90%, used only as a light hover veil (opacity 0.2).
-  const hoverVeil = `color-mix(in srgb, ${accent} 10%, #000)`
 
   function handleSiblingSelect(s: SiblingPreview) {
     // Lightbox only for true gallery children (folder-of-images), not format/size variants.
@@ -99,7 +97,7 @@ function AssetCard({
       onBlur={() => setPointerIn(false)}
       className="group text-left w-full border border-border rounded-sm overflow-hidden bg-surface hover:border-cosmos-black transition-colors duration-base cursor-pointer"
     >
-      <div className="relative aspect-square overflow-hidden bg-gray-150 cursor-pointer [transform-style:preserve-3d]">
+      <div className="relative aspect-square overflow-hidden cursor-pointer [transform-style:preserve-3d]">
         {showStack && !hovered && <StackBackdrop count={fileCount} />}
 
         {restingThumb
@@ -111,23 +109,15 @@ function AssetCard({
               className="relative z-[1] w-full h-full object-cover cursor-pointer"
             />
           )
-          : <div className="relative z-[1] w-full h-full" />
+          : <div className="relative z-[1] w-full h-full bg-gray-150" />
         }
-
-        {/* Subtle accent veil on hover only — not a pale gray curtain. */}
-        {isMulti && hovered && (
-          <div
-            className="absolute inset-0 z-[2] pointer-events-none"
-            style={{ backgroundColor: hoverVeil, opacity: 0.2 }}
-            aria-hidden
-          />
-        )}
 
         {isMulti && (
           <MultiAssetHoverGrid
             open={hovered}
             siblings={siblings}
             loading={loading}
+            accent={accent}
             onSelect={handleSiblingSelect}
           />
         )}

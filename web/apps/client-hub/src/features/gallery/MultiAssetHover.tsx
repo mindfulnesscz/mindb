@@ -61,8 +61,7 @@ export function gridGeometry(count: number): { cols: number; className: string }
   return { cols: 4, className: 'grid-cols-4' }
 }
 
-const fadeIn = { duration: 0.14, ease: 'easeOut' as const }
-const springHover = { type: 'spring' as const, stiffness: 460, damping: 24, mass: 0.55 }
+const enterAll = { duration: 0.18, ease: 'easeOut' as const }
 
 function ShimmerBlock() {
   return (
@@ -78,18 +77,20 @@ function ShimmerBlock() {
 }
 
 /**
- * Hover overlay: sibling thumbnails appear together in an adaptive mosaic.
- * Tile click opens that asset. No pale curtain — mosaic floats over the resting thumb.
+ * Hover mosaic: all tiles fade+scale in together (no stagger, no per-tile hover scale).
+ * Dark accent veil sits behind the tiles only while the mosaic is open.
  */
 export function MultiAssetHoverGrid({
   open,
   siblings,
   loading,
+  accent = '#161616',
   onSelect,
 }: {
   open: boolean
   siblings: SiblingPreview[]
   loading: boolean
+  accent?: string
   onSelect?: (sibling: SiblingPreview) => void
 }) {
   const reduceMotion = useReducedMotion()
@@ -98,6 +99,8 @@ export function MultiAssetHoverGrid({
   const n = visible.length
   const { className: cols } = gridGeometry(Math.max(n, 1))
   const showShimmer = loading && n <= 1
+  // Client accent darkened ~90%, opacity 0.8 — only while mosaic is open.
+  const veil = `color-mix(in srgb, ${accent} 10%, #000)`
 
   return (
     <AnimatePresence>
@@ -110,36 +113,32 @@ export function MultiAssetHoverGrid({
           transition={{ duration: reduceMotion ? 0.01 : 0.14 }}
           onClick={e => e.stopPropagation()}
         >
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{ backgroundColor: veil, opacity: 0.8 }}
+            aria-hidden
+          />
+
           {showShimmer ? (
-            <div className={`grid ${cols} gap-1.5 w-full place-items-center`}>
+            <div className={`relative z-[1] grid ${cols} gap-1.5 w-full place-items-center`}>
               {Array.from({ length: 4 }).map((_, i) => (
-                <div key={i} className="relative aspect-square w-full rounded-[2px] overflow-hidden bg-gray-200">
+                <div key={i} className="relative aspect-square w-full rounded-[2px] overflow-hidden bg-cosmos-black/40">
                   <ShimmerBlock />
                 </div>
               ))}
             </div>
           ) : (
-            <div className={`grid ${cols} gap-1.5 w-full ${n === 2 ? 'items-center' : ''}`}>
+            <div className={`relative z-[1] grid ${cols} gap-1.5 w-full ${n === 2 ? 'items-center' : ''}`}>
               {visible.map((s, i) => {
                 const isLastOverflow = overflow > 0 && i === visible.length - 1
                 return (
                   <motion.button
                     type="button"
                     key={s.id}
-                    className="relative aspect-square rounded-[2px] overflow-hidden cursor-pointer ring-1 ring-black/10 bg-gray-200 text-left group/tile shadow-[0_6px_16px_rgba(0,0,0,0.22)]"
-                    initial={reduceMotion ? false : { opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={reduceMotion ? { duration: 0 } : fadeIn}
-                    whileHover={
-                      reduceMotion
-                        ? undefined
-                        : {
-                            scale: 1.08,
-                            zIndex: 3,
-                            boxShadow: '0 14px 28px rgba(0,0,0,0.35)',
-                            transition: springHover,
-                          }
-                    }
+                    className="relative aspect-square rounded-[2px] overflow-hidden cursor-pointer ring-1 ring-black/10 text-left group/tile shadow-[0_6px_16px_rgba(0,0,0,0.22)]"
+                    initial={reduceMotion ? false : { opacity: 0, scale: 0.82 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={reduceMotion ? { duration: 0 } : enterAll}
                     title={s.name}
                     onClick={e => {
                       e.stopPropagation()
@@ -157,7 +156,7 @@ export function MultiAssetHoverGrid({
                         draggable={false}
                       />
                     ) : (
-                      <div className="w-full h-full flex items-center justify-center text-[10px] font-sans text-text-muted">
+                      <div className="w-full h-full flex items-center justify-center text-[10px] font-sans text-clear-white/70 bg-cosmos-black/40">
                         {i + 1}
                       </div>
                     )}
