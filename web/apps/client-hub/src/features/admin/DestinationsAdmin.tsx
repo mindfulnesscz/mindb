@@ -284,13 +284,16 @@ function DestForm({
         </label>
         <label className="flex items-center gap-1.5 cursor-pointer">
           <input type="checkbox" checked={form.flatExport} onChange={e => set('flatExport', e.target.checked)} />
-          Flat export
+          Flatten into one folder
         </label>
         <label className="flex items-center gap-1.5 cursor-pointer">
           <input type="checkbox" checked={form.allowRevealLocal} onChange={e => set('allowRevealLocal', e.target.checked)} />
           Allow Reveal in Finder
         </label>
       </div>
+      <p className="text-[10px] font-sans text-text-subtle">
+        Flat export off (default) keeps OUT subfolders in Drive/Dropbox/OneDrive. Reveal needs the desktop app on this machine.
+      </p>
 
       <div className="flex justify-end gap-3 pt-1">
         <button type="button" onClick={onCancel} className="text-[11px] text-text-muted hover:text-cosmos-black">Cancel</button>

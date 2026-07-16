@@ -939,7 +939,9 @@ export async function exportAssetsToSupabase(
 
     for (const { group, packageDir, stableId } of stableGalleries) {
       const state = await manifestState(packageDir, stableId);
-      const parentSlot = '__gallery_parent__';
+      // One parent slot per gallery folder path — two galleries in the same package
+      // (e.g. Selected vs All) must not collapse onto a shared __gallery_parent__.
+      const parentSlot = `__gallery__:${group.name}`;
       let parentChildId = state.manifest.children[parentSlot]?.child_id;
       if (!parentChildId) {
         parentChildId = nextChildId(state.used);
@@ -953,7 +955,9 @@ export async function exportAssetsToSupabase(
       const firstChildThumb        = firstStableChild ? (cdnUrls?.get(firstStableChild) ?? null) : null;
       const firstChildOriginalUrl  = firstStableChild ? (originalUrls?.get(firstStableChild) ?? null) : null;
       const firstChildCloudUrls    = firstStableChild ? (cloudUrls?.get(firstStableChild) ?? []) : [];
-      const pp        = parseAssetForSupabase(group.name, vocab);
+      // Nested gallery paths (Galleries/Selected) — parse the leaf folder for tags/name.
+      const leafFolder = group.name.includes('/') ? group.name.slice(group.name.lastIndexOf('/') + 1) : group.name;
+      const pp        = parseAssetForSupabase(leafFolder, vocab);
       const parentKey = `${stableId}:${parentChildId}`;
       currentStableKeys.add(parentKey);
       readmeTargets.push({ packageDir, stableId, stem: group.name });
@@ -961,7 +965,9 @@ export async function exportAssetsToSupabase(
         key: parentKey,
         record: {
           client_id: clientId, stable_id: stableId, child_id: parentChildId,
-          shortcode: `${pp.shortcode} __${parentKey}`, name: pp.name, entities: pp.entities, formats: pp.formats,
+          shortcode: `${pp.shortcode} __${parentKey}`,
+          name: group.name.includes('/') ? `${pp.name || leafFolder} · ${group.name}` : pp.name,
+          entities: pp.entities, formats: pp.formats,
           angles: pp.angles, tags: pp.tags, version: pp.version,
           status: 'published', perm: 'public', thumbnail_url: firstChildThumb,
           download_url: firstChildOriginalUrl, download_urls: firstChildCloudUrls,
@@ -970,27 +976,29 @@ export async function exportAssetsToSupabase(
 
       for (const childStem of group.childStems) {
         const absPath  = identity!.filePaths.get(childStem);
-        const filename = absPath?.split('/').pop() ?? childStem;
+        const filename = absPath?.split('/').pop() ?? childStem.split('/').pop() ?? childStem;
         const resolved = absPath
           ? await resolveChildId(state.manifest, filename, absPath, state.used)
           : { childId: nextChildId(state.used), sha256: '', dirty: true };
         if (resolved.dirty) { state.manifest.children[filename] = { child_id: resolved.childId, sha256: resolved.sha256 }; state.dirty = true; }
 
-        const cp      = parseAssetForSupabase(childStem, vocab);
+        const fileStem = filename.replace(/\.[^.]+$/, '');
+        const cp      = parseAssetForSupabase(fileStem, vocab);
         const childKey = `${stableId}:${resolved.childId}`;
         currentStableKeys.add(childKey);
         childWrites.push({
           key: childKey, parentKey, relation: 'parent_id',
           record: {
             client_id: clientId, stable_id: stableId, child_id: resolved.childId,
-            shortcode: `${pp.shortcode}|${childStem} __${childKey}`, name: cp.name || childStem,
+            shortcode: `${pp.shortcode}|${fileStem} __${childKey}`, name: cp.name || fileStem,
             entities: cp.entities.length ? cp.entities : pp.entities,
             formats:  cp.formats.length  ? cp.formats  : pp.formats,
             angles:   cp.angles.length   ? cp.angles   : pp.angles,
             tags:     cp.tags.length     ? cp.tags     : pp.tags,
             version:  cp.version || pp.version,
-            status: 'published', perm: 'public', thumbnail_url: cdnUrls?.get(childStem) ?? null,
-            download_url: originalUrls?.get(childStem) ?? null, download_urls: cloudUrls?.get(childStem) ?? [],
+            status: 'published', perm: 'public', thumbnail_url: cdnUrls?.get(childStem) ?? cdnUrls?.get(fileStem) ?? null,
+            download_url: originalUrls?.get(childStem) ?? originalUrls?.get(fileStem) ?? null,
+            download_urls: cloudUrls?.get(childStem) ?? cloudUrls?.get(fileStem) ?? [],
           },
         });
       }

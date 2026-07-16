@@ -52,7 +52,7 @@ export function makePortalDestination(partial: Partial<PortalDestination> = {}):
     flatExport: false,
     generateLink: true,
     showInPortal: true,
-    allowRevealLocal: false,
+    allowRevealLocal: true,
     enabled: true,
     config: { type: 'gdrive', clientId: '', clientSecret: '', sharedDriveId: '', remotePath: '', token: null },
     ...partial,

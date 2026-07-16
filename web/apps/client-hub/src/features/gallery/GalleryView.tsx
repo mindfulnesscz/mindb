@@ -1,11 +1,17 @@
 import { useState, useMemo, useEffect } from 'react'
 import { useRole } from '../../context/RoleContext'
-import { getDefaultFilters, type FilterState, type Asset } from '@dc-hub/asset-library'
+import { getDefaultFilters, canDownload, type FilterState, type Asset } from '@dc-hub/asset-library'
 import { useAssets } from '../../hooks/useAssets'
 import { useTags, type TagsByDimension, type TagGroup } from '../../hooks/useTags'
-import { deleteDisconnectedAssets } from '../../services/assetService'
+import { deleteDisconnectedAssets, fetchAsset } from '../../services/assetService'
+import { webAssetActions } from '../../lib/assetActions'
 import AssetDetail from './AssetDetail'
-import { MultiAssetHoverGrid, useSiblingPreviews, useDelayedHover } from './MultiAssetHover'
+import {
+  MultiAssetHoverGrid,
+  useSiblingPreviews,
+  useDelayedHover,
+  type SiblingPreview,
+} from './MultiAssetHover'
 
 const STATUS_LABELS: Record<string, string> = {
   draft:        'Draft',
@@ -18,40 +24,98 @@ const STATUS_LABELS: Record<string, string> = {
 
 // ── Asset card ────────────────────────────────────────────────
 
-function AssetCard({ asset, onClick, role }: { asset: Asset; onClick: () => void; role: string }) {
+function StackBackdrop({ accent, count }: { accent: string; count: number }) {
+  const layers = Math.min(3, Math.max(1, count > 1 ? 3 : 1))
+  return (
+    <div className="absolute inset-0 pointer-events-none" aria-hidden>
+      {Array.from({ length: layers }).map((_, i) => {
+        const offset = (layers - 1 - i) * 4
+        return (
+          <div
+            key={i}
+            className="absolute rounded-[2px] border border-black/10"
+            style={{
+              inset: 0,
+              transform: `translate(${offset}px, ${-offset}px)`,
+              backgroundColor: accent,
+              opacity: 0.35 + i * 0.2,
+              zIndex: i,
+            }}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+function AssetCard({
+  asset,
+  onOpen,
+  role,
+  accent,
+}: {
+  asset: Asset
+  onOpen: (focusId?: string) => void
+  role: string
+  accent: string
+}) {
   const isMulti = (asset.childCount ?? 0) > 0
   const fileCount = isMulti ? (asset.childCount ?? 0) + 1 : 1
   const [pointerIn, setPointerIn] = useState(false)
   const hovered = useDelayedHover(pointerIn, 80)
   const { siblings, loading } = useSiblingPreviews(asset, isMulti && hovered)
+  const galleryKids = siblings.filter(s => s.isGalleryChild).length
+  const showStack = isMulti || galleryKids > 0
+
+  function handleSiblingSelect(s: SiblingPreview) {
+    onOpen(s.id)
+  }
+
+  function handleSiblingDownload(s: SiblingPreview) {
+    if (!s.downloadUrl) return
+    const stub = { ...asset, id: s.id, name: s.name, downloadUrl: s.downloadUrl, thumbnailUrl: s.thumbnailUrl }
+    void webAssetActions.download?.(stub)
+  }
 
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={() => onOpen()}
       onMouseEnter={() => setPointerIn(true)}
       onMouseLeave={() => setPointerIn(false)}
       onFocus={() => setPointerIn(true)}
       onBlur={() => setPointerIn(false)}
       className="group text-left w-full border border-border rounded-sm overflow-hidden bg-surface hover:border-cosmos-black transition-colors duration-base"
     >
-      <div className="relative aspect-video bg-gray-150 overflow-hidden [transform-style:preserve-3d]">
+      <div
+        className="relative aspect-square overflow-hidden [transform-style:preserve-3d]"
+        style={{ backgroundColor: accent }}
+      >
+        {showStack && !hovered && <StackBackdrop accent={accent} count={fileCount} />}
+
         {asset.thumbnailUrl
           ? (
             <img
               referrerPolicy="no-referrer"
               src={asset.thumbnailUrl}
               alt={asset.name}
-              className={`w-full h-full object-cover transition-[transform,filter] duration-500 ease-out will-change-transform ${
-                isMulti && hovered ? 'scale-[1.06] blur-[1.5px] brightness-75' : 'scale-100'
+              className={`relative z-[1] w-full h-full object-contain transition-[transform,filter] duration-500 ease-out will-change-transform ${
+                isMulti && hovered ? 'scale-[1.04] blur-[1.5px] brightness-75' : 'scale-100'
               }`}
             />
           )
-          : <div className="w-full h-full bg-gray-150" />
+          : <div className="relative z-[1] w-full h-full" />
         }
 
         {isMulti && (
-          <MultiAssetHoverGrid open={hovered} siblings={siblings} loading={loading} />
+          <MultiAssetHoverGrid
+            open={hovered}
+            siblings={siblings}
+            loading={loading}
+            accent={accent}
+            onSelect={handleSiblingSelect}
+            onDownload={canDownload(role as 'public' | 'member' | 'editor' | 'admin', asset) ? handleSiblingDownload : undefined}
+          />
         )}
 
         <div className="absolute top-2 left-2 flex gap-1 z-20 pointer-events-none">
@@ -78,6 +142,27 @@ function AssetCard({ asset, onClick, role }: { asset: Asset; onClick: () => void
             awaiting you
           </div>
         )}
+        {canDownload(role as 'public' | 'member' | 'editor' | 'admin', asset) && asset.downloadUrl && !hovered && (
+          <span
+            role="button"
+            tabIndex={0}
+            title="Download"
+            className="absolute bottom-2 right-2 z-20 w-7 h-7 flex items-center justify-center rounded-[3px] border border-cosmos-black bg-clear-white/95 text-cosmos-black text-xs font-bold opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+            onClick={e => {
+              e.stopPropagation()
+              void webAssetActions.download?.(asset)
+            }}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                e.stopPropagation()
+                void webAssetActions.download?.(asset)
+              }
+            }}
+          >
+            ↓
+          </span>
+        )}
       </div>
 
       <div className="px-3 pt-2.5 pb-3">
@@ -102,7 +187,6 @@ function AssetCard({ asset, onClick, role }: { asset: Asset; onClick: () => void
             <span>★ {asset.avg.toFixed(1)} ({asset.count})</span>
           )}
           {role !== 'public' && <span>💬 {asset.comments}</span>}
-          <span className="ml-auto">↓</span>
         </div>
       </div>
     </button>
@@ -114,7 +198,7 @@ function AssetCard({ asset, onClick, role }: { asset: Asset; onClick: () => void
 function CardSkeleton() {
   return (
     <div className="border border-border rounded-sm overflow-hidden bg-surface animate-pulse">
-      <div className="aspect-video bg-gray-150" />
+      <div className="aspect-square bg-gray-150" />
       <div className="p-3 space-y-2">
         <div className="h-3.5 bg-gray-150 rounded-chip w-3/4" />
         <div className="h-3 bg-gray-150 rounded-chip w-1/2" />
@@ -511,10 +595,13 @@ export default function GalleryView() {
   const { role, activeClient } = useRole()
   const [filters, setFilters] = useState<FilterState>(getDefaultFilters())
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [focusSiblingId, setFocusSiblingId] = useState<string | null>(null)
+  const [resolvedDetail, setResolvedDetail] = useState<Asset | null>(null)
   const [railVisible, setRailVisible] = useState(true)
 
   const isStaff = role === 'admin' || role === 'editor'
   const statusKeys = isStaff ? STATUS_KEYS_STAFF : STATUS_KEYS_CLIENT
+  const accent = activeClient?.accent ?? '#161616'
 
   const clientId = activeClient?.id
 
@@ -559,7 +646,40 @@ export default function GalleryView() {
     filters.search?.trim() !== '' ||
     filters.latestOnly
 
-  const selectedAsset = selectedId ? assets.find(a => a.id === selectedId) ?? null : null
+  const selectedAsset = selectedId
+    ? assets.find(a => a.id === selectedId) ?? resolvedDetail
+    : null
+
+  /** Open a top-level card, or a hover-tile sibling (child/variant) focused inside the parent detail. */
+  async function openAsset(primary: Asset, focusId?: string) {
+    const targetId = focusId && focusId !== primary.id ? focusId : primary.id
+    if (targetId === primary.id) {
+      setFocusSiblingId(null)
+      setResolvedDetail(null)
+      setSelectedId(primary.id)
+      return
+    }
+    // Sibling may not be in the top-level list — resolve parent via DB, then focus.
+    const row = await fetchAsset(targetId)
+    if (!row) {
+      setFocusSiblingId(null)
+      setResolvedDetail(null)
+      setSelectedId(primary.id)
+      return
+    }
+    const parentId = row.parentId || row.variantOf || primary.id
+    const parentInList = assets.find(a => a.id === parentId)
+    if (parentInList) {
+      setResolvedDetail(null)
+      setFocusSiblingId(targetId)
+      setSelectedId(parentInList.id)
+      return
+    }
+    const parent = parentId === primary.id ? primary : await fetchAsset(parentId)
+    setResolvedDetail(parent ?? primary)
+    setFocusSiblingId(targetId)
+    setSelectedId(parent?.id ?? primary.id)
+  }
 
   function emptyReason(): EmptyReason {
     if (hasFiltersApplied) return 'filtered'
@@ -632,8 +752,9 @@ export default function GalleryView() {
                 <AssetCard
                   key={asset.id}
                   asset={asset}
-                  onClick={() => setSelectedId(asset.id)}
+                  onOpen={focusId => { void openAsset(asset, focusId) }}
                   role={role}
+                  accent={accent}
                 />
               ))}
             </div>
@@ -645,10 +766,15 @@ export default function GalleryView() {
       {selectedAsset && (
         <AssetDetail
           asset={selectedAsset}
-          onClose={() => setSelectedId(null)}
+          onClose={() => {
+            setSelectedId(null)
+            setFocusSiblingId(null)
+            setResolvedDetail(null)
+          }}
           mount="drawer"
           onStatusChange={() => reload()}
           activeFacets={{ entities: filters.entities, formats: filters.formats, angles: filters.angles }}
+          focusAssetId={focusSiblingId ?? undefined}
         />
       )}
     </div>

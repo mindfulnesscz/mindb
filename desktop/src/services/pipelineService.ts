@@ -1172,8 +1172,21 @@ function mimeFromExt(ext: string): string {
   return m[ext.toLowerCase()] ?? 'application/octet-stream';
 }
 
+function relativeUnderOut(srcPath: string, outFolderName: string): { dir: string; fileName: string } {
+  const parts = srcPath.replace(/\\/g, '/').split('/');
+  let outIdx = -1;
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (parts[i].toLowerCase() === outFolderName.toLowerCase()) { outIdx = i; break; }
+  }
+  const fileName = parts[parts.length - 1] ?? '';
+  if (outIdx < 0) return { dir: '', fileName };
+  const relative = parts.slice(outIdx + 1);
+  if (relative.length <= 1) return { dir: '', fileName };
+  return { dir: relative.slice(0, -1).join('/'), fileName };
+}
+
 async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
-  const { vocab, appendLog, collectedAssets, cloudDestinations, cloudUrls } = ctx;
+  const { vocab, appendLog, collectedAssets, cloudDestinations, cloudUrls, settings } = ctx;
 
   appendLog('section', '━━━ CLOUD EXPORT ━━━');
 
@@ -1193,12 +1206,14 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
     return;
   }
 
+  const outFolder = settings.outFolder || 'OUT';
   const files = (collectedAssets ?? []).map(srcPath => {
     const fileName = srcPath.split('/').pop()!;
     const dotIdx   = fileName.lastIndexOf('.');
     const ext      = dotIdx > 0 ? fileName.slice(dotIdx) : '';
     const stem     = dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName;
-    return { srcPath, stem, ext, fileName };
+    const { dir: relativeDir } = relativeUnderOut(srcPath, outFolder);
+    return { srcPath, stem, ext, fileName, relativeDir };
   });
 
   if (!files.length) {
@@ -1213,6 +1228,14 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
     const cfg = dest.config;
     if (cfg.type === 'local') continue;
 
+    // Preserve OUT-relative folders by default; dest.flatExport dumps everything into remotePath.
+    const flatten = dest.flatExport === true;
+    if (flatten) {
+      appendLog('dim', `  ${dest.name}: flat export (folder structure ignored)`);
+    } else {
+      appendLog('dim', `  ${dest.name}: preserving folders under OUT`);
+    }
+
     if (!dest.generateLink) {
       appendLog('info', `  → ${dest.name} (${cfg.type}) — uploading without link collection`);
     } else {
@@ -1226,22 +1249,25 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
     const CONCURRENCY = 2;
     for (let i = 0; i < files.length; i += CONCURRENCY) {
       const batch = files.slice(i, i + CONCURRENCY);
-      await Promise.all(batch.map(async ({ srcPath, stem, ext, fileName }) => {
+      await Promise.all(batch.map(async ({ srcPath, stem, ext, relativeDir }) => {
         const translated = translateExportName(stem, ext, vocabMap);
+        const nestedName = !flatten && relativeDir
+          ? `${relativeDir}/${translated}`
+          : translated;
         let url: string | null = null;
         try {
           if (cfg.type === 'dropbox') {
             // Rust command reads the file natively — no readFile() / WKWebView body limits.
             // Skips upload if the file already exists on Dropbox.
             const base   = cfg.remotePath.replace(/\/$/, '');
-            const remote = (base.startsWith('/') ? base : '/' + base) + '/' + translated;
+            const remote = (base.startsWith('/') ? base : '/' + base) + '/' + nestedName;
             const result = await uploadDropboxFile(cfg.token!.accessToken, srcPath, remote, dest.generateLink);
             url = result.url;
             if (result.skipped) {
-              appendLog('dim', `  ↷  ${fileName} (already on Dropbox)`);
+              appendLog('dim', `  ↷  ${nestedName} (already on Dropbox)`);
               skipped += 1;
             } else {
-              appendLog('success', `  ✓  ${fileName}`);
+              appendLog('success', `  ✓  ${nestedName}`);
               uploaded += 1;
               stats.published += 1;
             }
@@ -1249,29 +1275,34 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
             const bytes = await readFile(srcPath);
             if (cfg.type === 'onedrive') {
               const base   = cfg.remotePath.replace(/^\//, '').replace(/\/$/, '');
-              const remote = base ? `${base}/${translated}` : translated;
+              const remote = base ? `${base}/${nestedName}` : nestedName;
               url = await uploadOneDriveFile(cfg.token!.accessToken, bytes, remote, dest.generateLink);
             } else if (cfg.type === 'gdrive') {
+              const folderPath = !flatten && relativeDir
+                ? [cfg.remotePath.replace(/\/$/, ''), relativeDir].filter(Boolean).join('/')
+                : cfg.remotePath;
               url = await uploadGDriveFile(
                 cfg.token!.accessToken, bytes, mimeFromExt(ext),
-                translated, cfg.remotePath, dest.generateLink, cfg.sharedDriveId,
+                translated, folderPath, dest.generateLink, cfg.sharedDriveId,
               );
             }
-            appendLog('success', `  ✓  ${fileName}`);
+            appendLog('success', `  ✓  ${nestedName}`);
             uploaded += 1;
             stats.published += 1;
           }
           // Only client-role destinations feed the client-facing web portal —
           // internal-team links should never end up there.
           if (url && cloudUrls && dest.role === 'client') {
-            const existing = cloudUrls.get(stem) ?? [];
+            const mapKey = relativeDir ? `${relativeDir}/${stem}` : stem;
+            const existing = cloudUrls.get(mapKey) ?? cloudUrls.get(stem) ?? [];
             const idx      = existing.findIndex(e => e.destId === dest.id || e.name === dest.name);
             const entry    = { destId: dest.id, provider: cfg.type, name: dest.name, url };
             if (idx >= 0) existing[idx] = entry; else existing.push(entry);
-            cloudUrls.set(stem, existing);
+            cloudUrls.set(mapKey, existing);
+            if (mapKey !== stem) cloudUrls.set(stem, existing);
           }
         } catch (e) {
-          appendLog('error', `  ✕  ${fileName}: ${e}`);
+          appendLog('error', `  ✕  ${nestedName}: ${e}`);
           errors += 1;
           stats.errors += 1;
         }

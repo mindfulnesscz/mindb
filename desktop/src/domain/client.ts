@@ -109,7 +109,7 @@ export function makeDestination(partial: Partial<CloudDestination> = {}): CloudD
     flatExport:       false,
     generateLink:     false,
     showInPortal:     true,
-    allowRevealLocal: false,
+    allowRevealLocal: true,
     enabled:          true,
     config:           { type: 'local', path: '' },
     ...partial,

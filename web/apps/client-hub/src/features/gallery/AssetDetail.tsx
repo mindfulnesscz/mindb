@@ -67,6 +67,8 @@ interface Props {
   // actually matched the filter (e.g. a tag that only lives on one variant) instead of leaving
   // it buried in alphabetical order.
   activeFacets?: { entities?: string[]; formats?: string[]; angles?: string[] }
+  /** When opening from a hover tile, focus this child/variant id inside the detail. */
+  focusAssetId?: string
 }
 
 function matchesActiveFacets(a: Asset, facets?: Props['activeFacets']): boolean {
@@ -109,7 +111,7 @@ function StarRating({ value, onChange }: { value: number; onChange?: (v: number)
 }
 
 
-export default function AssetDetail({ asset, onClose, mount, onStatusChange, activeFacets }: Props) {
+export default function AssetDetail({ asset, onClose, mount, onStatusChange, activeFacets, focusAssetId }: Props) {
   const { role, activeClient } = useRole()
   const { session } = useAuth()
   const userId = session?.user?.id ?? null
@@ -184,11 +186,14 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
   }, [selectedAsset.downloadUrls, visibleDests, isStaff])
 
   const canReveal = useMemo(() => {
-    if (!selectedAsset.stableId && !asset.stableId) return false
+    const sid = selectedAsset.stableId ?? asset.stableId
+    if (!sid) return false
+    // Staff can always try Reveal when the package has a stable id (desktop bridge).
+    if (isStaff) return true
     return destinations.some(d =>
       d.enabled && d.allowRevealLocal && roleAtLeast(role, d.minRole),
     )
-  }, [destinations, role, selectedAsset.stableId, asset.stableId])
+  }, [destinations, role, selectedAsset.stableId, asset.stableId, isStaff])
 
   // Track view + load event counts
   useEffect(() => {
@@ -200,15 +205,32 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
   // Load children (legacy gallery preview images) and variants (Task 3 format/size siblings)
   useEffect(() => {
     if ((asset.childCount ?? 0) > 0) {
-      fetchChildAssets(asset.id).then(setChildren).catch(console.error)
-      fetchVariants(asset.id).then(setVariants).catch(console.error)
+      Promise.all([
+        fetchChildAssets(asset.id).catch(() => [] as Asset[]),
+        fetchVariants(asset.id).catch(() => [] as Asset[]),
+      ]).then(([kids, vars]) => {
+        setChildren(kids)
+        setVariants(vars)
+        if (focusAssetId) {
+          const childIdx = kids.findIndex(c => c.id === focusAssetId)
+          if (childIdx >= 0) {
+            setChildView('carousel')
+            setCarouselIdx(childIdx)
+            setSelectedVariantId(asset.id)
+            return
+          }
+          if (vars.some(v => v.id === focusAssetId) || focusAssetId === asset.id) {
+            setSelectedVariantId(focusAssetId)
+          }
+        }
+      })
     } else {
       setChildren([])
       setVariants([])
     }
     setCarouselIdx(0)
-    setSelectedVariantId(asset.id)
-  }, [asset.id, asset.childCount])
+    setSelectedVariantId(focusAssetId && focusAssetId !== asset.id ? focusAssetId : asset.id)
+  }, [asset.id, asset.childCount, focusAssetId])
 
   // Reset local status/perm when asset changes
   useEffect(() => {
@@ -689,6 +711,34 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
                 )}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Reveal for staff even when download is gated (e.g. draft) */}
+        {!canDownload(role, asset) && canReveal && isStaff && (
+          <div className="space-y-1">
+            <button
+              type="button"
+              disabled={revealBusy}
+              onClick={async () => {
+                const sid = selectedAsset.stableId ?? asset.stableId
+                if (!sid || !activeClient?.id) return
+                setRevealBusy(true)
+                setRevealMsg('')
+                const result = await revealInDesktop(activeClient.id, sid)
+                setRevealBusy(false)
+                setRevealMsg(result.ok ? 'Opened in Finder / Explorer' : result.error)
+              }}
+              className="w-full py-2.5 text-sm font-sans font-semibold border border-cosmos-black rounded-sm text-cosmos-black hover:bg-gray-100 transition-colors disabled:opacity-50"
+            >
+              {revealBusy ? 'Revealing…' : 'Reveal in Finder'}
+            </button>
+            {revealMsg && (
+              <p className="text-[11px] font-sans text-text-muted">{revealMsg}</p>
+            )}
+            <p className="text-[10px] font-sans text-text-subtle">
+              Requires the desktop app running with this client’s source folder set.
+            </p>
           </div>
         )}
 
