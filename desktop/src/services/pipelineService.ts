@@ -707,6 +707,50 @@ function r2PublicUrl(publicDomain: string, objectKey: string): string {
   return `${publicDomain.replace(/\/+$/, '')}/${objectKey}`;
 }
 
+/* ── Local cloud-export cache — same idea as R2: mtime+size fast-path so
+   unchanged files skip without readFile / Drive list / Dropbox metadata.
+   Network skip/upload remains the backstop on cache miss. ────────────────── */
+interface CloudCacheEntry { mtimeMs: number; size: number; url?: string | null }
+type CloudCache = Record<string, CloudCacheEntry>
+
+let cloudCacheMemo: CloudCache | null = null
+
+async function getCloudCachePath(): Promise<string> {
+  return await join(await appDataDir(), 'cloud-upload-cache.json')
+}
+
+async function loadCloudCache(): Promise<CloudCache> {
+  if (cloudCacheMemo) return cloudCacheMemo
+  try {
+    const path = await getCloudCachePath()
+    cloudCacheMemo = (await exists(path)) ? JSON.parse(await readTextFile(path)) : {}
+  } catch {
+    cloudCacheMemo = {}
+  }
+  return cloudCacheMemo!
+}
+
+async function saveCloudCache(cache: CloudCache): Promise<void> {
+  try {
+    await writeTextFile(await getCloudCachePath(), JSON.stringify(cache))
+  } catch { /* best-effort */ }
+}
+
+function cloudCacheKey(destId: string, nestedName: string): string {
+  return `${destId}::${nestedName}`
+}
+
+function rememberCloudUpload(
+  cache: CloudCache,
+  destId: string,
+  nestedName: string,
+  mtimeMs: number,
+  size: number,
+  url: string | null,
+): void {
+  cache[cloudCacheKey(destId, nestedName)] = { mtimeMs, size, url: url ?? null }
+}
+
 /* One ListObjectsV2 sweep of a key prefix at the start of an upload phase.
    Existence can then be decided locally — without it, every cache miss pays a
    per-file HEAD and every upload a per-file LIST for the sibling cleanup.
@@ -1223,6 +1267,8 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
 
   appendLog('info', `  ${activeDests.length} destination(s) · ${files.length} asset(s)`);
   const vocabMap = buildVocabContext(vocab);
+  const cloudCache = await loadCloudCache();
+  let cloudCacheDirty = false;
 
   for (const dest of activeDests) {
     const cfg = dest.config;
@@ -1244,9 +1290,12 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
 
     let uploaded = 0;
     let skipped  = 0;
+    let cached   = 0;
     let errors   = 0;
+    let uploadLogged = 0;
 
-    const CONCURRENCY = 2;
+    // Match CDN: high concurrency; cache hits stay silent (summary only).
+    const CONCURRENCY = 8;
     for (let i = 0; i < files.length; i += CONCURRENCY) {
       const batch = files.slice(i, i + CONCURRENCY);
       await Promise.all(batch.map(async ({ srcPath, stem, ext, relativeDir }) => {
@@ -1256,40 +1305,100 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
           : translated;
         let url: string | null = null;
         try {
+          // Cheap local fast-path (CDN-style): matching mtime+size → skip with no
+          // file read and no provider API. Requires a prior successful upload/skip
+          // that wrote this cache entry; first run still hits the network.
+          let srcInfo: Awaited<ReturnType<typeof stat>>;
+          try {
+            srcInfo = await stat(srcPath);
+          } catch (e) {
+            throw new Error(`Cannot stat ${srcPath}: ${e}`);
+          }
+          const mtimeMs = srcInfo.mtime?.getTime() ?? -1;
+          const cacheEntry = cloudCache[cloudCacheKey(dest.id, nestedName)];
+          // URL is optional — missing link must not force a network round-trip every run.
+          if (cacheEntry && cacheEntry.size === srcInfo.size && cacheEntry.mtimeMs === mtimeMs) {
+            url = dest.generateLink ? (cacheEntry.url ?? null) : null;
+            cached += 1;
+            skipped += 1;
+            if (url && cloudUrls && dest.role === 'client') {
+              const mapKey = relativeDir ? `${relativeDir}/${stem}` : stem;
+              const existing = cloudUrls.get(mapKey) ?? cloudUrls.get(stem) ?? [];
+              const idx = existing.findIndex(e => e.destId === dest.id || e.name === dest.name);
+              const entry = { destId: dest.id, provider: cfg.type, name: dest.name, url };
+              if (idx >= 0) existing[idx] = entry; else existing.push(entry);
+              cloudUrls.set(mapKey, existing);
+              if (mapKey !== stem) cloudUrls.set(stem, existing);
+            }
+            return;
+          }
+
           if (cfg.type === 'dropbox') {
-            // Rust command reads the file natively — no readFile() / WKWebView body limits.
-            // Skips upload if the file already exists on Dropbox.
             const base   = cfg.remotePath.replace(/\/$/, '');
             const remote = (base.startsWith('/') ? base : '/' + base) + '/' + nestedName;
             const result = await uploadDropboxFile(cfg.token!.accessToken, srcPath, remote, dest.generateLink);
             url = result.url;
             if (result.skipped) {
-              appendLog('dim', `  ↷  ${nestedName} (already on Dropbox)`);
               skipped += 1;
             } else {
-              appendLog('success', `  ✓  ${nestedName}`);
+              if (uploadLogged < 3) {
+                appendLog('success', `  ✓  ${nestedName}`);
+                uploadLogged += 1;
+              } else if (uploadLogged === 3) {
+                appendLog('dim', `  … further uploads omitted from log`);
+                uploadLogged += 1;
+              }
               uploaded += 1;
               stats.published += 1;
             }
-          } else {
+          } else if (cfg.type === 'onedrive') {
             const bytes = await readFile(srcPath);
-            if (cfg.type === 'onedrive') {
-              const base   = cfg.remotePath.replace(/^\//, '').replace(/\/$/, '');
-              const remote = base ? `${base}/${nestedName}` : nestedName;
-              url = await uploadOneDriveFile(cfg.token!.accessToken, bytes, remote, dest.generateLink);
-            } else if (cfg.type === 'gdrive') {
-              const folderPath = !flatten && relativeDir
-                ? [cfg.remotePath.replace(/\/$/, ''), relativeDir].filter(Boolean).join('/')
-                : cfg.remotePath;
-              url = await uploadGDriveFile(
-                cfg.token!.accessToken, bytes, mimeFromExt(ext),
-                translated, folderPath, dest.generateLink, cfg.sharedDriveId,
-              );
+            const base   = cfg.remotePath.replace(/^\//, '').replace(/\/$/, '');
+            const remote = base ? `${base}/${nestedName}` : nestedName;
+            url = await uploadOneDriveFile(cfg.token!.accessToken, bytes, remote, dest.generateLink);
+            if (uploadLogged < 3) {
+              appendLog('success', `  ✓  ${nestedName}`);
+              uploadLogged += 1;
+            } else if (uploadLogged === 3) {
+              appendLog('dim', `  … further uploads omitted from log`);
+              uploadLogged += 1;
             }
-            appendLog('success', `  ✓  ${nestedName}`);
             uploaded += 1;
             stats.published += 1;
+          } else if (cfg.type === 'gdrive') {
+            const folderPath = !flatten && relativeDir
+              ? [cfg.remotePath.replace(/\/$/, ''), relativeDir].filter(Boolean).join('/')
+              : cfg.remotePath;
+            // Lazy bytes: unchanged Drive files never leave disk into the webview.
+            const result = await uploadGDriveFile(
+              cfg.token!.accessToken,
+              srcInfo.size,
+              () => readFile(srcPath),
+              mimeFromExt(ext),
+              translated,
+              folderPath,
+              dest.generateLink,
+              cfg.sharedDriveId,
+            );
+            url = result.url;
+            if (result.skipped) {
+              skipped += 1;
+            } else {
+              if (uploadLogged < 3) {
+                appendLog('success', `  ✓  ${nestedName}`);
+                uploadLogged += 1;
+              } else if (uploadLogged === 3) {
+                appendLog('dim', `  … further uploads omitted from log`);
+                uploadLogged += 1;
+              }
+              uploaded += 1;
+              stats.published += 1;
+            }
           }
+
+          rememberCloudUpload(cloudCache, dest.id, nestedName, mtimeMs, srcInfo.size, url);
+          cloudCacheDirty = true;
+
           // Only client-role destinations feed the client-facing web portal —
           // internal-team links should never end up there.
           if (url && cloudUrls && dest.role === 'client') {
@@ -1308,8 +1417,13 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
         }
       }));
     }
-    appendLog('dim', `     ${uploaded} uploaded · ${skipped} skipped · ${errors} errors`);
+    appendLog(
+      'section',
+      `  ${dest.name} DONE — ${uploaded} uploaded · ${cached} cached · ${skipped - cached} remote-skip · ${errors} errors`,
+    );
   }
+
+  if (cloudCacheDirty) await saveCloudCache(cloudCache);
 
   const totalLinks = [...(cloudUrls?.values() ?? [])].reduce((n, arr) => n + arr.length, 0);
   if (totalLinks === 0 && activeDests.some(d => !d.generateLink)) {

@@ -9,7 +9,7 @@ A destination has a provider, name, pipeline role (`internal` / `client`), porta
 | Local | None | mtime/size skip in local publishing | Can mirror folders | Synced enterprise folder, inspectable output | Depends on another sync client; local disk coupling |
 | Dropbox | Browser PKCE | **Skips if path exists**, regardless of changed content | Cloud stage is flat into remote path | Simple delivery, stable shared links | Existing remote file can become stale |
 | OneDrive | Device code | PUT overwrites same path | Cloud stage is flat | Microsoft 365 users | Conditional Access; simple upload is memory/CORS-sensitive |
-| Google Drive | Browser PKCE plus client secret | Current code POSTs a **new file**; duplicate names can accumulate | Lazily creates remote folders | Workspace/Shared Drive collaboration | Duplicate files; public permission creation; full-file memory upload |
+| Google Drive | Browser PKCE plus client secret | Skip same-name+size; update in place when changed | Lazily creates remote folders | Workspace/Shared Drive collaboration | Full-file memory upload; public permission creation |
 
 All three provider uploads are one API operation per file, not a zip or transactional batch. OneDrive and Google Drive read the complete file into the webview’s memory. Dropbox uses native Rust to avoid webview binary limits.
 

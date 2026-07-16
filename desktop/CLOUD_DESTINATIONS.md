@@ -22,7 +22,9 @@ Older docs that said “Add destination” in desktop Settings are obsolete for 
 - **Every asset is its own push.** When a pipeline run finishes collecting assets, the app loops over every selected (connected, token present) cloud destination and uploads **every asset individually** — one upload API call per file per destination, at concurrency 2. There is no zip/batch upload.
 - **Generate link** (per destination toggle): after uploading a file, also requests a public sharing URL for it and stores it against the asset. Adds one extra API call per file.
 - **Flat export** (global pipeline toggle / dest flag): ignores subfolder structure and dumps every file directly into the destination's remote folder.
-- Dropbox uploads skip files that already exist at the remote path (checked via `files/get_metadata`) — OneDrive and Google Drive always overwrite.
+- Dropbox uploads skip files that already exist at the remote path (checked via `files/get_metadata`).
+- Google Drive skips when a same-name file already exists with the same size; changed files are updated in place (no duplicates). OneDrive still overwrites the same path on every run.
+- Across all cloud providers, a local **mtime+size cache** (`cloud-upload-cache.json`) skips unchanged files with no file read and no provider API — same idea as the CDN R2 cache. First successful upload/skip seeds the cache; later runs only hit the network for new or changed files.
 - Local, Dropbox, OneDrive, and Google Drive can all be active at once — a single pipeline run can push the same asset set to all four.
 
 ---

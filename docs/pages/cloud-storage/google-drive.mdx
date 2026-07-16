@@ -15,7 +15,7 @@ Google authorization uses browser PKCE plus the configured client secret and a r
 
 On each file, DC Hub walks every remote-path segment. It searches for a matching folder beneath the current parent and creates missing folders. Shared Drive queries include `corpora=drive`, `driveId`, `includeItemsFromAllDrives`, and `supportsAllDrives`.
 
-The file is uploaded as one multipart request containing metadata and full bytes. Importantly, the current implementation always POSTs a new Drive file; it does not search for and update an existing same-name file. Repeated runs can therefore create duplicates. With link generation enabled, it adds an `anyone/reader` permission and returns `webViewLink`; the permission response is not checked before returning.
+The file is uploaded as one multipart request containing metadata and full bytes when new. Before uploading, DC Hub looks up an existing same-name file in the target folder: matching size skips the upload; a different size updates the file in place (`PATCH` media). Repeated runs therefore no longer create duplicates. With link generation enabled, it adds an `anyone/reader` permission and returns `webViewLink`; the permission response is not checked before returning.
 
 ## Tradeoffs
 
