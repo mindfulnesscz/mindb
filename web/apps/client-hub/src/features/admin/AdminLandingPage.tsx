@@ -6,6 +6,10 @@ import { useAuth } from '../../context/AuthContext'
 import { useClients } from '../../hooks/useClients'
 import { createClient, updateClient } from '../../services/clientService'
 import { uploadClientLogo } from '../../services/brandingService'
+import {
+  importTaxonomyJsonFile,
+  parseAndValidateTaxonomyJson,
+} from '../../services/taxonomyImport'
 import { TagsAdmin } from './TagsAdmin'
 import { fetchAllUsers, updateUserAccess, createUser, normalizeRole, type UserProfile } from '../../services/userService'
 import { isConfigured } from '../../lib/supabase'
@@ -294,12 +298,16 @@ function ClientDrawer({ editing, onClose, onSaved }: {
   const [error, setError] = useState('')
   const [logoFile, setLogoFile] = useState<File | null>(null)
   const [logoUploadError, setLogoUploadError] = useState('')
+  const [taxonomyFile, setTaxonomyFile] = useState<File | null>(null)
+  const [taxonomyHint, setTaxonomyHint] = useState('')
 
   useEffect(() => {
     setForm(editing ? clientToForm(editing) : emptyForm())
     setError('')
     setLogoFile(null)
     setLogoUploadError('')
+    setTaxonomyFile(null)
+    setTaxonomyHint('')
   }, [editing])
 
   function set<K extends keyof ClientFormState>(key: K, val: ClientFormState[K]) {
@@ -308,6 +316,30 @@ function ClientDrawer({ editing, onClose, onSaved }: {
     } else {
       setForm(f => ({ ...f, [key]: val }))
     }
+  }
+
+  async function onTaxonomyFileChosen(file: File | null) {
+    setTaxonomyFile(file)
+    setTaxonomyHint('')
+    if (!file) return
+    const text = await file.text()
+    const result = parseAndValidateTaxonomyJson(text)
+    if (!result.ok || !result.document) {
+      setTaxonomyFile(null)
+      setError(result.errors.join('; ') || 'Invalid taxonomy JSON')
+      return
+    }
+    setError('')
+    setForm(f => ({
+      ...f,
+      dimEntity: result.document!.dimension_labels.entity,
+      dimAngle: result.document!.dimension_labels.angle,
+      dimFormat: result.document!.dimension_labels.format,
+    }))
+    setTaxonomyHint(
+      `Valid — ${result.document.nodes.length} node(s)` +
+        (result.document.name ? ` · ${result.document.name}` : ''),
+    )
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -329,6 +361,9 @@ function ClientDrawer({ editing, onClose, onSaved }: {
       const saved = editing
         ? await updateClient(editing.id, payload)
         : await createClient(payload)
+      if (!editing && taxonomyFile && saved.id) {
+        await importTaxonomyJsonFile(saved.id, taxonomyFile, { replaceExisting: false })
+      }
       if (logoFile && saved.id) {
         try {
           const url = await uploadClientLogo(saved.id, logoFile)
@@ -410,6 +445,38 @@ function ClientDrawer({ editing, onClose, onSaved }: {
             <p className="text-[11px] font-sans text-text-subtle mt-1">Internal keys stay entity/angle/format — these are per-client display names (e.g. WHY / HOW / WHAT).</p>
           </div>
 
+          {!editing && (
+            <div>
+              <label className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5">
+                Taxonomy JSON (optional)
+              </label>
+              <input
+                type="file"
+                accept="application/json,.json"
+                onChange={e => void onTaxonomyFileChosen(e.target.files?.[0] ?? null)}
+                className="text-sm font-sans w-full"
+              />
+              <p className="text-[11px] font-sans text-text-subtle mt-1">
+                Import labels + tag tree on create.{' '}
+                <a href="/taxonomy.sample.json" download className="underline hover:text-cosmos-black">
+                  Download sample
+                </a>
+              </p>
+              {taxonomyHint && (
+                <p className="text-[11px] font-sans text-cosmos-black mt-1">{taxonomyHint}</p>
+              )}
+              {taxonomyFile && (
+                <button
+                  type="button"
+                  onClick={() => { setTaxonomyFile(null); setTaxonomyHint('') }}
+                  className="text-[11px] font-sans text-text-muted hover:text-cosmos-black mt-1"
+                >
+                  Clear file
+                </button>
+              )}
+            </div>
+          )}
+
           <div>
             <label className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5">Website</label>
             <input type="url" value={form.website} onChange={e => set('website', e.target.value)} placeholder="https://acme.com" className={`${inputCls} font-mono`} />
@@ -441,7 +508,7 @@ function ClientDrawer({ editing, onClose, onSaved }: {
           {editing && (
             <div className="pt-4 border-t border-border">
               <p className="text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-3">Tags (source of truth)</p>
-              <TagsAdmin client={editing} />
+              <TagsAdmin client={editing} onClientUpdated={onSaved} />
             </div>
           )}
 

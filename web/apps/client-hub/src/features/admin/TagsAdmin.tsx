@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Client } from '@dc-hub/asset-library'
 import {
   createTag, deleteTag, fetchTags, updateTag,
   type Tag,
 } from '../../services/tagService'
+import { importTaxonomyJsonFile } from '../../services/taxonomyImport'
 
 const DIM_LABELS: Record<Tag['dimension'], string> = {
   entity: 'Entity',
@@ -16,11 +17,20 @@ function dimLabel(client: Client | null, dim: Tag['dimension']): string {
   return client.dimensionLabels[dim] ?? DIM_LABELS[dim]
 }
 
-export function TagsAdmin({ client }: { client: Client }) {
+export function TagsAdmin({
+  client,
+  onClientUpdated,
+}: {
+  client: Client
+  onClientUpdated?: () => void
+}) {
   const [tags, setTags] = useState<Tag[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [importMsg, setImportMsg] = useState('')
+  const [importing, setImporting] = useState(false)
   const [draft, setDraft] = useState<Record<string, { name: string; shortcode: string }>>({})
+  const fileRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
     setLoading(true); setError('')
@@ -62,13 +72,72 @@ export function TagsAdmin({ client }: { client: Client }) {
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
   }
 
+  async function handleImportFile(file: File | undefined) {
+    if (!file) return
+    setImportMsg(''); setError('')
+    const hasTags = tags.length > 0
+    const replace = hasTags
+      ? window.confirm(`Replace all ${tags.length} existing tag(s) with this JSON?`)
+      : false
+    if (hasTags && !replace) {
+      if (fileRef.current) fileRef.current.value = ''
+      return
+    }
+
+    setImporting(true)
+    try {
+      const result = await importTaxonomyJsonFile(client.id, file, {
+        replaceExisting: hasTags ? true : false,
+      })
+      setImportMsg(
+        `Imported ${result.inserted} tag(s). Labels: ${result.dimensionLabels.entity} / ${result.dimensionLabels.angle} / ${result.dimensionLabels.format}`,
+      )
+      await load()
+      onClientUpdated?.()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setImporting(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
   const dimensions: Tag['dimension'][] = ['entity', 'angle', 'format']
 
   if (loading) return <p className="text-sm text-text-muted">Loading tags…</p>
-  if (error) return <p className="text-sm text-signal-error">{error}</p>
 
   return (
     <div className="space-y-6">
+      <div className="flex flex-wrap items-center gap-3 p-3 border border-border rounded-sm bg-surface-sunken">
+        <input
+          ref={fileRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={e => void handleImportFile(e.target.files?.[0])}
+        />
+        <button
+          type="button"
+          disabled={importing}
+          onClick={() => fileRef.current?.click()}
+          className="px-3 py-1.5 text-[11px] font-sans font-semibold border border-cosmos-black rounded-sm hover:bg-cosmos-black hover:text-clear-white transition-colors disabled:opacity-40"
+        >
+          {importing ? 'Importing…' : 'Import from JSON'}
+        </button>
+        <a
+          href="/taxonomy.sample.json"
+          download="taxonomy.sample.json"
+          className="text-[11px] font-sans text-text-muted hover:text-cosmos-black underline"
+        >
+          Download sample JSON
+        </a>
+        <span className="text-[11px] font-sans text-text-subtle">
+          Loads dimension labels + tag tree from a local file.
+        </span>
+      </div>
+      {importMsg && <p className="text-[11px] font-sans text-cosmos-black">{importMsg}</p>}
+      {error && <p className="text-sm font-sans text-signal-error">{error}</p>}
+
       {dimensions.map(dim => {
         const dimTags = tags.filter(t => t.dimension === dim && !t.parentId)
         const leaves = tags.filter(t => t.dimension === dim && t.parentId)
@@ -120,7 +189,7 @@ export function TagsAdmin({ client }: { client: Client }) {
                     </tr>
                   ))}
                   {!dimTags.length && !leaves.length && (
-                    <tr><td colSpan={3} className="px-3 py-4 text-text-subtle">No tags yet.</td></tr>
+                    <tr><td colSpan={3} className="px-3 py-4 text-text-subtle">No tags yet — import JSON or add manually.</td></tr>
                   )}
                 </tbody>
               </table>

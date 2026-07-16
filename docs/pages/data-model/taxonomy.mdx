@@ -1,11 +1,26 @@
 # Taxonomy
 
-Internal tag dimensions are **entity**, **angle**, and **format**. Per-client display names live in `clients.dimension_labels` (e.g. WHY / HOW / WHAT) and are edited in the web client drawer.
+Internal tag dimensions are always **entity**, **angle**, and **format** (keys). Per-client **display names** live in `clients.dimension_labels`.
 
-**Source of truth for the tag tree** is the Supabase `tags` table (`name`, `dimension`, `parent_id`, `sort_order`, `shortcode`). Admins manage them in the web drawer (TagsAdmin). Changing a shortcode can enqueue a `rename_tasks` row for the desktop to apply on a later pipeline run.
+**Source of truth** is `public.tags`. Admins edit them in TagsAdmin or import a local JSON file.
 
-Filename shortcodes and the **desktop vocabulary JSON** remain a local naming / scaffolding aid for generators and parsing (`filenameTranslator`). They are not the portal’s SoT for nested filters.
+## Import from JSON
 
-The web tag service loads global + client-scoped tags and builds trees by `parent_id`. Gallery filters use asset text arrays, not SQL joins. Before renaming live shortcodes, plan for existing filenames, asset arrays, filter URLs, and stable identity — prefer `rename_tasks` over silent drift.
+Templates are **local JSON files** (not rows in the database). On create client, optionally attach a file; on an existing client use **Import from JSON** in Tags.
+
+Sample file: [`/taxonomy.sample.json`](/taxonomy.sample.json) in the portal app (`web/apps/client-hub/public/taxonomy.sample.json`).
+
+```json
+{
+  "version": 1,
+  "dimension_labels": { "entity": "Entity", "angle": "Angle", "format": "Format" },
+  "nodes": [
+    { "key": "entity.group", "dimension": "entity", "name": "Group", "parent_key": null },
+    { "key": "entity.group.leaf", "dimension": "entity", "name": "Tag", "parent_key": "entity.group", "shortcode": "Sam" }
+  ]
+}
+```
+
+Parse/validate/import: `taxonomyImport.ts` (`parseAndValidateTaxonomyJson`, `importTaxonomyToClient`). Desktop loads shortcoded tags from the DB for filename parsing.
 
 See [Platform division](/getting-started/platform-division) and [Naming and vocabulary](/desktop/naming).
