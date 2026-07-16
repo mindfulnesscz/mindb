@@ -1,0 +1,148 @@
+# Tags and export destinations
+
+Where taxonomy and cloud delivery are edited, what each surface owns, and how portal ↔ desktop stay in sync. For the broader field map see [Platform division](/getting-started/platform-division).
+
+## At a glance
+
+| Concern | Source of truth | Edit in | Desktop does |
+|---|---|---|---|
+| Dimension display names (`Entity` / `Angle` / `Format` labels) | `clients.dimension_labels` | Portal Admin → client drawer | Reads for column headers |
+| Parent tag groups (no shortcode) | `tags` rows | Portal **Tags** only | Loads for grouping; cannot create |
+| Leaf tags (have shortcode) | `tags` rows | Portal **Tags**, or desktop Vocabulary (then Sync) | Parses filenames; may publish dirty leaves |
+| Export destination structure | `clients.cloud_destinations` | Portal **Export destinations** | Sync / pull; connect OAuth |
+| OAuth tokens & Google client secret | Machine-local only | Desktop Settings → Cloud destinations | Never written to Supabase |
+| Source / vault folders | Machine-local | Desktop Pipeline / Settings | Reveal bridge uses `sourceFolder` |
+
+**Rule:** never treat desktop as the admin UI for portal-owned columns. Desktop may *publish leaf tags* and *store secrets*; it must not invent parent groups or destination definitions.
+
+---
+
+## Tags
+
+### Model
+
+Internal dimensions are always `entity`, `angle`, `format`. Human headings come from `dimension_labels` per client.
+
+```text
+dimension (entity | angle | format)
+  └── parent group     parent_id = null, no shortcode   → portal only
+        └── leaf tag   has shortcode (+ key)            → portal or desktop
+```
+
+- **`key`** — stable identity; Obsidian export uses this string
+- **`shortcode`** — token embedded in filenames (`(p-Sln)(SAL)(SlD)…`)
+- Leaves without a parent are allowed (ungrouped) but prefer grouping under a portal parent
+
+### Where to edit
+
+**Portal** — Admin landing → open a client → **Tags (source of truth)**
+
+- Change dimension labels (admin)
+- Create / rename / delete **parent groups**
+- Create / edit leaf tags (name, shortcode, key, parent)
+- **Import from JSON** (`taxonomy.sample.json` shape) for bulk bootstrap
+
+**Desktop** — Vocabulary screen
+
+- Browse leaf tags loaded from the DB (grouped by portal parents)
+- Add/edit **leaves** locally when needed (parent is a select of existing portal groups)
+- **Sync** — if there are unpublished leaf edits, publishes them then reloads from the DB; otherwise reloads only
+- Publish upserts/deletes **leaves only** — it never creates parent groups
+
+### Sync logic
+
+```text
+Portal tags DB  ──load / Sync──►  Desktop vocabulary cache
+       ▲                                │
+       └── Sync* (dirty leaves) ────────┘
+```
+
+1. On client switch, desktop loads tags from Supabase (DB-first). Local `_unpublished` cache keeps in-progress leaf edits.
+2. Dirty Sync calls `syncTagsFromVocabulary` → upsert/delete leaves for that client.
+3. Gallery filters and tag pickers on the web always read `tags` + `dimension_labels` from the database.
+
+Filename parsing and package scaffolding still depend on shortcodes. Changing a shortcode without a rename pipeline pass will break discovery for files that still use the old token. See [Naming and vocabulary](/desktop/naming) and [Taxonomy](/data-model/taxonomy).
+
+---
+
+## Export destinations
+
+### Model
+
+Each destination in `clients.cloud_destinations` includes:
+
+| Field | Meaning |
+|---|---|
+| `name`, `config.type`, remote/local path | Where files go |
+| `role` `internal` \| `client` | Pipeline audience — only **client** feeds portal `download_urls` |
+| `minRole` | Minimum hub role that may see this dest’s share links |
+| `showInPortal` | Whether links appear on asset detail at all |
+| `allowRevealLocal` | Whether “Reveal in Finder” is offered for roles ≥ `minRole` |
+| `generateLink` / `flatExport` / `enabled` | Pipeline behavior |
+| `config.token` | **Always null in DB** — tokens live only on the workstation |
+
+Public OAuth app ids may be stored in the portal definition. Google **client secret** and all refresh/access tokens stay on desktop.
+
+### Where to edit
+
+**Portal** — Admin → client drawer → **Export destinations**
+
+- Add / edit / remove destination structure
+- Set `minRole`, portal visibility, Reveal flag, generate-link, flat export
+
+**Desktop** — Settings → Cloud destinations
+
+- **Sync** pulls definitions and merges with local tokens
+- Connect / refresh / disconnect OAuth (or browse a machine-local path)
+- Override client id / secret locally when needed
+- Pipeline checkboxes choose which destinations run on this machine — that selection is local, not pushed back to the portal
+
+### Pipeline → portal links
+
+```text
+Pipeline cloud export
+  → upload per file per destination
+  → if role=client and generateLink → CloudUrlEntry { destId, name, provider, url }
+  → written to assets.download_urls
+
+Portal Asset detail
+  → load destinations for client
+  → show link only if dest enabled + showInPortal + user.role ≥ minRole
+  → primary Download still uses R2 download_url
+```
+
+Internal-role destinations never write into `download_urls`. Details: [CDN and cloud URLs](/data-model/cloud-links), [Provider overview](/cloud-storage/overview).
+
+### Reveal in Finder
+
+When at least one destination has `allowRevealLocal` and the user’s role meets that dest’s `minRole`:
+
+1. Portal calls `http://127.0.0.1:7624/reveal` with `{ clientId, stableId }`
+2. Desktop bridge (started with the app) looks up the client’s `sourceFolder`
+3. Walks for `.dchub.json` whose `stable_id` matches, then reveals the package folder
+
+Desktop must be running with that client selected and a valid source folder. Without the bridge, the portal shows a clear “desktop not running” message.
+
+---
+
+## Operator checklist
+
+**New client taxonomy**
+
+1. Create client in portal Admin  
+2. Set dimension labels  
+3. Import JSON or build parent groups + leaves in Tags  
+4. Desktop: select client → Vocabulary Sync (load)  
+5. Create packages / run pipeline  
+
+**New delivery target**
+
+1. Portal: add Export destination (`role`, `minRole`, path, generate link)  
+2. Desktop: Cloud destinations → Sync → Connect  
+3. Pipeline: check the destination → run  
+4. Confirm asset detail Source links for a test member role  
+
+**Someone can’t see a Drive link**
+
+- Check destination `role` is `client`, `showInPortal` on, and `minRole` ≤ their hub role  
+- Confirm the last pipeline run collected a link for that dest (`download_urls` on the asset row)

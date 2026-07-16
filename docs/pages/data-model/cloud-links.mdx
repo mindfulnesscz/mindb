@@ -3,10 +3,29 @@
 | Field | Produced by | Current consumer |
 |---|---|---|
 | `thumbnail_url` | R2 thumbnail stage | Gallery/detail preview |
-| `download_url` | R2 original stage | Primary web Download action |
+| `download_url` | R2 original stage | Primary web **Download** button |
 | `download_key` | Pipeline/R2 sync | Stale-object tracking and cleanup |
-| `download_urls` | Client-role provider destinations with link generation | Stored for alternate delivery/future UI |
+| `download_urls` | Client-role provider destinations with link generation | Asset detail **Source links** (role-gated) |
 
-Provider links are indexed by destination name per asset during a run. An internal destination’s link is deliberately omitted. Literal spaces may be stored in CDN URLs and encoded at web adaptation time.
+## Primary vs source links
+
+- **Download** always prefers the CDN original (`download_url`). Fast, no provider auth in the browser.
+- **Source links** are the Dropbox / OneDrive / Google Drive share URLs collected into `download_urls` during cloud export. Entries preferably include `destId` (destination UUID) plus `name`, `provider`, and `url`.
+
+Only destinations with pipeline `role: "client"` write into `download_urls`. Internal-team destinations are omitted on purpose.
+
+## Role gating in the portal
+
+Asset detail loads `clients.cloud_destinations` and shows a source link only when the matching destination is:
+
+- `enabled`
+- `showInPortal`
+- user’s hub role ≥ destination `minRole`
+
+Legacy entries without a matching destination definition are shown to **staff only**. Configure destinations in the portal Admin drawer — see [Tags and export destinations](/getting-started/tags-and-destinations).
+
+## Reveal in Finder
+
+Separate from download URLs. When a destination has `allowRevealLocal` and the user’s role meets `minRole`, asset detail can call the desktop localhost bridge (`:7624`) with `clientId` + `stableId`. The desktop resolves the package under `sourceFolder` via `.dchub.json` and reveals it in the OS file manager. Requires the desktop app running with that client selected.
 
 Database fields control discoverability but not public-object access. Rotate/remove the underlying R2 object or provider permission when a bearer link must stop working.

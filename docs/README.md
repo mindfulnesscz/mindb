@@ -17,7 +17,7 @@ From `docs/`, `npm run dev`, `npm run build`, and `npm run start` remain availab
 
 | Section | What's inside |
 |---|---|
-| `pages/getting-started/` | Contributor routine, first run, architecture, trust boundaries |
+| `pages/getting-started/` | Contributor routine, first run, architecture, trust boundaries, **tags & export destinations workflow** |
 | `pages/pipeline.mdx` | The desktop asset pipeline, step by step |
 | `pages/desktop/` | Pipeline lifecycle, logs, troubleshooting |
 | `pages/data-model/` | Assets, taxonomy, stable identity, sync semantics |

@@ -1,5 +1,14 @@
 # Portal administration
 
-The root route is the staff landing. Editors/admins navigate client cards. Client forms (admin) manage name, initials, accent, logo (CDN upload or URL), `dimension_labels`, site, slug, portal background, domain whitelist, and the **tags** tree. Users load via `get_all_profiles`; administrators change role and access through `update_user_access` (member client picker, editor `client_members` checkboxes). Desktop sign-in remains editor/admin only.
+The root route is the staff landing. Editors/admins navigate client cards. Client forms (admin) manage name, initials, accent, logo (CDN upload or URL), `dimension_labels`, site, slug, portal background, domain whitelist, the **tags** tree, and **export destinations**.
 
-See [Admin dashboard](/admin) and [Platform division](/getting-started/platform-division).
+Users load via `get_all_profiles`; administrators change role and access through `update_user_access` (member client picker, editor `client_members` checkboxes). Desktop sign-in remains editor/admin only.
+
+### Tags and destinations in the client drawer
+
+After selecting a client:
+
+1. **Tags (source of truth)** — parent groups, leaf tags, JSON import, dimension labels. See [Taxonomy](/data-model/taxonomy).
+2. **Export destinations** — delivery targets, `minRole`, portal visibility, Reveal-in-Finder flag. Desktop only connects OAuth after Sync.
+
+Operator-oriented flow: [Tags and export destinations](/getting-started/tags-and-destinations). Also [Admin dashboard](/admin) and [Platform division](/getting-started/platform-division).

@@ -2,6 +2,12 @@
 
 Asset detail loads a single asset, then legacy children and stable-identity variants for grouped presentation. Stored CDN URLs may contain spaces; the adapter applies `encodeURI` before browser use.
 
-Members can download only `approved` or `published` assets; staff can download any visible status. The current primary Download action uses singular R2 `download_url`. Provider `download_urls` are synchronized for future/multi-source use but are not the primary download picker today.
+Members can download only `approved` or `published` assets; staff can download any visible status.
+
+### Downloads and source links
+
+- **Download** uses singular R2 `download_url` (primary CDN original).
+- **Source links** list role-gated entries from `download_urls`, matched to portal destination definitions (`destId` / name) with `showInPortal` and `minRole`.
+- **Reveal in Finder** appears when a destination allows local reveal and the user’s role qualifies; it calls the desktop `:7624` bridge with `stableId`. See [CDN and cloud URLs](/data-model/cloud-links).
 
 Ratings are per user/asset and are upserted. Comments load author profile data, support creation, and enforce deletion rules through UI/database policies. View/download events are separate records and summary counts are staff-oriented. None of these feedback records lives in the source filesystem; stable asset identity is essential to preserve them across renames.

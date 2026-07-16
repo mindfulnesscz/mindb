@@ -12,11 +12,13 @@ Deployment plumbing and field fixes shaken out while standing up staging and run
 ### Added
 
 - **`bootstrap-env` tool** (`npm run bootstrap:env`) — provisions a hosted environment (a new tier or a whole new agency instance) in one idempotent pass: link + `db push`, functions deploy, function secrets, Auth site-URL/redirect allow-list via the Management API (config as code), invite-based founding admin, and an optional first client with storage + membership. Config lives in a gitignored per-environment file (`scripts/environments/<name>.env`) — no secrets or flags typed on the command line. Dry-run by default; a production ref is refused without `--i-know-its-prod`.
+- **Docs: Tags & export destinations workflow** — where to edit taxonomy (parent groups vs leaves) and portal-owned cloud destinations; desktop Sync / OAuth / Reveal bridge; linked from platform division, admin, cloud-storage, and `CLOUD_DESTINATIONS.md`.
 
 ### Changed
 
 - CI deploys on **every** push to `main`/`staging`, not only pushes that touch `supabase/**` — a path filter previously let a migration or function already on the branch never actually deploy ("merged but not deployed").
 - Desktop sign-in loopback window widened 3 → 10 minutes, since hosted-project magic-link email lands in a real inbox slower than the local Mailpit.
+- Desktop cloud destinations UI is credentials-only (structure from portal Sync); asset detail surfaces role-gated source links and optional Reveal in Finder.
 
 ### Fixed
 

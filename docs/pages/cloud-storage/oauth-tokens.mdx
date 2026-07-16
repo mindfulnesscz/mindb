@@ -1,8 +1,10 @@
 # OAuth and token lifecycle
 
-Access tokens authorize provider API calls; refresh tokens obtain new access tokens without repeating consent. DC Hub stores tokens with the local client record. Cloud destination definitions can be synchronized without tokens—the service strips tokens before saving definitions to Supabase—so credentials remain workstation-local in the intended design.
+Access tokens authorize provider API calls; refresh tokens obtain new access tokens without repeating consent.
 
-Status is purely time-based: no token, fresh, expiring within one hour, or expired. Google access tokens typically have a one-hour lifetime, so “Expires soon” can appear immediately. The pipeline filters for the presence of an access-token string, not current expiry, and does **not** automatically refresh before upload. Use Refresh token in settings before a run.
+**Destination structure** (name, type, remote path, `minRole`, generate-link, etc.) is edited in the **web portal** and pulled into desktop via Sync. **Tokens and Google client secret** stay on the workstation. Before any definition is written to Supabase from older desktop paths, tokens are stripped — credentials must remain machine-local.
+
+Status is purely time-based: no token, fresh, expiring within one hour, or expired. Google access tokens typically have a one-hour lifetime, so “Expires soon” can appear immediately. The pipeline filters for the presence of an access-token string, not current expiry, and does **not** automatically refresh before upload. Use Refresh token in Settings before a run.
 
 Refresh behavior:
 
@@ -11,3 +13,5 @@ Refresh behavior:
 - Google: token POST with client ID, client secret, and refresh token.
 
 Revocation, password/policy changes, consent removal, Testing-mode expiry, or missing offline consent can invalidate refresh tokens. A failed refresh requires reconnecting. Protect client configuration backups — they may still contain live **provider OAuth** tokens. Service-role and permanent R2 secrets should not be present in current exports.
+
+See [Tags and export destinations](/getting-started/tags-and-destinations) and [Provider overview](/cloud-storage/overview).

@@ -1,14 +1,25 @@
 # Taxonomy
 
-Internal tag dimensions are always **entity**, **angle**, and **format** (keys). Per-client **display names** live in `clients.dimension_labels`.
+Internal tag dimensions are always **entity**, **angle**, and **format** (machine keys). Per-client **display names** live in `clients.dimension_labels`.
 
-**Source of truth** is `public.tags`. Admins edit them in TagsAdmin or import a local JSON file.
+**Source of truth** is `public.tags`. For the full edit/sync workflow (portal vs desktop), start with [Tags and export destinations](/getting-started/tags-and-destinations).
+
+## Where to edit
+
+| What | Who | Surface |
+|---|---|---|
+| Dimension labels | Admin | Portal client drawer |
+| Parent groups (no `shortcode`) | Admin / editor | Portal **Tags** only |
+| Leaf tags (have `shortcode`) | Admin / editor | Portal **Tags**, or desktop Vocabulary + Sync |
+| Filename tokens in use | Operators | Must match leaf shortcodes — renaming a shortcode does not rename files by itself |
+
+Desktop Vocabulary **Sync** publishes dirty **leaves** then reloads from the DB. It never creates parent groups. Parent choice on desktop is a select of groups already in the portal.
 
 ## Import from JSON
 
 Templates are **local JSON files** (not rows in the database). On create client, optionally attach a file; on an existing client use **Import from JSON** in Tags.
 
-Sample file: [`/taxonomy.sample.json`](/taxonomy.sample.json) in the portal app (`web/apps/client-hub/public/taxonomy.sample.json`).
+Sample file in the portal app: `web/apps/client-hub/public/taxonomy.sample.json`.
 
 ```json
 {
@@ -24,8 +35,6 @@ Sample file: [`/taxonomy.sample.json`](/taxonomy.sample.json) in the portal app 
 - **`key`** — stable identity; also used as the Obsidian tag on desktop export
 - **`parent_key`** — tree grouping: nodes **without** `shortcode` are **parent groups** (portal-managed); leaves have a `shortcode`
 - **`shortcode`** — filename token (leaves only)
-
-**Ownership:** parent groups are created/edited only in the admin portal. Leaf tags can be added in the portal or on desktop (desktop selects an existing group). Desktop Publish upserts leaves only.
 
 Parse/validate/import: `taxonomyImport.ts` (`parseAndValidateTaxonomyJson`, `importTaxonomyToClient`). Desktop loads shortcoded tags from the DB for filename parsing and groups them by parent.
 
