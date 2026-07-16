@@ -24,29 +24,6 @@ const STATUS_LABELS: Record<string, string> = {
 
 // ── Asset card ────────────────────────────────────────────────
 
-function StackBackdrop({ count }: { count: number }) {
-  const layers = Math.min(3, Math.max(1, count > 1 ? 3 : 1))
-  return (
-    <div className="absolute inset-0 pointer-events-none" aria-hidden>
-      {Array.from({ length: layers }).map((_, i) => {
-        const offset = (layers - 1 - i) * 3
-        return (
-          <div
-            key={i}
-            className="absolute rounded-[2px] border border-black/10 bg-gray-150"
-            style={{
-              inset: 0,
-              transform: `translate(${offset}px, ${-offset}px)`,
-              opacity: 0.35 + i * 0.15,
-              zIndex: i,
-            }}
-          />
-        )
-      })}
-    </div>
-  )
-}
-
 function AssetCard({
   asset,
   onOpen,
@@ -65,7 +42,6 @@ function AssetCard({
   const { siblings, loading } = useSiblingPreviews(asset, isMulti)
   const restingThumb =
     asset.thumbnailUrl || siblings.find(s => s.thumbnailUrl)?.thumbnailUrl
-  const showStack = isMulti
   const fileCount = siblings.length > 1
     ? siblings.length
     : isMulti
@@ -98,8 +74,6 @@ function AssetCard({
       className="group text-left w-full border border-border rounded-sm overflow-hidden bg-surface hover:border-cosmos-black transition-colors duration-base cursor-pointer"
     >
       <div className="relative aspect-square overflow-hidden cursor-pointer [transform-style:preserve-3d]">
-        {showStack && !hovered && <StackBackdrop count={fileCount} />}
-
         {restingThumb
           ? (
             <img
