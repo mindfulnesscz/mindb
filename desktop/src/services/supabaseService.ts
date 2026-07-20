@@ -157,8 +157,13 @@ async function fetchVHForAssets(
 
 /** Strips the OAuth token from a destination's config before it's written to Supabase. */
 function stripToken(dest: CloudDestination): CloudDestination {
-  if (dest.config.type === 'local') return dest;
-  return { ...dest, config: { ...dest.config, token: null } };
+  // Local filesystem paths are machine-only — never write them to the portal.
+  if (dest.config.type === 'local') {
+    return { ...dest, config: { type: 'local', path: '' } };
+  }
+  const config = { ...dest.config, token: null };
+  if (config.type === 'gdrive') config.clientSecret = '';
+  return { ...dest, config };
 }
 
 export async function fetchCloudDestinationDefs(

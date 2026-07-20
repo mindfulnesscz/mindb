@@ -55,6 +55,11 @@ export interface CloudDestination {
   /** Minimum hub role that may see this destination's share links in the portal. */
   minRole:      HubRole;
   flatExport:   boolean;
+  /**
+   * When true, pipeline mirrors source package folders (after Distribute)
+   * instead of walking OUT trees. Portal-owned; mutually exclusive with flatExport.
+   */
+  exportPackages: boolean;
   generateLink: boolean;
   /** Show sharing links from this dest on asset detail in the portal. */
   showInPortal: boolean;
@@ -107,6 +112,7 @@ export function makeDestination(partial: Partial<CloudDestination> = {}): CloudD
     role:             'internal',
     minRole:          'member',
     flatExport:       false,
+    exportPackages:   false,
     generateLink:     false,
     showInPortal:     true,
     allowRevealLocal: true,
@@ -118,12 +124,15 @@ export function makeDestination(partial: Partial<CloudDestination> = {}): CloudD
 
 /** Normalize portal / legacy JSON into a full CloudDestination. */
 export function normalizeDestination(raw: Partial<CloudDestination> & { id?: string }): CloudDestination {
+  const exportPackages = Boolean(raw.exportPackages);
   const base = makeDestination(raw);
   return {
     ...base,
     minRole:          (['public', 'member', 'editor', 'admin'] as HubRole[]).includes(raw.minRole as HubRole)
       ? (raw.minRole as HubRole)
       : 'member',
+    exportPackages,
+    flatExport:       exportPackages ? false : Boolean(raw.flatExport),
     showInPortal:     raw.showInPortal !== false,
     allowRevealLocal: Boolean(raw.allowRevealLocal),
     enabled:          raw.enabled !== false,

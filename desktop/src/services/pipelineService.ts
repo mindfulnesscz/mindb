@@ -53,6 +53,8 @@ export interface RunContext {
   originalUrls?:     Map<string, string>;                  // stem → public CDN URL of the original file (version-stable key)
   cloudUrls?:        Map<string, CloudUrlEntry[]>;         // stem → cloud sharing URLs, populated by cloud export
   cloudDestinations?: CloudDestination[];                  // active cloud destinations to export to
+  /** When true, local publish mirrors package folders instead of OUT trees. */
+  localExportPackages?: boolean;
   identityMigrated?: boolean;
   cdnIdentity?:      Map<string, { stableId: string; childId: string }>;
   storageKeyPrefix?: string;  // mirrors r2.keyPrefix when CDN enabled
@@ -140,6 +142,31 @@ async function collectFiles(dir: string, s: AppSettings, directOnly = false): Pr
       results.push(...sub);
     }
   }
+  return results;
+}
+
+/** Files under a package folder with paths relative to the package root. */
+async function collectPackageFiles(
+  packageDir: string,
+  s: AppSettings,
+): Promise<Array<{ srcPath: string; relativePath: string }>> {
+  const results: Array<{ srcPath: string; relativePath: string }> = [];
+  async function walk(dir: string, rel: string) {
+    const entries = await listDir(dir);
+    for (const e of entries) {
+      if (e.name.startsWith('.') || shouldSkip(e.name, s)) continue;
+      const childPath = await join(dir, e.name);
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isFile) {
+        if (isPublishableFile(e.name) && !e.name.includes('-thumb')) {
+          results.push({ srcPath: childPath, relativePath: childRel });
+        }
+      } else if (e.isDirectory) {
+        await walk(childPath, childRel);
+      }
+    }
+  }
+  await walk(packageDir, '');
   return results;
 }
 
@@ -352,72 +379,127 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
   appendLog('section', `━━━ ${dryRun ? 'DRY RUN' : 'PUBLISHING'} ━━━`);
   appendLog('dim', `  → ${targetFolder}`);
 
-  const vocabMap  = buildVocabContext(vocab);
-  const livePub   = new Set<string>(); // all dest paths published this run
+  const livePub = new Set<string>(); // all dest paths published this run
 
-  /* Publish all files from dirPath into targetDir, translating filenames. */
-  async function publishDir(dirPath: string, targetDir: string) {
-    const items = await listDir(dirPath);
-    for (const item of items) {
-      if (shouldSkip(item.name, settings)) continue;
-      if (item.isFile) {
-        if (!isPublishableFile(item.name) || item.name.includes('-thumb')) continue;
-        const fileSrc    = await join(dirPath, item.name);
-        const ext        = item.name.includes('.') ? '.' + item.name.split('.').pop()! : '';
-        const stem       = ext ? item.name.slice(0, -ext.length) : item.name;
-        const translated = translateExportName(stem, ext, vocabMap);
-        const fileDest   = await join(targetDir, translated);
-        if (livePub.has(fileDest)) { stats.skipped += 1; continue; } // same dest already written this run
+  if (ctx.localExportPackages) {
+    appendLog('dim', '  Mode: package folders (from source after Distribute)');
+    const packages = await findPackageFolders(sourceFolder, settings);
+    if (!packages.length) {
+      appendLog('warn', `  No folders matching "${settings.packagePrefix}" — run Distribute packages first.`);
+      appendLog('section', '━━━ PUBLISH DONE — nothing to publish ━━━');
+      return;
+    }
+    appendLog('info', `  Found ${packages.length} package folder(s)`);
+
+    for (const pkg of packages) {
+      const pkgName = await basename(pkg);
+      const destPkg = await join(targetFolder, pkgName);
+      stats.pubFolders += 1;
+      livePub.add(destPkg);
+      appendLog('section', `📦  ${pkgName}`);
+
+      const files = await collectPackageFiles(pkg, settings);
+      if (!files.length) {
+        appendLog('dim', '  └─ empty package — skipping');
+        continue;
+      }
+
+      for (const { srcPath, relativePath } of files) {
+        const fileDest = await join(destPkg, relativePath);
+        if (livePub.has(fileDest)) { stats.skipped += 1; continue; }
         livePub.add(fileDest);
+        const destParent = await dirname(fileDest);
+        livePub.add(destParent);
+
         if (dryRun) {
-          appendLog('success', `  [DRY] → ${translated}`);
+          appendLog('success', `  [DRY] → ${pkgName}/${relativePath}`);
           stats.published += 1;
-        } else {
-          try {
-            await mkdir(targetDir, { recursive: true });
-            if (!await isUnchanged(fileSrc, fileDest)) {
-              await copyFile(fileSrc, fileDest);
-              appendLog('success', `  ✓  ${item.name} → ${translated}`);
-              stats.published += 1;
-            } else {
-              stats.skipped += 1;
-            }
-          } catch (err) {
-            appendLog('error', `  ✕  publish failed: ${item.name} — ${err}`);
-            addIssue({ category: 'error', file: item.name, reason: String(err) });
-            stats.errors += 1;
-          }
+          continue;
         }
-      } else if (item.isDirectory) {
-        const subSrc    = await join(dirPath, item.name);
-        const subTarget = await join(targetDir, item.name);
-        livePub.add(subTarget);
-        await publishDir(subSrc, subTarget);
+
+        try {
+          await mkdir(destParent, { recursive: true });
+          if (!await isUnchanged(srcPath, fileDest)) {
+            await copyFile(srcPath, fileDest);
+            appendLog('success', `  ✓  ${relativePath}`);
+            stats.published += 1;
+          } else {
+            stats.skipped += 1;
+          }
+        } catch (err) {
+          appendLog('error', `  ✕  publish failed: ${relativePath} — ${err}`);
+          addIssue({ category: 'error', file: relativePath, reason: String(err) });
+          stats.errors += 1;
+        }
       }
     }
-  }
+  } else {
+    const vocabMap = buildVocabContext(vocab);
 
-  async function publishFolder(src: string, target: string) {
-    const entries = await listDirLogged(src, appendLog);
-    for (const e of entries) {
-      if (shouldSkip(e.name, settings)) continue;
-      if (!e.isDirectory) continue;
-      const childSrc = await join(src, e.name);
-
-      if (isOutFolder(e.name, settings)) {
-        stats.pubFolders += 1;
-        await publishDir(childSrc, target);
-      } else {
-        const hasSiblingOut = entries.some(sib => sib.isDirectory && isOutFolder(sib.name, settings));
-        if (hasSiblingOut) continue;
-        // Strip the folder-identity hash suffix — it's an internal source-side anchor
-        // (see domain/stableId.ts) and must never leak into a published/shared copy.
-        await publishFolder(childSrc, await join(target, stripStableId(e.name)));
+    /* Publish all files from dirPath into targetDir, translating filenames. */
+    async function publishDir(dirPath: string, targetDir: string) {
+      const items = await listDir(dirPath);
+      for (const item of items) {
+        if (shouldSkip(item.name, settings)) continue;
+        if (item.isFile) {
+          if (!isPublishableFile(item.name) || item.name.includes('-thumb')) continue;
+          const fileSrc    = await join(dirPath, item.name);
+          const ext        = item.name.includes('.') ? '.' + item.name.split('.').pop()! : '';
+          const stem       = ext ? item.name.slice(0, -ext.length) : item.name;
+          const translated = translateExportName(stem, ext, vocabMap);
+          const fileDest   = await join(targetDir, translated);
+          if (livePub.has(fileDest)) { stats.skipped += 1; continue; }
+          livePub.add(fileDest);
+          if (dryRun) {
+            appendLog('success', `  [DRY] → ${translated}`);
+            stats.published += 1;
+          } else {
+            try {
+              await mkdir(targetDir, { recursive: true });
+              if (!await isUnchanged(fileSrc, fileDest)) {
+                await copyFile(fileSrc, fileDest);
+                appendLog('success', `  ✓  ${item.name} → ${translated}`);
+                stats.published += 1;
+              } else {
+                stats.skipped += 1;
+              }
+            } catch (err) {
+              appendLog('error', `  ✕  publish failed: ${item.name} — ${err}`);
+              addIssue({ category: 'error', file: item.name, reason: String(err) });
+              stats.errors += 1;
+            }
+          }
+        } else if (item.isDirectory) {
+          const subSrc    = await join(dirPath, item.name);
+          const subTarget = await join(targetDir, item.name);
+          livePub.add(subTarget);
+          await publishDir(subSrc, subTarget);
+        }
       }
     }
-  }
 
-  await publishFolder(sourceFolder, targetFolder);
+    async function publishFolder(src: string, target: string) {
+      const entries = await listDirLogged(src, appendLog);
+      for (const e of entries) {
+        if (shouldSkip(e.name, settings)) continue;
+        if (!e.isDirectory) continue;
+        const childSrc = await join(src, e.name);
+
+        if (isOutFolder(e.name, settings)) {
+          stats.pubFolders += 1;
+          await publishDir(childSrc, target);
+        } else {
+          const hasSiblingOut = entries.some(sib => sib.isDirectory && isOutFolder(sib.name, settings));
+          if (hasSiblingOut) continue;
+          // Strip the folder-identity hash suffix — it's an internal source-side anchor
+          // (see domain/stableId.ts) and must never leak into a published/shared copy.
+          await publishFolder(childSrc, await join(target, stripStableId(e.name)));
+        }
+      }
+    }
+
+    await publishFolder(sourceFolder, targetFolder);
+  }
 
   /* Orphan scan — skip if nothing was published (avoids false positives on empty runs) */
   if (stats.published > 0 && !dryRun) {
@@ -1251,36 +1333,90 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
   }
 
   const outFolder = settings.outFolder || 'OUT';
-  const files = (collectedAssets ?? []).map(srcPath => {
+  const vocabMap = buildVocabContext(vocab);
+  const cloudCache = await loadCloudCache();
+  let cloudCacheDirty = false;
+
+  // Default OUT-tree file list (used when dest.exportPackages is false).
+  const outFiles = (collectedAssets ?? []).map(srcPath => {
     const fileName = srcPath.split('/').pop()!;
     const dotIdx   = fileName.lastIndexOf('.');
     const ext      = dotIdx > 0 ? fileName.slice(dotIdx) : '';
     const stem     = dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName;
     const { dir: relativeDir } = relativeUnderOut(srcPath, outFolder);
-    return { srcPath, stem, ext, fileName, relativeDir };
+    return { srcPath, stem, ext, fileName, relativeDir, nestedOverride: null as string | null };
   });
 
-  if (!files.length) {
-    appendLog('dim', '  No assets found in source — skipping.');
-    return;
+  type CloudFileJob = {
+    srcPath: string;
+    stem: string;
+    ext: string;
+    fileName: string;
+    relativeDir: string;
+    /** When set, used as the full remote relative path (package mode). */
+    nestedOverride: string | null;
+  };
+
+  async function packageFileJobs(): Promise<CloudFileJob[]> {
+    const source = settings.sourceFolder;
+    if (!source) return [];
+    const packages = await findPackageFolders(source, settings);
+    const jobs: CloudFileJob[] = [];
+    for (const pkg of packages) {
+      const pkgName = await basename(pkg);
+      const files = await collectPackageFiles(pkg, settings);
+      for (const { srcPath, relativePath } of files) {
+        const fileName = relativePath.split('/').pop()!;
+        const dotIdx = fileName.lastIndexOf('.');
+        const ext = dotIdx > 0 ? fileName.slice(dotIdx) : '';
+        const stem = dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName;
+        jobs.push({
+          srcPath,
+          stem,
+          ext,
+          fileName,
+          relativeDir: '',
+          nestedOverride: `${pkgName}/${relativePath}`,
+        });
+      }
+    }
+    return jobs;
   }
 
-  appendLog('info', `  ${activeDests.length} destination(s) · ${files.length} asset(s)`);
-  const vocabMap = buildVocabContext(vocab);
-  const cloudCache = await loadCloudCache();
-  let cloudCacheDirty = false;
+  if (!outFiles.length) {
+    appendLog('dim', '  No OUT assets scanned — package-mode destinations may still export.');
+  }
+
+  appendLog('info', `  ${activeDests.length} destination(s)`);
 
   for (const dest of activeDests) {
     const cfg = dest.config;
     if (cfg.type === 'local') continue;
 
-    // Preserve OUT-relative folders by default; dest.flatExport dumps everything into remotePath.
-    const flatten = dest.flatExport === true;
-    if (flatten) {
-      appendLog('dim', `  ${dest.name}: flat export (folder structure ignored)`);
+    const usePackages = dest.exportPackages === true;
+    let files: CloudFileJob[];
+    if (usePackages) {
+      files = await packageFileJobs();
+      if (!files.length) {
+        appendLog('warn', `  ${dest.name}: no package folders — run Distribute packages first.`);
+        continue;
+      }
+      appendLog('dim', `  ${dest.name}: package folders (${files.length} file(s))`);
     } else {
-      appendLog('dim', `  ${dest.name}: preserving folders under OUT`);
+      files = outFiles;
+      if (!files.length) {
+        appendLog('dim', `  ${dest.name}: no assets — skipping.`);
+        continue;
+      }
+      const flatten = dest.flatExport === true;
+      if (flatten) {
+        appendLog('dim', `  ${dest.name}: flat export (folder structure ignored)`);
+      } else {
+        appendLog('dim', `  ${dest.name}: preserving folders under OUT`);
+      }
     }
+
+    const flatten = !usePackages && dest.flatExport === true;
 
     if (!dest.generateLink) {
       appendLog('info', `  → ${dest.name} (${cfg.type}) — uploading without link collection`);
@@ -1298,16 +1434,30 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
     const CONCURRENCY = 8;
     for (let i = 0; i < files.length; i += CONCURRENCY) {
       const batch = files.slice(i, i + CONCURRENCY);
-      await Promise.all(batch.map(async ({ srcPath, stem, ext, relativeDir }) => {
-        const translated = translateExportName(stem, ext, vocabMap);
-        const nestedName = !flatten && relativeDir
-          ? `${relativeDir}/${translated}`
+      await Promise.all(batch.map(async ({ srcPath, stem, ext, relativeDir, nestedOverride }) => {
+        const translated = nestedOverride
+          ? nestedOverride.split('/').pop()!
+          : translateExportName(stem, ext, vocabMap);
+        const nestedName = nestedOverride
+          ?? (!flatten && relativeDir ? `${relativeDir}/${translated}` : translated);
+        // For gdrive folder path: parent dirs of nestedName when package mode
+        const gdriveFolderPath = (() => {
+          if (usePackages) {
+            const parts = nestedName.split('/');
+            parts.pop();
+            const sub = parts.join('/');
+            return [cfg.remotePath.replace(/\/$/, ''), sub].filter(Boolean).join('/');
+          }
+          return !flatten && relativeDir
+            ? [cfg.remotePath.replace(/\/$/, ''), relativeDir].filter(Boolean).join('/')
+            : cfg.remotePath;
+        })();
+        const gdriveFileName = usePackages
+          ? nestedName.split('/').pop()!
           : translated;
+
         let url: string | null = null;
         try {
-          // Cheap local fast-path (CDN-style): matching mtime+size → skip with no
-          // file read and no provider API. Requires a prior successful upload/skip
-          // that wrote this cache entry; first run still hits the network.
           let srcInfo: Awaited<ReturnType<typeof stat>>;
           try {
             srcInfo = await stat(srcPath);
@@ -1316,7 +1466,6 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
           }
           const mtimeMs = srcInfo.mtime?.getTime() ?? -1;
           const cacheEntry = cloudCache[cloudCacheKey(dest.id, nestedName)];
-          // URL is optional — missing link must not force a network round-trip every run.
           if (cacheEntry && cacheEntry.size === srcInfo.size && cacheEntry.mtimeMs === mtimeMs) {
             url = dest.generateLink ? (cacheEntry.url ?? null) : null;
             cached += 1;
@@ -1366,17 +1515,13 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
             uploaded += 1;
             stats.published += 1;
           } else if (cfg.type === 'gdrive') {
-            const folderPath = !flatten && relativeDir
-              ? [cfg.remotePath.replace(/\/$/, ''), relativeDir].filter(Boolean).join('/')
-              : cfg.remotePath;
-            // Lazy bytes: unchanged Drive files never leave disk into the webview.
             const result = await uploadGDriveFile(
               cfg.token!.accessToken,
               srcInfo.size,
               () => readFile(srcPath),
               mimeFromExt(ext),
-              translated,
-              folderPath,
+              gdriveFileName,
+              gdriveFolderPath,
               dest.generateLink,
               cfg.sharedDriveId,
             );
@@ -1399,8 +1544,6 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
           rememberCloudUpload(cloudCache, dest.id, nestedName, mtimeMs, srcInfo.size, url);
           cloudCacheDirty = true;
 
-          // Only client-role destinations feed the client-facing web portal —
-          // internal-team links should never end up there.
           if (url && cloudUrls && dest.role === 'client') {
             const mapKey = relativeDir ? `${relativeDir}/${stem}` : stem;
             const existing = cloudUrls.get(mapKey) ?? cloudUrls.get(stem) ?? [];

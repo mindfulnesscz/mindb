@@ -23,6 +23,11 @@ export interface PortalDestination {
   /** Minimum hub role that may see this destination's links in the portal. */
   minRole: Role
   flatExport: boolean
+  /**
+   * When true, desktop mirrors source package folders (after Distribute)
+   * instead of walking OUT file trees. Mutually exclusive with flatExport.
+   */
+  exportPackages: boolean
   generateLink: boolean
   /** Show sharing links from this dest on asset detail. */
   showInPortal: boolean
@@ -50,6 +55,7 @@ export function makePortalDestination(partial: Partial<PortalDestination> = {}):
     role: 'client',
     minRole: 'member',
     flatExport: false,
+    exportPackages: false,
     generateLink: true,
     showInPortal: true,
     allowRevealLocal: true,
@@ -61,12 +67,13 @@ export function makePortalDestination(partial: Partial<PortalDestination> = {}):
 
 function normalizeDest(raw: Record<string, unknown>): PortalDestination {
   const config = (raw.config ?? { type: 'local', path: '' }) as PortalDestConfig
-  // Strip any leaked tokens from older pushes
+  // Strip any leaked tokens from older pushes; local path is machine-only (desktop).
   const safeConfig: PortalDestConfig =
     config.type === 'local'
-      ? config
+      ? { type: 'local', path: '' }
       : { ...config, token: null, ...(config.type === 'gdrive' ? { clientSecret: '' as const } : {}) }
 
+  const exportPackages = Boolean(raw.exportPackages)
   return {
     id: String(raw.id ?? crypto.randomUUID()),
     name: String(raw.name ?? ''),
@@ -74,7 +81,8 @@ function normalizeDest(raw: Record<string, unknown>): PortalDestination {
     minRole: (['public', 'member', 'editor', 'admin'].includes(String(raw.minRole))
       ? (raw.minRole as Role)
       : 'member'),
-    flatExport: Boolean(raw.flatExport),
+    flatExport: exportPackages ? false : Boolean(raw.flatExport),
+    exportPackages,
     generateLink: raw.generateLink !== false,
     showInPortal: raw.showInPortal !== false,
     allowRevealLocal: Boolean(raw.allowRevealLocal),
@@ -98,13 +106,18 @@ export async function fetchDestinations(clientId: string): Promise<PortalDestina
 
 export async function saveDestinations(clientId: string, destinations: PortalDestination[]): Promise<void> {
   if (!supabase) throw new Error('Supabase not configured')
-  const sanitized = destinations.map(d => ({
-    ...d,
-    config:
-      d.config.type === 'local'
-        ? d.config
-        : { ...d.config, token: null, ...(d.config.type === 'gdrive' ? { clientSecret: '' } : {}) },
-  }))
+  const sanitized = destinations.map(d => {
+    const exportPackages = Boolean(d.exportPackages)
+    return {
+      ...d,
+      exportPackages,
+      flatExport: exportPackages ? false : Boolean(d.flatExport),
+      config:
+        d.config.type === 'local'
+          ? { type: 'local' as const, path: '' }
+          : { ...d.config, token: null, ...(d.config.type === 'gdrive' ? { clientSecret: '' } : {}) },
+    }
+  })
   const { error } = await supabase
     .from('clients')
     .update({ cloud_destinations: sanitized as never })

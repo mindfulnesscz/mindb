@@ -128,7 +128,8 @@ function DestList({
       </div>
 
       <p className={css.empty} style={{ marginBottom: 'var(--sp-3)' }}>
-        Structure (name, paths, roles) is managed in the web portal. Connect OAuth accounts here — tokens stay on this machine.
+        Structure (name, remote paths, roles, package export) is managed in the web portal.
+        Set local folder paths and connect OAuth here — tokens stay on this machine.
       </p>
       {syncMsg && <p className={css.empty} style={{ marginTop: 0 }}>{syncMsg}</p>}
 
@@ -148,7 +149,10 @@ function DestList({
                     {typeLabel(dest.config.type)}
                   </span>
                   <span className={css.destName}>{dest.name || 'Unnamed'}</span>
-                  <span className={css.destPath}>{path || '—'}</span>
+                  <span className={css.destPath}>
+                    {path || (dest.config.type === 'local' ? 'Set path…' : '—')}
+                    {dest.exportPackages ? ' · packages' : ''}
+                  </span>
                   <span className={css.roleBadge}>{dest.role}</span>
                   <span className={`${css.statusDot} ${statusClass(status)}`} title={statusTitle(status, token)} />
                   <div className={css.rowActions}>
@@ -315,7 +319,7 @@ function DestCredentialsForm({
               <span className={css.fieldLabel}>Type / role / path</span>
               <input
                 className={`${css.input} ${css.inputMono}`}
-                value={`${typeLabel(cfg.type)} · ${form.role} · ${path || '—'}`}
+                value={`${typeLabel(cfg.type)} · ${form.role} · ${path || '—'}${form.exportPackages ? ' · packages' : ''}`}
                 disabled
               />
             </div>

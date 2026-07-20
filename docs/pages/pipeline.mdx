@@ -53,13 +53,21 @@ Copy decisions use an mtime check (`isUnchanged`): if the destination file alrea
 
 ### 3 — Export to destinations
 
-Mirrors the source tree into a local target folder (`settings.targetFolder`) — commonly a SharePoint- or OneDrive-synced directory. Walks folders looking for `OUT`, publishes their contents (filenames translated), and recurses through everything else. Folder names are carried over as-is, **except** a folder-based stable-identity hash suffix (` __a1b2c3d4`), which is stripped before creating the destination folder — that suffix is a source-side identity anchor and must never appear in a shared/published copy.
+Resolves the checked **local** destination’s machine path (or legacy `settings.targetFolder`).
+
+- **Default (OUT tree):** mirrors the source tree looking for `OUT`, publishes contents (filenames translated), recurses otherwise. Stable-identity hash suffixes (` __a1b2c3d4`) are stripped from folder names.
+- **`exportPackages` on the destination:** finds source folders matching the package prefix and copies each package directory into the target as a unit (files already renamed by Distribute). Run **Distribute packages** first.
 
 Uses the same mtime-based `isUnchanged` check as Distribute. After a run, any previously-published file/folder no longer present in the source is renamed with a `🚫` prefix at the destination rather than deleted — a visible, reversible flag rather than a silent removal.
 
 ### 4 — Cloud export
 
-For each cloud destination (Dropbox / OneDrive / Google Drive) with a valid OAuth token, flat-uploads every collected asset (no folder mirroring — see [Export to destinations](#3--export-to-destinations) for the folder-preserving path) and records the resulting sharing link, later written to Supabase so the web portal can surface it.
+For each cloud destination (Dropbox / OneDrive / Google Drive) with a valid OAuth token:
+
+- **Default:** uploads collected OUT assets, preserving folders under OUT unless `flatExport` is on.
+- **`exportPackages`:** uploads files from source package folders as `{packageName}/…` under `remotePath` (Distribute first). `flatExport` is ignored.
+
+Sharing links (when `generateLink`) are later written to Supabase for the portal.
 
 ### 5 — Publish to DAM
 
