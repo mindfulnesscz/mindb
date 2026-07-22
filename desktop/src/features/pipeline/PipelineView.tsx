@@ -6,7 +6,7 @@ import { useSettingsStore } from '../../store/settingsStore';
 import { usePipelineStore } from '../../store/pipelineStore';
 import { useVocabularyStore } from '../../store/vocabularyStore';
 import { useClientStore } from '../../store/clientStore';
-import { tokenStatus, cloudToken } from '../../domain/client';
+import { tokenStatus, cloudToken, resolveExportShape } from '../../domain/client';
 import type { CloudDestination, LocalDestConfig } from '../../domain/client';
 import { runPipeline, scanVersionMap, type RunContext } from '../../services/pipelineService';
 import type { CloudUrlEntry } from '../../services/pipelineService';
@@ -285,6 +285,7 @@ function ConfigSidebar() {
   }
 
   const selectedDests = destinations.filter(d => selectedDestIds.has(d.id));
+  const localDest = selectedDests.find(d => d.config.type === 'local');
 
   const isRunning  = runStatus === 'running';
   const isStopping = runStatus === 'stopping';
@@ -307,15 +308,15 @@ function ConfigSidebar() {
   async function handleRun() {
     startRun();
     const vocabData = vocab ?? { _schema_version: '2.1.0', _comment: '', tags: [] };
-    const localDest = selectedDests.find(d => d.config.type === 'local');
+    const runLocalDest = selectedDests.find(d => d.config.type === 'local');
     const hasCloudDests = selectedDests.some(d => d.config.type !== 'local');
     const effectiveSettings = {
       ...settings,
-      targetFolder: localDest
-        ? (localDest.config as LocalDestConfig).path
+      targetFolder: runLocalDest
+        ? (runLocalDest.config as LocalDestConfig).path
         : settings.targetFolder,
       // If a local destination is checked, always export — the dest checkbox is the control
-      doPublish:    localDest ? true : settings.doPublish,
+      doPublish:    runLocalDest ? true : settings.doPublish,
       // Enable flat export when cloud destinations are selected
       doFlatExport: hasCloudDests ? settings.doFlatExport : false,
     };
@@ -405,6 +406,8 @@ function ConfigSidebar() {
       originalUrls,
       cloudUrls,
       cloudDestinations: cloudDests,
+      localExportLayout: resolveExportShape(runLocalDest ?? {}).exportLayout,
+      localIncludePackages: resolveExportShape(runLocalDest ?? {}).includePackages,
       r2: r2Config,
       identityMigrated: !!activeClient?.identityMigrated,
     });
@@ -523,6 +526,12 @@ function ConfigSidebar() {
             checked={settings.doPublish}
             onChange={v => setField('doPublish', v)}
           />
+          {(localDest && resolveExportShape(localDest).includePackages
+            || selectedDests.some(d => d.config.type !== 'local' && resolveExportShape(d).includePackages)) && (
+            <p className="px-3 pb-2 text-[11px] text-[var(--text-muted)]">
+              Destinations with nested packages need step 3 first (packages stay inside the folder tree).
+            </p>
+          )}
           <TaskRow
             label="5  Cloud export"
             checked={settings.doFlatExport}

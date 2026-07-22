@@ -48,20 +48,56 @@ export type DestConfig =
 
 export type HubRole = 'public' | 'member' | 'editor' | 'admin';
 
+/**
+ * Required base layout.
+ * - folders — preserve OUT-relative folder tree
+ * - flat — dump files into one folder
+ * Packages are optional via includePackages (nested inside folders — never root-only).
+ */
+export type DestExportLayout = 'folders' | 'flat';
+
 export interface CloudDestination {
   id:           string;
   name:         string;
   role:         DestRole;
-  /** Minimum hub role that may see this destination's share links in the portal. */
   minRole:      HubRole;
-  flatExport:   boolean;
+  exportLayout: DestExportLayout;
+  /** When true with folders layout, also mirror package folders at nested source paths. */
+  includePackages: boolean;
   generateLink: boolean;
-  /** Show sharing links from this dest on asset detail in the portal. */
   showInPortal: boolean;
-  /** Allow "Reveal in Finder" for roles ≥ minRole (desktop localhost bridge). */
   allowRevealLocal: boolean;
-  enabled:      boolean;   // whether this destination is checked for pipeline runs; missing/legacy = enabled
+  enabled:      boolean;
   config:       DestConfig;
+}
+
+export function resolveExportShape(
+  raw: Omit<Partial<CloudDestination>, 'exportLayout'> & {
+    flatExport?: boolean;
+    exportPackages?: boolean;
+    /** Includes legacy `"packages"`. */
+    exportLayout?: DestExportLayout | 'packages' | string;
+    includePackages?: boolean;
+  },
+): { exportLayout: DestExportLayout; includePackages: boolean } {
+  if (raw.exportLayout === 'packages' || raw.exportPackages) {
+    return { exportLayout: 'folders', includePackages: true };
+  }
+  const exportLayout: DestExportLayout =
+    raw.exportLayout === 'flat' || raw.flatExport ? 'flat' : 'folders';
+  const includePackages = exportLayout === 'folders' && Boolean(raw.includePackages);
+  return { exportLayout, includePackages };
+}
+
+/** @deprecated Prefer resolveExportShape — kept for call sites that only need layout. */
+export function resolveExportLayout(
+  raw: Omit<Partial<CloudDestination>, 'exportLayout'> & {
+    flatExport?: boolean;
+    exportPackages?: boolean;
+    exportLayout?: DestExportLayout | 'packages' | string;
+  },
+): DestExportLayout {
+  return resolveExportShape(raw).exportLayout;
 }
 
 export interface Client {
@@ -101,29 +137,40 @@ export function makeClient(partial: Partial<Client> = {}): Client {
 }
 
 export function makeDestination(partial: Partial<CloudDestination> = {}): CloudDestination {
+  const shape = resolveExportShape(partial);
+  const { exportLayout: _el, includePackages: _ip, ...rest } = partial;
   return {
     id:               crypto.randomUUID(),
     name:             '',
     role:             'internal',
     minRole:          'member',
-    flatExport:       false,
     generateLink:     false,
     showInPortal:     true,
     allowRevealLocal: true,
     enabled:          true,
     config:           { type: 'local', path: '' },
-    ...partial,
+    ...rest,
+    // Always resolve layout from partial (maps legacy packages/flatExport).
+    exportLayout:     shape.exportLayout,
+    includePackages:  shape.includePackages,
   };
 }
 
 /** Normalize portal / legacy JSON into a full CloudDestination. */
-export function normalizeDestination(raw: Partial<CloudDestination> & { id?: string }): CloudDestination {
+export function normalizeDestination(raw: Partial<CloudDestination> & {
+  id?: string;
+  flatExport?: boolean;
+  exportPackages?: boolean;
+}): CloudDestination {
+  const shape = resolveExportShape(raw);
   const base = makeDestination(raw);
   return {
     ...base,
     minRole:          (['public', 'member', 'editor', 'admin'] as HubRole[]).includes(raw.minRole as HubRole)
       ? (raw.minRole as HubRole)
       : 'member',
+    exportLayout:     shape.exportLayout,
+    includePackages:  shape.includePackages,
     showInPortal:     raw.showInPortal !== false,
     allowRevealLocal: Boolean(raw.allowRevealLocal),
     enabled:          raw.enabled !== false,

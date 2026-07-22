@@ -2,4 +2,9 @@
 
 The Obsidian stage generates markdown notes in the configured vault. Notes are derived artifacts built from scanned assets, parsed vocabulary, inherited taxonomy, versions, CDN/provider URLs, and configured depth. This phase does not upload to R2 or create Supabase rows.
 
-Its strength is a human-readable, regenerable knowledge base that can be browsed and linked independently. Its weakness is duplication: notes can be stale if a run stops before regeneration, and manual edits may be overwritten depending on generator behavior. Treat source files and Supabase as operational authority; treat generated notes as a projection unless your team establishes a manual-edit policy.
+## Layout
+
+- **Notes** live under `05 DAM/01 EXPORTS/…`, nested to mirror the source package scopes.
+- **`_X … .canvas` files** are written **flat** into `05 DAM/` (one canvas per package scope), so they sit next to `01 EXPORTS` instead of buried in the note tree. Older nested canvases are moved to `05 DAM/🗑 Trash` on the next run.
+
+Its strength is a human-readable, regenerable knowledge base that can be browsed and linked independently (including via a local filesystem MCP). Its weakness is duplication: notes can be stale if a run stops before regeneration, and manual edits may be overwritten depending on generator behavior. Treat source files and Supabase as operational authority; treat generated notes as a projection unless your team establishes a manual-edit policy.
