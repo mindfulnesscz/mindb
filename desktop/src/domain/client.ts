@@ -72,9 +72,10 @@ export interface CloudDestination {
 }
 
 export function resolveExportShape(
-  raw: Partial<CloudDestination> & {
+  raw: Omit<Partial<CloudDestination>, 'exportLayout'> & {
     flatExport?: boolean;
     exportPackages?: boolean;
+    /** Includes legacy `"packages"`. */
     exportLayout?: DestExportLayout | 'packages' | string;
     includePackages?: boolean;
   },
@@ -90,7 +91,11 @@ export function resolveExportShape(
 
 /** @deprecated Prefer resolveExportShape — kept for call sites that only need layout. */
 export function resolveExportLayout(
-  raw: Partial<CloudDestination> & { flatExport?: boolean; exportPackages?: boolean; exportLayout?: string },
+  raw: Omit<Partial<CloudDestination>, 'exportLayout'> & {
+    flatExport?: boolean;
+    exportPackages?: boolean;
+    exportLayout?: DestExportLayout | 'packages' | string;
+  },
 ): DestExportLayout {
   return resolveExportShape(raw).exportLayout;
 }
