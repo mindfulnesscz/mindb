@@ -75,7 +75,7 @@ export function resolveExportShape(
   raw: Partial<CloudDestination> & {
     flatExport?: boolean;
     exportPackages?: boolean;
-    exportLayout?: string;
+    exportLayout?: DestExportLayout | 'packages' | string;
     includePackages?: boolean;
   },
 ): { exportLayout: DestExportLayout; includePackages: boolean } {
@@ -139,14 +139,13 @@ export function makeDestination(partial: Partial<CloudDestination> = {}): CloudD
     name:             '',
     role:             'internal',
     minRole:          'member',
-    exportLayout:     shape.exportLayout,
-    includePackages:  shape.includePackages,
     generateLink:     false,
     showInPortal:     true,
     allowRevealLocal: true,
     enabled:          true,
     config:           { type: 'local', path: '' },
     ...rest,
+    // Always resolve layout from partial (maps legacy packages/flatExport).
     exportLayout:     shape.exportLayout,
     includePackages:  shape.includePackages,
   };
