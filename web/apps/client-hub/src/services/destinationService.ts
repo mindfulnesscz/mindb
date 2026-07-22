@@ -81,14 +81,13 @@ export function makePortalDestination(partial: Partial<PortalDestination> = {}):
     name: '',
     role: 'client',
     minRole: 'member',
-    exportLayout: shape.exportLayout,
-    includePackages: shape.includePackages,
     generateLink: true,
     showInPortal: true,
     allowRevealLocal: true,
     enabled: true,
     config: { type: 'gdrive', clientId: '', clientSecret: '', sharedDriveId: '', remotePath: '', token: null },
     ...partial,
+    // Always resolve layout from partial (maps legacy packages/flatExport).
     exportLayout: shape.exportLayout,
     includePackages: shape.includePackages,
   }
