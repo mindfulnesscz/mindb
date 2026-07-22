@@ -310,3 +310,94 @@ export async function importTaxonomyJsonFile(
   }
   return importTaxonomyToClient(clientId, result.document, options)
 }
+
+/** Minimal tag shape needed to rebuild a taxonomy document (matches tagService.Tag). */
+export interface TaxonomyExportTag {
+  id: string
+  name: string
+  key: string | null
+  shortcode: string | null
+  dimension: TaxonomyDimension
+  parentId: string | null
+  sortOrder: number
+}
+
+function slugifyKey(s: string): string {
+  return s.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9._-]/g, '')
+}
+
+/**
+ * Build an import-compatible taxonomy document from the client's current tags
+ * and dimension labels. Round-trips with importTaxonomyToClient.
+ */
+export function buildTaxonomyDocument(
+  client: {
+    name: string
+    dimensionLabels?: { entity: string; angle: string; format: string }
+  },
+  tags: TaxonomyExportTag[],
+): TaxonomyDocument {
+  const idToKey = new Map<string, string>()
+  const usedKeys = new Set<string>()
+
+  function assignKey(t: TaxonomyExportTag): string {
+    const existing = idToKey.get(t.id)
+    if (existing) return existing
+    const base =
+      (t.key ?? '').trim() ||
+      `${t.dimension}.${slugifyKey(t.name) || t.id.slice(0, 8)}`
+    let key = base
+    let n = 2
+    while (usedKeys.has(key)) key = `${base}.${n++}`
+    usedKeys.add(key)
+    idToKey.set(t.id, key)
+    return key
+  }
+
+  const sorted = [...tags].sort(
+    (a, b) =>
+      a.dimension.localeCompare(b.dimension) ||
+      a.sortOrder - b.sortOrder ||
+      a.name.localeCompare(b.name),
+  )
+  for (const t of sorted) assignKey(t)
+
+  const nodes: TaxonomyNodeInput[] = sorted.map(t => {
+    const parent_key =
+      t.parentId && idToKey.has(t.parentId) ? idToKey.get(t.parentId)! : null
+    const shortcode = (t.shortcode ?? '').trim() || null
+    return {
+      key: idToKey.get(t.id)!,
+      dimension: t.dimension,
+      name: t.name,
+      parent_key,
+      ...(shortcode ? { shortcode } : {}),
+      sort_order: t.sortOrder,
+    }
+  })
+
+  const labels = client.dimensionLabels
+  return {
+    version: TAXONOMY_JSON_VERSION,
+    name: client.name,
+    dimension_labels: {
+      entity: labels?.entity?.trim() || 'Entity',
+      angle: labels?.angle?.trim() || 'Angle',
+      format: labels?.format?.trim() || 'Format',
+    },
+    nodes,
+  }
+}
+
+/** Trigger a browser download of the taxonomy JSON. */
+export function downloadTaxonomyJson(document: TaxonomyDocument, filename: string): void {
+  const blob = new Blob([`${JSON.stringify(document, null, 2)}\n`], {
+    type: 'application/json',
+  })
+  const url = URL.createObjectURL(blob)
+  const a = window.document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}

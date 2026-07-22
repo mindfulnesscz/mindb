@@ -7,16 +7,34 @@ import {
   type PortalDestination,
   type DestType,
   type DestPipelineRole,
+  type DestExportLayout,
 } from '../../services/destinationService'
 
 const ROLE_OPTIONS: Role[] = ['public', 'member', 'editor', 'admin']
 const TYPE_OPTIONS: DestType[] = ['gdrive', 'dropbox', 'onedrive', 'local']
+const LAYOUT_OPTIONS: { value: DestExportLayout; label: string; hint: string }[] = [
+  {
+    value: 'folders',
+    label: 'Full folders',
+    hint: 'Preserve OUT folder tree (default)',
+  },
+  {
+    value: 'flat',
+    label: 'Flat',
+    hint: 'All files in one folder — good for share links, no package nesting',
+  },
+]
 
 function typeLabel(t: DestType): string {
   if (t === 'gdrive') return 'Google Drive'
   if (t === 'onedrive') return 'OneDrive'
   if (t === 'dropbox') return 'Dropbox'
   return 'Local path'
+}
+
+function layoutBadge(d: PortalDestination): string {
+  if (d.exportLayout === 'flat') return 'Flat'
+  return d.includePackages ? 'Folders + packages' : 'Full folders'
 }
 
 function emptyConfig(type: DestType): PortalDestination['config'] {
@@ -87,7 +105,7 @@ export function DestinationsAdmin({ client }: { client: Client }) {
   return (
     <div className="space-y-3">
       <p className="text-[11px] font-sans text-text-subtle">
-        Structure is managed here (including package-folder export). Desktop stores OAuth keys/tokens and local machine paths.
+        Structure is managed here (export layout, roles, remote paths). Desktop stores OAuth keys/tokens and local machine paths.
       </p>
       {error && <p className="text-[11px] font-sans text-signal-error">{error}</p>}
       {msg && <p className="text-[11px] font-sans text-cosmos-black">{msg}</p>}
@@ -103,9 +121,7 @@ export function DestinationsAdmin({ client }: { client: Client }) {
                   {typeLabel(d.config.type)}
                 </span>
                 <span className="flex-1 min-w-0 truncate font-semibold">{d.name || 'Unnamed'}</span>
-                {d.exportPackages && (
-                  <span className="text-[10px] text-text-muted shrink-0">packages</span>
-                )}
+                <span className="text-[10px] text-text-muted shrink-0">{layoutBadge(d)}</span>
                 <span className="text-[10px] text-text-muted shrink-0">≥ {d.minRole}</span>
                 {!d.enabled && <span className="text-[10px] text-signal-error">off</span>}
                 <button type="button" onClick={() => setEditing(d)} className="text-[11px] hover:underline shrink-0">Edit</button>
@@ -158,14 +174,6 @@ function DestForm({
       if (f.config.type === 'local') return f
       return { ...f, config: { ...f.config, clientId } }
     })
-  }
-
-  function setExportPackages(checked: boolean) {
-    setForm(f => ({
-      ...f,
-      exportPackages: checked,
-      flatExport: checked ? false : f.flatExport,
-    }))
   }
 
   const oauthClientId =
@@ -258,6 +266,52 @@ function DestForm({
         </label>
       )}
 
+      <fieldset className="space-y-2">
+        <legend className="text-[10px] font-sans font-bold uppercase tracking-label text-text-muted">
+          Export layout (required — pick one)
+        </legend>
+        <div className="space-y-1.5">
+          {LAYOUT_OPTIONS.map(opt => (
+            <label
+              key={opt.value}
+              className="flex items-start gap-2 cursor-pointer text-[11px] font-sans"
+            >
+              <input
+                type="radio"
+                className="mt-0.5"
+                name={`export-layout-${form.id}`}
+                checked={form.exportLayout === opt.value}
+                onChange={() => setForm(f => ({
+                  ...f,
+                  exportLayout: opt.value,
+                  includePackages: opt.value === 'flat' ? false : f.includePackages,
+                }))}
+              />
+              <span>
+                <span className="font-semibold text-cosmos-black">{opt.label}</span>
+                <span className="block text-text-subtle">{opt.hint}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+        <label className={`flex items-start gap-2 text-[11px] font-sans ${form.exportLayout === 'flat' ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}>
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={form.includePackages}
+            disabled={form.exportLayout === 'flat'}
+            onChange={e => set('includePackages', e.target.checked)}
+          />
+          <span>
+            <span className="font-semibold text-cosmos-black">Also include package folders</span>
+            <span className="block text-text-subtle">
+              Optional. Copies packages nested in their place inside the folder tree (after Distribute).
+              Does not replace the folder export or dump packages at the target root.
+            </span>
+          </span>
+        </label>
+      </fieldset>
+
       <div className="grid grid-cols-2 gap-2">
         <label className="block">
           <span className="text-[10px] font-sans font-bold uppercase tracking-label text-text-muted">Pipeline role</span>
@@ -298,31 +352,10 @@ function DestForm({
           Show links in portal
         </label>
         <label className="flex items-center gap-1.5 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={form.exportPackages}
-            onChange={e => setExportPackages(e.target.checked)}
-          />
-          Export package folders
-        </label>
-        <label className={`flex items-center gap-1.5 ${form.exportPackages ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}>
-          <input
-            type="checkbox"
-            checked={form.flatExport}
-            disabled={form.exportPackages}
-            onChange={e => set('flatExport', e.target.checked)}
-          />
-          Flatten into one folder
-        </label>
-        <label className="flex items-center gap-1.5 cursor-pointer">
           <input type="checkbox" checked={form.allowRevealLocal} onChange={e => set('allowRevealLocal', e.target.checked)} />
           Allow Reveal in Finder
         </label>
       </div>
-      <p className="text-[10px] font-sans text-text-subtle">
-        Package folders: desktop copies source packages (after Distribute) instead of the OUT tree.
-        Flat export is ignored when packages are on. Reveal needs the desktop app on this machine.
-      </p>
 
       <div className="flex justify-end gap-3 pt-1">
         <button type="button" onClick={onCancel} className="text-[11px] text-text-muted hover:text-cosmos-black">Cancel</button>

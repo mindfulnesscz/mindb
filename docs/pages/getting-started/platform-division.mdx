@@ -11,7 +11,7 @@ DC Hub splits work between **web** (identity, portal, users, shared config) and 
 | **Storage** | `R2_BUCKET`, `R2_PUBLIC_DOMAIN` | Environment edge secrets — not per client |
 | **Taxonomy labels** | `dimension_labels` (entity/angle/format display names) | Web client drawer (admin) |
 | **Tags** | `tags` tree + `shortcode` + `key` | Web **Tags**; DB is source of truth. Desktop may publish **leaves** only |
-| **Export destinations** | `cloud_destinations` structure (`minRole`, remote paths, `exportPackages`, flags) | Web **Export destinations** |
+| **Export destinations** | `cloud_destinations` structure (`minRole`, remote paths, `exportLayout`, flags) | Web **Export destinations** |
 | **Local dest path / OAuth** | Machine path + tokens | Desktop Cloud destinations |
 | **Local-only** | folder paths, OAuth tokens, Google client secret, per-run dest checkboxes | Desktop Settings / Pipeline |
 

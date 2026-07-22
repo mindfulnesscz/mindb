@@ -4,7 +4,7 @@ import {
   createTag, deleteTag, fetchTags, updateTag,
   type Tag,
 } from '../../services/tagService'
-import { importTaxonomyJsonFile } from '../../services/taxonomyImport'
+import { importTaxonomyJsonFile, buildTaxonomyDocument, downloadTaxonomyJson } from '../../services/taxonomyImport'
 
 const DIM_LABELS: Record<Tag['dimension'], string> = {
   entity: 'Entity',
@@ -150,6 +150,21 @@ export function TagsAdmin({
     }
   }
 
+  function handleExportJson() {
+    setError('')
+    try {
+      const doc = buildTaxonomyDocument(client, tags)
+      const slug =
+        client.slug?.trim() ||
+        client.name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9._-]/g, '') ||
+        'client'
+      downloadTaxonomyJson(doc, `taxonomy.${slug}.json`)
+      setImportMsg(`Exported ${doc.nodes.length} tag(s) to taxonomy.${slug}.json`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   const dimensions: Tag['dimension'][] = ['entity', 'angle', 'format']
 
   if (loading) return <p className="text-sm text-text-muted">Loading tags…</p>
@@ -171,6 +186,14 @@ export function TagsAdmin({
           className="px-3 py-1.5 text-[11px] font-sans font-semibold border border-cosmos-black rounded-sm hover:bg-cosmos-black hover:text-clear-white transition-colors disabled:opacity-40"
         >
           {importing ? 'Importing…' : 'Import from JSON'}
+        </button>
+        <button
+          type="button"
+          disabled={importing || tags.length === 0}
+          onClick={handleExportJson}
+          className="px-3 py-1.5 text-[11px] font-sans font-semibold border border-cosmos-black rounded-sm hover:bg-cosmos-black hover:text-clear-white transition-colors disabled:opacity-40"
+        >
+          Export JSON
         </button>
         <a
           href="/taxonomy.sample.json"

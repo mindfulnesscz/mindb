@@ -1,7 +1,7 @@
 import { readFile, readTextFile, writeTextFile, exists as fsExists } from '@tauri-apps/plugin-fs';
 import { parseFilename, buildVocabContext } from '../domain/filenameTranslator';
 import type { CloudDestination } from '../domain/client';
-import { normalizeDestination } from '../domain/client';
+import { normalizeDestination, resolveExportShape } from '../domain/client';
 import { extractStableId, stripStableId } from '../domain/stableId';
 import { filterHighestVersions, parseVersion, compareVersions } from '../domain/version';
 import type { VocabularyData } from '../domain/vocabulary';
@@ -157,13 +157,14 @@ async function fetchVHForAssets(
 
 /** Strips the OAuth token from a destination's config before it's written to Supabase. */
 function stripToken(dest: CloudDestination): CloudDestination {
-  // Local filesystem paths are machine-only — never write them to the portal.
-  if (dest.config.type === 'local') {
-    return { ...dest, config: { type: 'local', path: '' } };
+  const shape = resolveExportShape(dest);
+  const base = { ...dest, exportLayout: shape.exportLayout, includePackages: shape.includePackages };
+  if (base.config.type === 'local') {
+    return { ...base, config: { type: 'local', path: '' } };
   }
-  const config = { ...dest.config, token: null };
+  const config = { ...base.config, token: null };
   if (config.type === 'gdrive') config.clientSecret = '';
-  return { ...dest, config };
+  return { ...base, config };
 }
 
 export async function fetchCloudDestinationDefs(

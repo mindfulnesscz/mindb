@@ -151,7 +151,7 @@ function DestList({
                   <span className={css.destName}>{dest.name || 'Unnamed'}</span>
                   <span className={css.destPath}>
                     {path || (dest.config.type === 'local' ? 'Set path…' : '—')}
-                    {dest.exportPackages ? ' · packages' : ''}
+                    {` · ${dest.exportLayout === 'flat' ? 'flat' : dest.includePackages ? 'folders+packages' : 'folders'}`}
                   </span>
                   <span className={css.roleBadge}>{dest.role}</span>
                   <span className={`${css.statusDot} ${statusClass(status)}`} title={statusTitle(status, token)} />
@@ -319,7 +319,7 @@ function DestCredentialsForm({
               <span className={css.fieldLabel}>Type / role / path</span>
               <input
                 className={`${css.input} ${css.inputMono}`}
-                value={`${typeLabel(cfg.type)} · ${form.role} · ${path || '—'}${form.exportPackages ? ' · packages' : ''}`}
+                value={`${typeLabel(cfg.type)} · ${form.role} · ${path || '—'} · ${form.exportLayout}${form.includePackages ? '+packages' : ''}`}
                 disabled
               />
             </div>

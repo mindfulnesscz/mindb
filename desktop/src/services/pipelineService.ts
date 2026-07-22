@@ -17,7 +17,8 @@ import { filterHighestVersions } from '../domain/version';
 import { buildVocabContext, translateExportName, parseFilename } from '../domain/filenameTranslator';
 import { runObsidian } from './damService';
 import { uploadDropboxFile, uploadOneDriveFile, uploadGDriveFile } from './cloudService';
-import type { CloudDestination } from '../domain/client';
+import type { CloudDestination, DestExportLayout } from '../domain/client';
+import { resolveExportShape } from '../domain/client';
 import { stripStableId } from '../domain/stableId';
 import { resolveCdnIdentity } from './supabaseService';
 import { storageKey } from './pipeline/storageKey';
@@ -53,8 +54,9 @@ export interface RunContext {
   originalUrls?:     Map<string, string>;                  // stem → public CDN URL of the original file (version-stable key)
   cloudUrls?:        Map<string, CloudUrlEntry[]>;         // stem → cloud sharing URLs, populated by cloud export
   cloudDestinations?: CloudDestination[];                  // active cloud destinations to export to
-  /** When true, local publish mirrors package folders instead of OUT trees. */
-  localExportPackages?: boolean;
+  /** Local publish shape from the checked local destination. */
+  localExportLayout?: DestExportLayout;
+  localIncludePackages?: boolean;
   identityMigrated?: boolean;
   cdnIdentity?:      Map<string, { stableId: string; childId: string }>;
   storageKeyPrefix?: string;  // mirrors r2.keyPrefix when CDN enabled
@@ -314,10 +316,11 @@ async function flagDisconnected(
   stats:     RunStats,
   appendLog: (t: LogType, m: string) => void,
   addIssue:  (i: { category: 'skipped'|'disconnected'|'version-conflict'|'error'; file: string; reason: string }) => void,
+  opts: { layout: DestExportLayout },
 ): Promise<void> {
-  /* Walk target directory and rename anything not in livePub to "🚫 name".
-     Files already prefixed with 🚫 are left alone.
-     Folders are processed shallowest first so a renamed parent also moves its children. */
+  /* Rename target entries not in livePub.
+     Folders layout manages the whole tree (including leftover package folders
+     from older root-dump runs). Flat only manages root-level entries. */
   async function collectAll(dir: string, acc: { path: string; isDir: boolean }[]) {
     const entries = await listDir(dir);
     for (const e of entries) {
@@ -331,24 +334,36 @@ async function flagDisconnected(
   const all: { path: string; isDir: boolean }[] = [];
   await collectAll(targetDir, all);
 
-  /* Pre-compute all ancestor folders implied by live files so we never flag
-     an intermediate directory that contains live content.
-     e.g. livePub has "target/A/B/file.pdf" → liveFolderAncestors gets "target/A" and "target/A/B" */
+  const targetNorm = targetDir.replace(/\\/g, '/').replace(/\/+$/, '');
+
+  function inLayoutScope(abs: string): boolean {
+    if (opts.layout === 'flat') {
+      const rel = abs.replace(/\\/g, '/').replace(targetNorm, '').replace(/^\/+/, '');
+      return rel.length > 0 && !rel.includes('/');
+    }
+    return true;
+  }
+
+  const scoped = all.filter(x => inLayoutScope(x.path));
+
   const liveFolderAncestors = new Set<string>();
   for (const p of livePub) {
-    const parts = p.split('/');
+    const parts = p.replace(/\\/g, '/').split('/');
     for (let i = 1; i < parts.length; i++) {
       liveFolderAncestors.add(parts.slice(0, i).join('/'));
     }
   }
 
-  const files   = all.filter(x => !x.isDir);
-  const folders = all.filter(x => x.isDir).sort((a, b) => a.path.split('/').length - b.path.split('/').length);
+  // Normalize livePub keys for comparison (Tauri join vs walk can differ on trailing style).
+  const liveNorm = new Set([...livePub].map(p => p.replace(/\\/g, '/').replace(/\/+$/, '')));
+
+  const files   = scoped.filter(x => !x.isDir);
+  const folders = scoped.filter(x => x.isDir).sort((a, b) => a.path.split('/').length - b.path.split('/').length);
 
   for (const { path: existingPath, isDir } of [...files, ...folders]) {
-    /* Files: exact match in livePub. Folders: live if any file was published inside them. */
-    if (!isDir && livePub.has(existingPath)) continue;
-    if (isDir  && liveFolderAncestors.has(existingPath)) continue;
+    const existingNorm = existingPath.replace(/\\/g, '/').replace(/\/+$/, '');
+    if (!isDir && liveNorm.has(existingNorm)) continue;
+    if (isDir  && (liveNorm.has(existingNorm) || liveFolderAncestors.has(existingNorm))) continue;
 
     const name = existingPath.split('/').pop()!;
     if (name.startsWith('🚫')) continue;
@@ -357,12 +372,46 @@ async function flagDisconnected(
       await rename(existingPath, flagged);
       const rel = existingPath.replace(targetDir, '').replace(/^\//, '');
       appendLog('disconnected', `  🚫 DISCONNECTED: ${rel}`);
-      addIssue({ category: 'disconnected', file: rel, reason: 'No longer in source [03] OUT' });
+      addIssue({ category: 'disconnected', file: rel, reason: 'No longer in source for this export layout' });
       stats.disconnected += 1;
     } catch {
       /* entry already moved as child of a renamed parent — ignore */
     }
   }
+}
+
+/** Relative path from source root → target, stripping stable-id suffixes on ancestors. */
+function nestedPublishRel(sourceRoot: string, absPath: string): string {
+  const root = sourceRoot.replace(/\\/g, '/').replace(/\/+$/, '');
+  const abs  = absPath.replace(/\\/g, '/').replace(/\/+$/, '');
+  let rel: string;
+  if (abs === root) {
+    rel = '';
+  } else if (abs.startsWith(root + '/')) {
+    rel = abs.slice(root.length + 1);
+  } else {
+    // Fallback: find root as a path prefix (handles mild join/realpath drift).
+    const idx = abs.toLowerCase().indexOf(root.toLowerCase() + '/');
+    rel = idx >= 0 ? abs.slice(idx + root.length + 1) : (abs.split('/').pop() ?? '');
+  }
+  const parts = rel.split('/').filter(Boolean);
+  return parts
+    .map((seg, i) => (i < parts.length - 1 ? stripStableId(seg) : seg))
+    .join('/');
+}
+
+/** Translate each path segment that looks like a tagged filename (files only for last segment). */
+function translatePackageRelativePath(
+  relativePath: string,
+  vocabMap: ReturnType<typeof buildVocabContext>,
+): string {
+  const parts = relativePath.split('/');
+  const rawName = parts.pop()!;
+  const dotIdx = rawName.lastIndexOf('.');
+  const ext = dotIdx > 0 ? rawName.slice(dotIdx) : '';
+  const stem = dotIdx > 0 ? rawName.slice(0, dotIdx) : rawName;
+  const translated = translateExportName(stem, ext, vocabMap);
+  return [...parts, translated].join('/');
 }
 
 /* ── Publish operation ──────────────────────────────────────────────────── */
@@ -376,67 +425,92 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
     return;
   }
 
+  const layout: DestExportLayout = ctx.localExportLayout ?? 'folders';
+  const includePackages = layout === 'folders' && !!ctx.localIncludePackages;
+
   appendLog('section', `━━━ ${dryRun ? 'DRY RUN' : 'PUBLISHING'} ━━━`);
   appendLog('dim', `  → ${targetFolder}`);
+  appendLog('dim', `  Layout: ${layout}${includePackages ? ' + nested packages' : ''}`);
 
-  const livePub = new Set<string>(); // all dest paths published this run
+  const livePub = new Set<string>();
+  const vocabMap = buildVocabContext(vocab);
 
-  if (ctx.localExportPackages) {
-    appendLog('dim', '  Mode: package folders (from source after Distribute)');
+  async function copyOne(srcPath: string, fileDest: string, logName: string) {
+    if (livePub.has(fileDest)) { stats.skipped += 1; return; }
+    livePub.add(fileDest);
+    const destParent = await dirname(fileDest);
+    livePub.add(destParent);
+
+    if (dryRun) {
+      appendLog('success', `  [DRY] → ${logName}`);
+      stats.published += 1;
+      return;
+    }
+    try {
+      await mkdir(destParent, { recursive: true });
+      if (!await isUnchanged(srcPath, fileDest)) {
+        await copyFile(srcPath, fileDest);
+        appendLog('success', `  ✓  ${logName}`);
+        stats.published += 1;
+      } else {
+        stats.skipped += 1;
+      }
+    } catch (err) {
+      appendLog('error', `  ✕  publish failed: ${logName} — ${err}`);
+      addIssue({ category: 'error', file: logName, reason: String(err) });
+      stats.errors += 1;
+    }
+  }
+
+  /* Optional: copy package folders into the target at their nested source-relative paths. */
+  async function publishNestedPackages() {
     const packages = await findPackageFolders(sourceFolder, settings);
     if (!packages.length) {
       appendLog('warn', `  No folders matching "${settings.packagePrefix}" — run Distribute packages first.`);
-      appendLog('section', '━━━ PUBLISH DONE — nothing to publish ━━━');
       return;
     }
-    appendLog('info', `  Found ${packages.length} package folder(s)`);
-
+    appendLog('info', `  Nested packages: ${packages.length} folder(s)`);
     for (const pkg of packages) {
-      const pkgName = await basename(pkg);
-      const destPkg = await join(targetFolder, pkgName);
+      const rel = nestedPublishRel(sourceFolder, pkg);
+      if (!rel || !rel.includes('/')) {
+        // Still valid if the package truly lives at source root; log for diagnosis.
+        appendLog('dim', `  Package at source root: ${rel || await basename(pkg)}`);
+      }
+      const destPkg = await join(targetFolder, rel);
       stats.pubFolders += 1;
       livePub.add(destPkg);
-      appendLog('section', `📦  ${pkgName}`);
+      appendLog('section', `📦  ${rel}`);
 
       const files = await collectPackageFiles(pkg, settings);
       if (!files.length) {
         appendLog('dim', '  └─ empty package — skipping');
         continue;
       }
-
       for (const { srcPath, relativePath } of files) {
-        const fileDest = await join(destPkg, relativePath);
-        if (livePub.has(fileDest)) { stats.skipped += 1; continue; }
-        livePub.add(fileDest);
-        const destParent = await dirname(fileDest);
-        livePub.add(destParent);
-
-        if (dryRun) {
-          appendLog('success', `  [DRY] → ${pkgName}/${relativePath}`);
-          stats.published += 1;
-          continue;
-        }
-
-        try {
-          await mkdir(destParent, { recursive: true });
-          if (!await isUnchanged(srcPath, fileDest)) {
-            await copyFile(srcPath, fileDest);
-            appendLog('success', `  ✓  ${relativePath}`);
-            stats.published += 1;
-          } else {
-            stats.skipped += 1;
-          }
-        } catch (err) {
-          appendLog('error', `  ✕  publish failed: ${relativePath} — ${err}`);
-          addIssue({ category: 'error', file: relativePath, reason: String(err) });
-          stats.errors += 1;
-        }
+        // Always translate shortcodes → full labels on the destination copy.
+        const destRel = translatePackageRelativePath(relativePath, vocabMap);
+        await copyOne(srcPath, await join(destPkg, destRel), `${rel}/${destRel}`);
       }
     }
-  } else {
-    const vocabMap = buildVocabContext(vocab);
+  }
 
-    /* Publish all files from dirPath into targetDir, translating filenames. */
+  if (layout === 'flat') {
+    appendLog('dim', '  Mode: flat (all files into target root)');
+    const assets = (ctx.collectedAssets?.length
+      ? ctx.collectedAssets
+      : await scanAllAssets(sourceFolder, settings));
+    stats.pubFolders += 1;
+    for (const srcPath of assets) {
+      const rawName = srcPath.split('/').pop()!;
+      if (!isPublishableFile(rawName) || rawName.includes('-thumb')) continue;
+      const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
+      const stem = ext ? rawName.slice(0, -ext.length) : rawName;
+      const translated = translateExportName(stem, ext, vocabMap);
+      await copyOne(srcPath, await join(targetFolder, translated), translated);
+    }
+  } else {
+    appendLog('dim', '  Mode: full folders (OUT tree)');
+
     async function publishDir(dirPath: string, targetDir: string) {
       const items = await listDir(dirPath);
       for (const item of items) {
@@ -447,28 +521,7 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
           const ext        = item.name.includes('.') ? '.' + item.name.split('.').pop()! : '';
           const stem       = ext ? item.name.slice(0, -ext.length) : item.name;
           const translated = translateExportName(stem, ext, vocabMap);
-          const fileDest   = await join(targetDir, translated);
-          if (livePub.has(fileDest)) { stats.skipped += 1; continue; }
-          livePub.add(fileDest);
-          if (dryRun) {
-            appendLog('success', `  [DRY] → ${translated}`);
-            stats.published += 1;
-          } else {
-            try {
-              await mkdir(targetDir, { recursive: true });
-              if (!await isUnchanged(fileSrc, fileDest)) {
-                await copyFile(fileSrc, fileDest);
-                appendLog('success', `  ✓  ${item.name} → ${translated}`);
-                stats.published += 1;
-              } else {
-                stats.skipped += 1;
-              }
-            } catch (err) {
-              appendLog('error', `  ✕  publish failed: ${item.name} — ${err}`);
-              addIssue({ category: 'error', file: item.name, reason: String(err) });
-              stats.errors += 1;
-            }
-          }
+          await copyOne(fileSrc, await join(targetDir, translated), `${item.name} → ${translated}`);
         } else if (item.isDirectory) {
           const subSrc    = await join(dirPath, item.name);
           const subTarget = await join(targetDir, item.name);
@@ -483,6 +536,8 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
       for (const e of entries) {
         if (shouldSkip(e.name, settings)) continue;
         if (!e.isDirectory) continue;
+        // Package dirs next to OUT are handled by publishNestedPackages when enabled.
+        if (isPackageFolder(e.name, settings)) continue;
         const childSrc = await join(src, e.name);
 
         if (isOutFolder(e.name, settings)) {
@@ -491,19 +546,24 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
         } else {
           const hasSiblingOut = entries.some(sib => sib.isDirectory && isOutFolder(sib.name, settings));
           if (hasSiblingOut) continue;
-          // Strip the folder-identity hash suffix — it's an internal source-side anchor
-          // (see domain/stableId.ts) and must never leak into a published/shared copy.
           await publishFolder(childSrc, await join(target, stripStableId(e.name)));
         }
       }
     }
 
     await publishFolder(sourceFolder, targetFolder);
+
+    if (includePackages) {
+      await publishNestedPackages();
+    }
   }
 
-  /* Orphan scan — skip if nothing was published (avoids false positives on empty runs) */
-  if (stats.published > 0 && !dryRun) {
-    await flagDisconnected(targetFolder, livePub, stats, appendLog, addIssue);
+  // Always scan for leftovers (even when every file was unchanged) so root package
+  // dumps from older publish modes get disconnected.
+  if (!dryRun) {
+    await flagDisconnected(targetFolder, livePub, stats, appendLog, addIssue, {
+      layout,
+    });
   }
 
   appendLog('section',
@@ -1337,7 +1397,7 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
   const cloudCache = await loadCloudCache();
   let cloudCacheDirty = false;
 
-  // Default OUT-tree file list (used when dest.exportPackages is false).
+  // Default OUT-tree file list (used when dest layout is folders or flat).
   const outFiles = (collectedAssets ?? []).map(srcPath => {
     const fileName = srcPath.split('/').pop()!;
     const dotIdx   = fileName.lastIndexOf('.');
@@ -1357,16 +1417,17 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
     nestedOverride: string | null;
   };
 
-  async function packageFileJobs(): Promise<CloudFileJob[]> {
+  async function packageFileJobsNested(): Promise<CloudFileJob[]> {
     const source = settings.sourceFolder;
     if (!source) return [];
     const packages = await findPackageFolders(source, settings);
     const jobs: CloudFileJob[] = [];
     for (const pkg of packages) {
-      const pkgName = await basename(pkg);
+      const relPkg = nestedPublishRel(source, pkg);
       const files = await collectPackageFiles(pkg, settings);
       for (const { srcPath, relativePath } of files) {
-        const fileName = relativePath.split('/').pop()!;
+        const destRel = translatePackageRelativePath(relativePath, vocabMap);
+        const fileName = destRel.split('/').pop()!;
         const dotIdx = fileName.lastIndexOf('.');
         const ext = dotIdx > 0 ? fileName.slice(dotIdx) : '';
         const stem = dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName;
@@ -1376,7 +1437,7 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
           ext,
           fileName,
           relativeDir: '',
-          nestedOverride: `${pkgName}/${relativePath}`,
+          nestedOverride: `${relPkg}/${destRel}`,
         });
       }
     }
@@ -1384,7 +1445,7 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
   }
 
   if (!outFiles.length) {
-    appendLog('dim', '  No OUT assets scanned — package-mode destinations may still export.');
+    appendLog('dim', '  No OUT assets scanned — destinations with nested packages may still export.');
   }
 
   appendLog('info', `  ${activeDests.length} destination(s)`);
@@ -1393,30 +1454,28 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
     const cfg = dest.config;
     if (cfg.type === 'local') continue;
 
-    const usePackages = dest.exportPackages === true;
-    let files: CloudFileJob[];
-    if (usePackages) {
-      files = await packageFileJobs();
-      if (!files.length) {
-        appendLog('warn', `  ${dest.name}: no package folders — run Distribute packages first.`);
-        continue;
-      }
-      appendLog('dim', `  ${dest.name}: package folders (${files.length} file(s))`);
-    } else {
-      files = outFiles;
-      if (!files.length) {
-        appendLog('dim', `  ${dest.name}: no assets — skipping.`);
-        continue;
-      }
-      const flatten = dest.flatExport === true;
-      if (flatten) {
-        appendLog('dim', `  ${dest.name}: flat export (folder structure ignored)`);
+    const { exportLayout: layout, includePackages } = resolveExportShape(dest);
+    const flatten = layout === 'flat';
+    let files: CloudFileJob[] = [...outFiles];
+
+    if (layout === 'folders' && includePackages) {
+      const pkgJobs = await packageFileJobsNested();
+      if (!pkgJobs.length) {
+        appendLog('warn', `  ${dest.name}: no package folders — run Distribute packages first (OUT folders still export).`);
       } else {
-        appendLog('dim', `  ${dest.name}: preserving folders under OUT`);
+        files = [...outFiles, ...pkgJobs];
+        appendLog('dim', `  ${dest.name}: folders + nested packages (${outFiles.length} OUT · ${pkgJobs.length} package file(s))`);
       }
+    } else if (flatten) {
+      appendLog('dim', `  ${dest.name}: flat export (folder structure ignored)`);
+    } else {
+      appendLog('dim', `  ${dest.name}: full folders under OUT`);
     }
 
-    const flatten = !usePackages && dest.flatExport === true;
+    if (!files.length) {
+      appendLog('dim', `  ${dest.name}: no assets — skipping.`);
+      continue;
+    }
 
     if (!dest.generateLink) {
       appendLog('info', `  → ${dest.name} (${cfg.type}) — uploading without link collection`);
@@ -1440,9 +1499,8 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
           : translateExportName(stem, ext, vocabMap);
         const nestedName = nestedOverride
           ?? (!flatten && relativeDir ? `${relativeDir}/${translated}` : translated);
-        // For gdrive folder path: parent dirs of nestedName when package mode
         const gdriveFolderPath = (() => {
-          if (usePackages) {
+          if (nestedOverride) {
             const parts = nestedName.split('/');
             parts.pop();
             const sub = parts.join('/');
@@ -1452,7 +1510,7 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
             ? [cfg.remotePath.replace(/\/$/, ''), relativeDir].filter(Boolean).join('/')
             : cfg.remotePath;
         })();
-        const gdriveFileName = usePackages
+        const gdriveFileName = nestedOverride
           ? nestedName.split('/').pop()!
           : translated;
 

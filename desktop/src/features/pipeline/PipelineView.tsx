@@ -6,7 +6,7 @@ import { useSettingsStore } from '../../store/settingsStore';
 import { usePipelineStore } from '../../store/pipelineStore';
 import { useVocabularyStore } from '../../store/vocabularyStore';
 import { useClientStore } from '../../store/clientStore';
-import { tokenStatus, cloudToken } from '../../domain/client';
+import { tokenStatus, cloudToken, resolveExportShape } from '../../domain/client';
 import type { CloudDestination, LocalDestConfig } from '../../domain/client';
 import { runPipeline, scanVersionMap, type RunContext } from '../../services/pipelineService';
 import type { CloudUrlEntry } from '../../services/pipelineService';
@@ -406,7 +406,8 @@ function ConfigSidebar() {
       originalUrls,
       cloudUrls,
       cloudDestinations: cloudDests,
-      localExportPackages: runLocalDest?.exportPackages === true,
+      localExportLayout: resolveExportShape(runLocalDest ?? {}).exportLayout,
+      localIncludePackages: resolveExportShape(runLocalDest ?? {}).includePackages,
       r2: r2Config,
       identityMigrated: !!activeClient?.identityMigrated,
     });
@@ -525,9 +526,10 @@ function ConfigSidebar() {
             checked={settings.doPublish}
             onChange={v => setField('doPublish', v)}
           />
-          {(localDest?.exportPackages || selectedDests.some(d => d.config.type !== 'local' && d.exportPackages)) && (
+          {(localDest && resolveExportShape(localDest).includePackages
+            || selectedDests.some(d => d.config.type !== 'local' && resolveExportShape(d).includePackages)) && (
             <p className="px-3 pb-2 text-[11px] text-[var(--text-muted)]">
-              Destinations with “export packages” need step 3 first (packages are built in source, then mirrored).
+              Destinations with nested packages need step 3 first (packages stay inside the folder tree).
             </p>
           )}
           <TaskRow

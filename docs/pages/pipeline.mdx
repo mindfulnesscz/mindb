@@ -53,25 +53,27 @@ Copy decisions use an mtime check (`isUnchanged`): if the destination file alrea
 
 ### 3 — Export to destinations
 
-Resolves the checked **local** destination’s machine path (or legacy `settings.targetFolder`).
+Resolves the checked **local** destination’s machine path (or legacy `settings.targetFolder`). Shape comes from `exportLayout` + optional `includePackages`:
 
-- **Default (OUT tree):** mirrors the source tree looking for `OUT`, publishes contents (filenames translated), recurses otherwise. Stable-identity hash suffixes (` __a1b2c3d4`) are stripped from folder names.
-- **`exportPackages` on the destination:** finds source folders matching the package prefix and copies each package directory into the target as a unit (files already renamed by Distribute). Run **Distribute packages** first.
+- **`folders` (default):** mirrors the source tree looking for `OUT`, publishes contents (filenames translated), recurses otherwise. Stable-identity hash suffixes (` __a1b2c3d4`) are stripped from folder names. Package folders next to OUT are skipped here unless packages are included.
+- **`flat`:** all publishable OUT files into the target root (no nesting).
+- **`includePackages` (with folders):** also copies package folders into the target at their **nested source-relative paths** (after Distribute) — not dumped at the target root. Package **filenames are translated** to full labels the same way as OUT/flat.
 
-Uses the same mtime-based `isUnchanged` check as Distribute. After a run, any previously-published file/folder no longer present in the source is renamed with a `🚫` prefix at the destination rather than deleted — a visible, reversible flag rather than a silent removal.
+Orphan `🚫` flagging always runs for the folders layout (including leftover root package dumps from older publish modes). Flat mode only flags root-level entries.
 
 ### 4 — Cloud export
 
-For each cloud destination (Dropbox / OneDrive / Google Drive) with a valid OAuth token:
+For each cloud destination with a valid OAuth token:
 
-- **Default:** uploads collected OUT assets, preserving folders under OUT unless `flatExport` is on.
-- **`exportPackages`:** uploads files from source package folders as `{packageName}/…` under `remotePath` (Distribute first). `flatExport` is ignored.
+- **`folders`:** uploads collected OUT assets, preserving folders under OUT.
+- **`flat`:** dumps files into `remotePath`.
+- **`includePackages`:** additionally uploads package files under their nested relative paths.
 
 Sharing links (when `generateLink`) are later written to Supabase for the portal.
 
 ### 5 — Publish to DAM
 
-Despite the name, this step doesn't touch Supabase or the CDN — it generates the human-readable Obsidian vault: one markdown note per asset with inherited taxonomy tags, regenerable on every run.
+Despite the name, this step doesn't touch Supabase or the CDN — it generates the human-readable Obsidian vault: one markdown note per asset with inherited taxonomy tags, regenerable on every run. `_X` canvases are written flat under `05 DAM/`. See [Obsidian DAM output](/desktop/obsidian).
 
 ### Supabase sync
 

@@ -41,7 +41,7 @@ dimension (entity | angle | format)
 - Change dimension labels (admin)
 - Create / rename / delete **parent groups**
 - Create / edit leaf tags (name, shortcode, key, parent)
-- **Import from JSON** (`taxonomy.sample.json` shape) for bulk bootstrap
+- **Import from JSON** / **Export JSON** (`taxonomy.sample.json` shape) for bulk bootstrap or backup
 
 **Desktop** — Vocabulary screen
 
@@ -80,8 +80,9 @@ Each destination in `clients.cloud_destinations` includes:
 | `minRole` | Minimum hub role that may see this dest’s share links |
 | `showInPortal` | Whether links appear on asset detail at all |
 | `allowRevealLocal` | Whether “Reveal in Finder” is offered for roles ≥ `minRole` |
-| `exportPackages` | When true, desktop mirrors **source package folders** (after Distribute) instead of the OUT tree — local and cloud |
-| `generateLink` / `flatExport` / `enabled` | Pipeline behavior (`flatExport` ignored when `exportPackages`) |
+| `exportLayout` | Required: `folders` (OUT tree) \| `flat` (one folder) |
+| `includePackages` | Optional with `folders`: also copy package folders **nested** at their source-relative paths (after Distribute). Never dumps packages alone at target root. |
+| `generateLink` / `enabled` | Pipeline behavior |
 | `config.token` | **Always null in DB** — tokens live only on the workstation |
 
 Public OAuth app ids may be stored in the portal definition. Google **client secret** and all refresh/access tokens stay on desktop.
@@ -91,7 +92,7 @@ Public OAuth app ids may be stored in the portal definition. Google **client sec
 **Portal** — Admin → client drawer → **Export destinations**
 
 - Add / edit / remove destination structure
-- Set `minRole`, portal visibility, Reveal flag, generate-link, **export package folders**, flat export
+- Set `minRole`, portal visibility, Reveal flag, generate-link, **export layout** (`folders` / `flat`) and optional **include packages**
 - Do **not** set local filesystem paths (those are per machine)
 
 **Desktop** — Settings → Cloud destinations
@@ -143,7 +144,7 @@ Desktop must be running with that client selected and a valid source folder. Wit
 
 1. Portal: add Export destination (`role`, `minRole`, remote path / package flag, generate link)  
 2. Desktop: Cloud destinations → Sync → set local path or Connect OAuth  
-3. Pipeline: check the destination → run (Distribute first if `exportPackages`)  
+3. Pipeline: check the destination → run (Distribute first if `includePackages`)  
 4. Confirm asset detail Source links for a test member role  
 
 **Someone can’t see a Drive link**
