@@ -420,6 +420,7 @@ async function collectOutDirInfos(
 
 async function updateDamCanvas(
   noteFolder: string,
+  canvasDir: string,
   vault: string,
   noteSourceMap: Map<string, [string[], string[]]>,
   appendLog: (t: LogType, m: string) => void,
@@ -440,19 +441,22 @@ async function updateDamCanvas(
   await collectNotes(noteFolder);
   if (!allNotes.length) return null;
 
-  // Find or name the canvas file (always lives directly in noteFolder)
-  const topEntries = await listDir(noteFolder);
-  const existing = topEntries.find(e => e.isFile && e.name.endsWith('.canvas') && e.name.startsWith('_X '));
+  // Canvas files live flat in canvasDir (DAM root), one per scope — not nested with notes.
+  const fn = noteFolder.split('/').pop()!;
+  const label = fn.replace(/^\[\d+\]\s*/, '') || fn;
+  await mkdir(canvasDir, { recursive: true }).catch(() => {});
+  const topEntries = await listDir(canvasDir);
+  const existing = topEntries.find(
+    e => e.isFile && e.name.endsWith('.canvas') && e.name.startsWith(`_X ${label}`),
+  );
   let cols = DEFAULT_COLS;
   let canvasPath: string;
   if (existing) {
     const m = existing.name.match(/-c(\d+)/);
     if (m) cols = parseInt(m[1], 10);
-    canvasPath = await join(noteFolder, existing.name);
+    canvasPath = await join(canvasDir, existing.name);
   } else {
-    const fn = noteFolder.split('/').pop()!;
-    const label = fn.replace(/^\[\d+\]\s*/, '') || fn;
-    canvasPath = await join(noteFolder, `_X ${label} -c3.canvas`);
+    canvasPath = await join(canvasDir, `_X ${label} -c3.canvas`);
   }
 
   const noteFolderRel = relativeTo(noteFolder, vault);
@@ -659,12 +663,15 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
   appendLog('dim', `  → ${settings.vaultFolder}`);
 
   const vocabMap = buildVocabContext(vocab);
-  const damRoot  = await join(settings.vaultFolder, '05 DAM', '01 EXPORTS');
-  const attRoot  = await join(settings.vaultFolder, '10 ATTACHMENTS');
-  const width    = parseInt(String(settings.thumbWidth),  10) || 320;
-  const quality  = parseInt(String(settings.thumbQuality), 10) || 70;
+  const damFolder = await join(settings.vaultFolder, '05 DAM');
+  const damRoot   = await join(damFolder, '01 EXPORTS');
+  const canvasDir = damFolder; // flat _X canvases at DAM root for easy access
+  const attRoot   = await join(settings.vaultFolder, '10 ATTACHMENTS');
+  const width     = parseInt(String(settings.thumbWidth),  10) || 320;
+  const quality   = parseInt(String(settings.thumbQuality), 10) || 70;
 
   appendLog('dim', `  DAM root: ${damRoot}`);
+  appendLog('dim', `  Canvases: ${canvasDir}`);
 
   const anchors = await findPackageAnchors(settings.sourceFolder, settings);
   appendLog('dim', `  Anchors (${anchors.length}): ${anchors.map(a => a.split('/').pop()).join(', ') || 'none'}`);
@@ -882,12 +889,12 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
     await walkOrphanNotes(damRoot);
   }
 
-  // ── Canvas — one per scope anchor (noteBase) ──────────────────────────
+  // ── Canvas — one per scope, written flat into 05 DAM/ ─────────────────
   appendLog('dim', `  Canvas bases (${noteBases.size}): ${[...noteBases].map(f => f.split('/').pop()).join(', ') || 'none'}`);
   const liveCanvasPaths = new Set<string>();
   for (const folder of [...noteBases].sort()) {
     try {
-      const cp = await updateDamCanvas(folder, settings.vaultFolder, noteSourceMap, appendLog);
+      const cp = await updateDamCanvas(folder, canvasDir, settings.vaultFolder, noteSourceMap, appendLog);
       if (cp) {
         liveCanvasPaths.add(cp);
       } else {
@@ -899,12 +906,15 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
   }
 
   // ── Pass 2: orphaned canvases + empty folders (AFTER canvas generation) ─
-  if (await fileExists(damRoot)) {
-    async function walkOrphanCanvases(dir: string) {
+  // Scan DAM root for live/orphan flat canvases, and EXPORTS tree for leftovers
+  // from the old nested placement so they get moved to Trash.
+  if (await fileExists(damRoot) || await fileExists(canvasDir)) {
+    async function walkOrphanCanvases(dir: string, recurse: boolean) {
       for (const e of await listDir(dir)) {
+        if (e.name.startsWith('🗑')) continue; // never touch Trash
         const childPath = await join(dir, e.name);
         if (e.isDirectory) {
-          await walkOrphanCanvases(childPath);
+          if (recurse) await walkOrphanCanvases(childPath, true);
         } else if (e.isFile && e.name.endsWith('.canvas') && e.name.startsWith('_X ') && !e.name.startsWith('🚫')) {
           if (!liveCanvasPaths.has(childPath)) {
             try { await trashItem(childPath, 'Scope removed — moved to Trash'); } catch (err) {
@@ -938,8 +948,11 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
       return false;
     }
 
-    await walkOrphanCanvases(damRoot);
-    await pruneEmptyDirs(damRoot);
+    await walkOrphanCanvases(canvasDir, false);
+    if (await fileExists(damRoot)) {
+      await walkOrphanCanvases(damRoot, true);
+      await pruneEmptyDirs(damRoot);
+    }
   }
 
   if (disconnectedCount > 0) {
