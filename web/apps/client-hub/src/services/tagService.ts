@@ -96,8 +96,19 @@ export async function createTag(input: Omit<Tag, 'id'>): Promise<Tag> {
 export async function updateTag(id: string, input: Partial<Omit<Tag, 'id'>>): Promise<Tag> {
   if (!supabase) throw new Error('Supabase not configured')
 
-  const existing = await supabase.from('tags').select('shortcode').eq('id', id).single()
-  const prevShortcode = (existing.data as { shortcode?: string | null } | null)?.shortcode ?? null
+  const existing = await supabase
+    .from('tags')
+    .select('shortcode,name,client_id,dimension')
+    .eq('id', id)
+    .single()
+  const prev = existing.data as {
+    shortcode?: string | null
+    name?: string
+    client_id?: string | null
+    dimension?: string
+  } | null
+  const prevShortcode = prev?.shortcode ?? null
+  const prevName = (prev?.name ?? '').trim()
 
   const patch: TablesUpdate<'tags'> = {}
   if (input.name !== undefined) patch.name = input.name
@@ -125,7 +136,78 @@ export async function updateTag(id: string, input: Partial<Omit<Tag, 'id'>>): Pr
     })
   }
 
+  // Display labels on assets are stored as strings (name / entities / …). When a
+  // tag's full name changes on the hub, rewrite those immediately so the gallery
+  // doesn't wait for a desktop pipeline run.
+  const nextName = tag.name.trim()
+  if (
+    input.name !== undefined &&
+    prevName &&
+    nextName &&
+    prevName !== nextName &&
+    tag.clientId
+  ) {
+    await rewriteAssetLabelsForTagRename(tag.clientId, prevName, nextName)
+  }
+
   return tag
+}
+
+/** Swap a tag display label across client assets (exact array entries + name tokens). */
+async function rewriteAssetLabelsForTagRename(
+  clientId: string,
+  fromLabel: string,
+  toLabel: string,
+): Promise<void> {
+  if (!supabase) return
+
+  const { data: rows, error } = await supabase
+    .from('assets')
+    .select('id,name,entities,formats,angles,tags')
+    .eq('client_id', clientId)
+
+  if (error || !rows?.length) return
+
+  const escaped = fromLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const nameTokenRe = new RegExp(`(^|\\s)${escaped}(?=\\s|—|$)`, 'g')
+
+  function mapLabels(list: unknown): string[] | null {
+    if (!Array.isArray(list)) return null
+    let changed = false
+    const next = list.map(item => {
+      if (typeof item !== 'string') return item
+      if (item === fromLabel) { changed = true; return toLabel }
+      return item
+    })
+    return changed ? (next as string[]) : null
+  }
+
+  for (const row of rows as Array<{
+    id: string
+    name: string
+    entities: string[] | null
+    formats: string[] | null
+    angles: string[] | null
+    tags: string[] | null
+  }>) {
+    const patch: TablesUpdate<'assets'> = {}
+    const entities = mapLabels(row.entities)
+    const formats = mapLabels(row.formats)
+    const angles = mapLabels(row.angles)
+    const tagsArr = mapLabels(row.tags)
+    if (entities) patch.entities = entities
+    if (formats) patch.formats = formats
+    if (angles) patch.angles = angles
+    if (tagsArr) patch.tags = tagsArr
+
+    if (typeof row.name === 'string' && row.name.includes(fromLabel)) {
+      const nextName = row.name.replace(nameTokenRe, `$1${toLabel}`)
+      if (nextName !== row.name) patch.name = nextName
+    }
+
+    if (!Object.keys(patch).length) continue
+    await supabase.from('assets').update(patch).eq('id', row.id)
+  }
 }
 
 export async function deleteTag(id: string): Promise<void> {

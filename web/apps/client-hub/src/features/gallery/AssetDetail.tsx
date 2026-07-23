@@ -559,13 +559,20 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
           </p>
         </div>
 
-        {/* Tags */}
+        {/* Tags — entity / angle / format (same order as filename convention) */}
         <div className="flex flex-wrap gap-1.5">
-          <span className="text-[11px] font-sans font-medium bg-gray-150 px-2 py-1 rounded-chip">
-            {asset.entity}
-          </span>
+          {(asset.entities?.length ? asset.entities : [asset.entity].filter(Boolean)).map(e => (
+            <span key={`e-${e}`} className="text-[11px] font-sans font-medium bg-gray-150 px-2 py-1 rounded-chip">
+              {e}
+            </span>
+          ))}
+          {(asset.angles?.length ? asset.angles : [asset.angle].filter(Boolean)).map(a => (
+            <span key={`a-${a}`} className="text-[11px] font-sans font-medium bg-gray-150 px-2 py-1 rounded-chip">
+              {a}
+            </span>
+          ))}
           {asset.formats.map(f => (
-            <span key={f} className="text-[11px] font-sans font-medium bg-gray-150 px-2 py-1 rounded-chip">
+            <span key={`f-${f}`} className="text-[11px] font-sans font-medium bg-gray-150 px-2 py-1 rounded-chip">
               {f}
             </span>
           ))}
