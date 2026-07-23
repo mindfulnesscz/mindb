@@ -4,7 +4,7 @@ import { canApprove, canDownload, canRate, canComment, MOCK_COMMENTS } from '@dc
 import { useRole } from '../../context/RoleContext'
 import { useAuth } from '../../context/AuthContext'
 import { webAssetActions } from '../../lib/assetActions'
-import { updateAssetStatus, fetchChildAssets, fetchVariants, updateAssetPerm, deleteAsset } from '../../services/assetService'
+import { updateAssetStatus, fetchChildAssets, fetchVariants, updateAssetPerm, deleteAsset, assetFacetLabels } from '../../services/assetService'
 import { fetchComments, addComment, deleteComment, type RealComment } from '../../services/commentService'
 import { fetchMyRating, upsertRating } from '../../services/ratingService'
 import { trackEvent, fetchEventCounts, type EventCounts } from '../../services/eventService'
@@ -559,21 +559,11 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
           </p>
         </div>
 
-        {/* Tags — entity / angle / format (same order as filename convention) */}
+        {/* Tags — entity / angle / format, deduped if the same label appears in more than one dimension */}
         <div className="flex flex-wrap gap-1.5">
-          {(asset.entities?.length ? asset.entities : [asset.entity].filter(Boolean)).map(e => (
-            <span key={`e-${e}`} className="text-[11px] font-sans font-medium bg-gray-150 px-2 py-1 rounded-chip">
-              {e}
-            </span>
-          ))}
-          {(asset.angles?.length ? asset.angles : [asset.angle].filter(Boolean)).map(a => (
-            <span key={`a-${a}`} className="text-[11px] font-sans font-medium bg-gray-150 px-2 py-1 rounded-chip">
-              {a}
-            </span>
-          ))}
-          {asset.formats.map(f => (
-            <span key={`f-${f}`} className="text-[11px] font-sans font-medium bg-gray-150 px-2 py-1 rounded-chip">
-              {f}
+          {assetFacetLabels(asset).map(label => (
+            <span key={label} className="text-[11px] font-sans font-medium bg-gray-150 px-2 py-1 rounded-chip">
+              {label}
             </span>
           ))}
         </div>

@@ -3,7 +3,7 @@ import { useRole } from '../../context/RoleContext'
 import { getDefaultFilters, canDownload, type FilterState, type Asset } from '@dc-hub/asset-library'
 import { useAssets } from '../../hooks/useAssets'
 import { useTags, type TagsByDimension, type TagGroup } from '../../hooks/useTags'
-import { deleteDisconnectedAssets, fetchAsset } from '../../services/assetService'
+import { deleteDisconnectedAssets, fetchAsset, assetFacetLabels } from '../../services/assetService'
 import { webAssetActions } from '../../lib/assetActions'
 import AssetDetail from './AssetDetail'
 import {
@@ -147,24 +147,16 @@ function AssetCard({
           {asset.name}
         </h3>
         <div className="flex flex-wrap gap-1 mb-3">
-          {(asset.entities?.length ? asset.entities : [asset.entity].filter(Boolean)).map(e => (
-            <span key={`e-${e}`} className="text-[11px] font-sans font-medium bg-gray-150 px-2 py-0.5 rounded-chip">
-              {e}
+          {assetFacetLabels(asset).map(label => (
+            <span key={label} className="text-[11px] font-sans font-medium bg-gray-150 px-2 py-0.5 rounded-chip">
+              {label}
             </span>
           ))}
-          {(asset.angles?.length ? asset.angles : [asset.angle].filter(Boolean)).map(a => (
-            <span key={`a-${a}`} className="text-[11px] font-sans font-medium bg-gray-150 px-2 py-0.5 rounded-chip">
-              {a}
+          {asset.version?.trim() ? (
+            <span className="text-[11px] font-sans font-medium border border-border px-2 py-0.5 rounded-chip text-text-muted">
+              {asset.version}
             </span>
-          ))}
-          {asset.formats.map(f => (
-            <span key={`f-${f}`} className="text-[11px] font-sans font-medium bg-gray-150 px-2 py-0.5 rounded-chip">
-              {f}
-            </span>
-          ))}
-          <span className="text-[11px] font-sans font-medium border border-border px-2 py-0.5 rounded-chip text-text-muted">
-            {asset.version}
-          </span>
+          ) : null}
         </div>
         <div className="flex items-center gap-3 text-text-muted text-xs font-sans">
           {role !== 'public' && (

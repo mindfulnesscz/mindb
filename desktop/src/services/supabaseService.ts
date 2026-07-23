@@ -292,20 +292,34 @@ export function parseAssetForSupabase(assetStem: string, vocab: VocabularyData) 
   const formatTags = parsed.tags.filter(t => t.slot === 'format');
   const angleTags  = parsed.tags.filter(t => t.slot === 'angle');
 
-  const nameParts = [
-    ...parsed.tags.map(t => t.label),
-    ...parsed.unknownTags.map(u => `[${u}]`),
-  ];
+  // Preserve filename order; drop duplicate labels (same shortcode twice, or
+  // two shortcodes sharing one display name across slots).
+  const nameParts: string[] = [];
+  const seenLabels = new Set<string>();
+  for (const t of parsed.tags) {
+    if (seenLabels.has(t.label)) continue;
+    seenLabels.add(t.label);
+    nameParts.push(t.label);
+  }
+  for (const u of parsed.unknownTags) {
+    const token = `[${u}]`;
+    if (seenLabels.has(token)) continue;
+    seenLabels.add(token);
+    nameParts.push(token);
+  }
   let name = nameParts.join(' ');
   if (parsed.description) name += ` — ${parsed.description}`;
+
+  const uniqLabels = (tags: typeof parsed.tags) =>
+    [...new Set(tags.map(t => t.label).filter(Boolean))];
 
   return {
     shortcode,
     name:       name.trim() || shortcode,
-    entities:   entityTags.map(t => t.label),
-    formats:    formatTags.map(t => t.label),
-    angles:     angleTags.map(t => t.label),
-    tags:       parsed.tags.map(t => t.label),
+    entities:   uniqLabels(entityTags),
+    formats:    uniqLabels(formatTags),
+    angles:     uniqLabels(angleTags),
+    tags:       [...seenLabels].filter(l => !l.startsWith('[')),
     version:    parsed.version ?? '',
     year_month: parsed.yymm    ?? null,
   };

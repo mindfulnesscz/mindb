@@ -61,6 +61,24 @@ function toAsset(row: AssetRowWithStats): Asset {
   }
 }
 
+/** Entity → angle → format labels for pills, deduped (same label in two dimensions once). */
+export function assetFacetLabels(asset: Asset): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  const push = (labels: string[]) => {
+    for (const raw of labels) {
+      const label = raw.trim()
+      if (!label || seen.has(label)) continue
+      seen.add(label)
+      out.push(label)
+    }
+  }
+  push(asset.entities?.length ? asset.entities : [asset.entity].filter(Boolean))
+  push(asset.angles?.length ? asset.angles : [asset.angle].filter(Boolean))
+  push(asset.formats ?? [])
+  return out
+}
+
 function parseDownloadUrls(raw: unknown): Asset['downloadUrls'] {
   if (!Array.isArray(raw)) return []
   return raw
