@@ -13,6 +13,7 @@ import type { CloudUrlEntry } from '../../services/pipelineService';
 import { exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary, fetchClientInventory, requestR2Grant, processRenameTasks } from '../../services/supabaseService';
 import { deleteCdnObjects } from '../../services/pipelineService';
 import { saveClients } from '../../services/clientService';
+import { loadVocabulary } from '../../services/vocabService';
 import { notifyRunComplete } from '../../services/notifyService';
 import { groupAssets } from '../../domain/assetGrouping';
 import css from './PipelineView.module.css';
@@ -307,7 +308,6 @@ function ConfigSidebar() {
 
   async function handleRun() {
     startRun();
-    const vocabData = vocab ?? { _schema_version: '2.1.0', _comment: '', tags: [] };
     const runLocalDest = selectedDests.find(d => d.config.type === 'local');
     const hasCloudDests = selectedDests.some(d => d.config.type !== 'local');
     const effectiveSettings = {
@@ -339,6 +339,25 @@ function ConfigSidebar() {
     } : null;
     const clientId: string | null = sbConfig ? activeClient!.id : null;
     const log = appendLog as (type: string, msg: string) => void;
+
+    // Portal tags are SoT for labels. Refresh before the run so asset names /
+    // export translation pick up hub renames (e.g. Handover → Handout). Keep
+    // local unpublished edits instead — those are published after sync below.
+    const vocabDirty =
+      useVocabularyStore.getState().dirty || !!useVocabularyStore.getState().data?._unpublished;
+    let vocabData = vocab ?? { _schema_version: '2.1.0', _comment: '', tags: [] };
+    if (clientId && !vocabDirty) {
+      try {
+        const fresh = await loadVocabulary(clientId, { forceFromDb: true });
+        vocabData = fresh;
+        useVocabularyStore.getState().setData(fresh, { dirty: false });
+        log('dim', '  Vocabulary refreshed from portal');
+      } catch (e) {
+        log('warn', `  Vocabulary refresh skipped — using cached labels (${e})`);
+      }
+    } else if (vocabDirty) {
+      log('dim', '  Using local unpublished vocabulary (will publish leaves after sync)');
+    }
 
     let r2Config: RunContext['r2'];
     if (sbConfig && clientId && (settings.doThumbnails || settings.doCdnOriginals)) {
@@ -436,7 +455,14 @@ function ConfigSidebar() {
 
         // Sync vocabulary tag groups so the web portal can show collapsible subcategories
         await processRenameTasks(sbConfig, clientId, log);
-        await syncTagsFromVocabulary(vocabData, clientId, sbConfig, log);
+        // Only push leaves when desktop has unpublished edits — otherwise portal
+        // renames (label SoT) would be overwritten by a stale local cache.
+        if (vocabDirty) {
+          await syncTagsFromVocabulary(vocabData, clientId, sbConfig, log);
+          useVocabularyStore.getState().markClean();
+        } else {
+          log('dim', '  Tag sync skipped — portal vocabulary is already authoritative');
+        }
       }
 
       if (effectiveSettings.sourceFolder) {
