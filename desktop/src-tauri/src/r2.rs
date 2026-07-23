@@ -241,10 +241,16 @@ pub async fn upload_to_r2(
     session_token: Option<String>,
 ) -> Result<R2UploadResult, String> {
     let endpoint = endpoint.trim_end_matches('/');
-    let public_url = format!("{}/{object_key}", public_domain.trim_end_matches('/'));
 
     let body      = tokio::fs::read(&file_path).await.map_err(|e| format!("Cannot read {file_path}: {e}"))?;
     let body_hash = sha256_hex(&body);
+    // Content-hash query so gallery URLs change when bytes change (version-stable keys
+    // otherwise keep the same path and browsers serve a cached older image).
+    let v = &body_hash[..12.min(body_hash.len())];
+    let public_url = format!(
+        "{}/{object_key}?v={v}",
+        public_domain.trim_end_matches('/')
+    );
 
     // Skip upload only if the object at this key already has this exact content.
     if remote_exists != Some(false) {
@@ -259,9 +265,15 @@ pub async fn upload_to_r2(
 
     let (datetime, date) = utc_now();
     let host      = host_from(endpoint);
+    // Long cache is safe: public URLs carry ?v=<content-hash>, so a new file gets a new URL.
+    let cache_control = "public, max-age=31536000, immutable";
 
     let canonical_uri = format!("/{}/{}", uri_encode(&bucket, true), uri_encode(&object_key, false));
-    let mut extra: Vec<(&str, &str)> = vec![("content-type", &content_type), ("x-amz-meta-sha256", &body_hash)];
+    let mut extra: Vec<(&str, &str)> = vec![
+        ("cache-control", cache_control),
+        ("content-type", &content_type),
+        ("x-amz-meta-sha256", &body_hash),
+    ];
     if let Some(ref t) = session_token { extra.push(("x-amz-security-token", t)); }
     let auth = sign("PUT", host, &canonical_uri, "", &body_hash,
                     &extra, &datetime, &date, &access_key_id, &secret_key);
@@ -272,6 +284,7 @@ pub async fn upload_to_r2(
         .header("host",                  host)
         .header("x-amz-date",           &datetime)
         .header("x-amz-content-sha256", &body_hash)
+        .header("cache-control",         cache_control)
         .header("content-type",          &content_type)
         .header("x-amz-meta-sha256",     &body_hash)
         .header("authorization",         &auth);

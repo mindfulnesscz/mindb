@@ -64,6 +64,8 @@ Portal tags DB  ──load / Sync──►  Desktop vocabulary cache
 
 Filename parsing and package scaffolding still depend on shortcodes. Changing a shortcode without a rename pipeline pass will break discovery for files that still use the old token. See [Naming and vocabulary](/desktop/naming) and [Taxonomy](/data-model/taxonomy).
 
+Changing a tag’s **display name** (full label) on the portal updates matching `assets.name` / facet arrays immediately. Desktop pipeline refreshes vocabulary from the portal at the start of each run (unless there are unpublished local leaf edits), so export translation and the next sync keep the new labels — and no longer overwrite portal renames from a stale cache.
+
 ---
 
 ## Export destinations
@@ -81,7 +83,7 @@ Each destination in `clients.cloud_destinations` includes:
 | `showInPortal` | Whether links appear on asset detail at all |
 | `allowRevealLocal` | Whether “Reveal in Finder” is offered for roles ≥ `minRole` |
 | `exportLayout` | Required: `folders` (OUT tree) \| `flat` (one folder) |
-| `includePackages` | Optional with `folders`: also copy package folders **nested** at their source-relative paths (after Distribute). Never dumps packages alone at target root. |
+| `includePackages` | Optional with `folders`: refresh source packages from OUT, then copy them **nested** at source-relative paths. Never dumps packages alone at target root. Source packages delete orphans (no `🚫`); targets may disconnect. |
 | `generateLink` / `enabled` | Pipeline behavior |
 | `config.token` | **Always null in DB** — tokens live only on the workstation |
 

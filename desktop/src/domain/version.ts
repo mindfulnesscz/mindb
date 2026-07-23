@@ -1,6 +1,4 @@
-/* Version parsing — mirrors the Python POC's VERSION_RE logic */
-
-const VERSION_RE = /^(.*?)[-_]?(v(\d+)(?:[.\-](\d+))?(?:[.\-](\d+))?)(\.[^.]+)?$/i;
+/* Version parsing — find trailing vMAJOR[.MINOR[.PATCH]] before the extension. */
 
 export interface ParsedVersion {
   base:    string;
@@ -8,13 +6,30 @@ export interface ParsedVersion {
   version: [number, number, number];
 }
 
+const EXT_RE = /^\.[A-Za-z0-9]{1,8}$/;
+const VERSION_AT_END_RE = /[vV](\d+)(?:[.\-](\d+))?(?:[.\-](\d+))?$/;
+
 export function parseVersion(filename: string): ParsedVersion | null {
-  const m = VERSION_RE.exec(filename);
-  if (!m) return null;
+  let stem = filename;
+  let ext = '';
+  const dot = filename.lastIndexOf('.');
+  if (dot > 0 && EXT_RE.test(filename.slice(dot))) {
+    stem = filename.slice(0, dot);
+    ext = filename.slice(dot);
+  }
+
+  const m = VERSION_AT_END_RE.exec(stem);
+  if (!m || m.index === undefined) return null;
+
+  const base = stem.slice(0, m.index).replace(/[\s_-]+$/, '');
   return {
-    base:    m[1],
-    ext:     m[6] ?? '',
-    version: [parseInt(m[3] ?? '0'), parseInt(m[4] ?? '0'), parseInt(m[5] ?? '0')],
+    base,
+    ext,
+    version: [
+      parseInt(m[1] ?? '0', 10),
+      parseInt(m[2] ?? '0', 10),
+      parseInt(m[3] ?? '0', 10),
+    ],
   };
 }
 

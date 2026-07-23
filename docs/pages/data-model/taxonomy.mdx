@@ -38,4 +38,6 @@ Sample file in the portal app: `web/apps/client-hub/public/taxonomy.sample.json`
 
 Parse/validate/import: `taxonomyImport.ts` (`parseAndValidateTaxonomyJson`, `importTaxonomyToClient`). Export rebuilds the same document from the live DB (`buildTaxonomyDocument` / **Export JSON**). Desktop loads shortcoded tags from the DB for filename parsing and groups them by parent.
 
+Renaming a leaf’s **display name** on the portal also rewrites that label on the client’s asset rows (`name`, `entities` / `angles` / `formats`, `tags`) so the gallery updates without waiting for a desktop run. Shortcode renames still enqueue `rename_tasks` for filesystem updates.
+
 See [Platform division](/getting-started/platform-division) and [Naming and vocabulary](/desktop/naming).

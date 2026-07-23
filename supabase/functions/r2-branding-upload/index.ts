@@ -135,7 +135,11 @@ Deno.serve(async (req) => {
   });
   const putRes = await aws.fetch(`${creds.endpoint}/${bucket}/${objectKey}`, {
     method: 'PUT',
-    headers: { 'Content-Type': content_type ?? `image/${ext}` },
+    headers: {
+      'Content-Type': content_type ?? `image/${ext}`,
+      // Long cache OK — logo_url includes ?v=<hash> so replacements get a new URL.
+      'Cache-Control': 'public, max-age=31536000, immutable',
+    },
     body: bytes,
   });
   if (!putRes.ok) {
@@ -144,7 +148,9 @@ Deno.serve(async (req) => {
     return json(req, 502, { error: 'Upload failed' });
   }
 
-  const logoUrl = `${publicDomain.replace(/\/+$/, '')}/${objectKey}`;
+  const hashBuf = await crypto.subtle.digest('SHA-256', bytes);
+  const hashHex = [...new Uint8Array(hashBuf)].map(b => b.toString(16).padStart(2, '0')).join('');
+  const logoUrl = `${publicDomain.replace(/\/+$/, '')}/${objectKey}?v=${hashHex.slice(0, 12)}`;
   const { error: updErr } = await supa.from('clients').update({ logo_url: logoUrl }).eq('id', client_id);
   if (updErr) return json(req, 500, { error: updErr.message });
 
