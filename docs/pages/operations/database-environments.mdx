@@ -188,11 +188,10 @@ Update env `R2_PUBLIC_DOMAIN`, then run the pipeline once so URL columns are rew
 **Symptom → cause cheat-sheet** (all seen in the wild):
 
 - **Portal thumbnails blank, but the image opens fine in a new tab** — the CDN domain has Cloudflare **Hotlink Protection** on (blocks cross-site `<img>` by Referer). Turn it off for a public asset CDN; the portal also loads images with `referrerPolicy="no-referrer"` as a belt-and-braces.
-- **Thumbnail requests return `200 text/html` (the app's `index.html`)** — the stored `thumbnail_url`s are **relative/hostless**, so the browser resolves them against the portal origin. Cause: the client synced with an **empty `r2_public_domain`** (URL became `"" + /thumbnails/…`). Fix: set the client's Public domain, **null the poisoned rows** (`update assets set thumbnail_url=null, download_url=null where client_id=…`) so the next run doesn't skip them, then run the pipeline.
-- **CDN URL returns `403`** — the object isn't in the bucket (never uploaded, or wrong bucket). Re-run the pipeline with the correct `r2_bucket`.
+- **Thumbnail requests return `200 text/html` (the app's `index.html`)** — the stored `thumbnail_url`s are **relative/hostless**, so the browser resolves them against the portal origin. Cause: historically an empty public domain. Fix: set env `R2_PUBLIC_DOMAIN`, null poisoned rows if needed (`update assets set thumbnail_url=null, download_url=null where client_id=…`), then re-run CDN + sync.
+- **CDN URL returns `403`** — the object isn't in the bucket (never uploaded, or wrong bucket). Re-run the pipeline with the correct environment secrets.
 - **Download saves a `.html` file** — same as the `text/html` case: `download_url` points at an HTML 404/error page, not the object.
-
-The `update … set thumbnail_url=null` step matters because the pipeline pre-loads existing URLs from the DB and skips re-uploading anything it thinks is already there — stale URLs would otherwise make it skip forever.
+- **Gallery shows an older thumbnail after a version bump** — stable object keys overwrite the same path; public URLs now include `?v=<content-hash>`. Re-run CDN + sync so rows pick up the new query. Local 503 `name resolution failed` usually means the edge runtime container exited — restart it.
 
 ### End-to-end rehearsal
 

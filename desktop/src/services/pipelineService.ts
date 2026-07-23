@@ -129,9 +129,9 @@ async function findPackageFolders(root: string, s: AppSettings): Promise<string[
 }
 
 /**
- * Same sources Distribute uses: sibling OUT folders next to a package.
- * Package *export* must prefer these over the package folder itself — the
- * package can still hold an older translated copy from a previous Distribute.
+ * Files to put in a package export: sibling OUT next to the package folder
+ * (same layout Distribute uses). Do NOT read the package folder — it often
+ * still holds an older translated copy.
  */
 async function collectSiblingOutSources(
   packageDir: string,
@@ -139,36 +139,152 @@ async function collectSiblingOutSources(
 ): Promise<string[]> {
   const parent = await dirname(packageDir);
   const parentEntries = await listDir(parent);
-  const siblings = parentEntries.filter(
-    e => e.isDirectory && !isPackageFolder(e.name, s) && !shouldSkip(e.name, s),
-  );
   const allFiles: string[] = [];
-  for (const sib of siblings) {
-    const sibPath = await join(parent, sib.name);
-    const outPath = await join(sibPath, s.outFolder);
-    const outEntries = await listDir(outPath);
-    if (outEntries.length > 0 || await dirExists(outPath)) {
-      allFiles.push(...await collectFiles(outPath, s, false));
-    } else {
-      const sibEntries = await listDir(sibPath);
-      if (sibEntries.some(e => e.isFile && isPublishableFile(e.name))) {
-        allFiles.push(...await collectFiles(sibPath, s, true));
-      }
+
+  for (const e of parentEntries) {
+    if (!e.isDirectory || isPackageFolder(e.name, s) || shouldSkip(e.name, s)) continue;
+    const sibPath = await join(parent, e.name);
+
+    // OUT is often a direct sibling of the package folder.
+    if (isOutFolder(e.name, s)) {
+      allFiles.push(...await collectFiles(sibPath, s, false));
+      continue;
+    }
+
+    // Or: sibling asset folder that contains an OUT child.
+    const sibEntries = await listDir(sibPath);
+    for (const se of sibEntries) {
+      if (!se.isDirectory || !isOutFolder(se.name, s)) continue;
+      allFiles.push(...await collectFiles(await join(sibPath, se.name), s, false));
     }
   }
   return allFiles;
 }
 
-function applyHighestVersionFilter(paths: string[]): { kept: string[]; dropped: string[] } {
+/** Always keep highest version for export — one file per base+ext. */
+function keepOnlyHighestVersions(paths: string[]): { kept: string[]; dropped: string[] } {
   if (paths.length <= 1) return { kept: paths, dropped: [] };
   const keptNames = new Set(filterHighestVersions(paths.map(f => f.split('/').pop()!)));
   const kept: string[] = [];
   const dropped: string[] = [];
   for (const p of paths) {
-    if (keptNames.has(p.split('/').pop()!)) kept.push(p);
-    else dropped.push(p);
+    (keptNames.has(p.split('/').pop()!) ? kept : dropped).push(p);
   }
   return { kept, dropped };
+}
+
+/**
+ * Refresh a package folder from sibling OUT: copy highest versions (translated),
+ * then hard-delete anything else in the package (no 🚫 — that is target-only).
+ * Returns kept OUT source paths for further export.
+ */
+async function syncPackageFromOut(
+  pkg: string,
+  s: AppSettings,
+  vocabMap: ReturnType<typeof buildVocabContext>,
+  dryRun: boolean,
+  appendLog: (t: LogType, m: string) => void,
+  onError?: (file: string, reason: string) => void,
+): Promise<{ sources: string[]; copied: number; skipped: number; removed: number; errors: number }> {
+  const result = { sources: [] as string[], copied: 0, skipped: 0, removed: 0, errors: 0 };
+
+  const fromOut = await collectSiblingOutSources(pkg, s);
+  if (!fromOut.length) {
+    appendLog('warn', '  └─ no sibling OUT files found');
+    return result;
+  }
+
+  const { kept, dropped } = keepOnlyHighestVersions(fromOut);
+  if (dropped.length) {
+    appendLog('skip', `  ⊘  OUT older versions not packaged: ${dropped.map(p => p.split('/').pop()).join(', ')}`);
+  }
+  result.sources = kept.filter(p => !p.split('/').pop()!.includes('-thumb'));
+
+  const liveNames = new Set<string>();
+  for (const srcFile of kept) {
+    const rawName = srcFile.split('/').pop()!;
+    if (rawName.includes('-thumb')) continue; // never package thumbnails
+    const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
+    const stem = ext ? rawName.slice(0, -ext.length) : rawName;
+    liveNames.add(translateExportName(stem, ext, vocabMap));
+  }
+
+  // Package folder = exact mirror of live OUT assets (no thumbs). Delete orphans /
+  // older copies / any -thumb.webp outright (🚫 disconnect is target-only).
+  const purgeRels = new Set<string>();
+  async function collectPurge(dir: string, rel: string) {
+    const entries = await listDir(dir);
+    for (const e of entries) {
+      if (e.name.startsWith('.') || shouldSkip(e.name, s)) continue;
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      const childPath = await join(dir, e.name);
+      if (e.isDirectory) {
+        await collectPurge(childPath, childRel);
+        continue;
+      }
+      if (!e.isFile) continue;
+      // Never keep thumbnails in source packages.
+      if (e.name.includes('-thumb')) {
+        purgeRels.add(childRel);
+        continue;
+      }
+      if (liveNames.has(e.name)) continue;
+      if (isPublishableFile(e.name)) purgeRels.add(childRel);
+    }
+  }
+  await collectPurge(pkg, '');
+
+  for (const rel of purgeRels) {
+    const abs = await join(pkg, rel);
+    if (dryRun) {
+      appendLog('dim', `  🗑  [DRY] would remove from package: ${rel}`);
+      result.removed += 1;
+      continue;
+    }
+    try {
+      if (await exists(abs)) {
+        await remove(abs);
+        appendLog('dim', `  🗑  removed from package: ${rel}`);
+        result.removed += 1;
+      }
+    } catch (err) {
+      appendLog('warn', `  ⚠  could not remove ${rel}: ${err}`);
+    }
+  }
+
+  for (const srcFile of kept) {
+    const rawName = srcFile.split('/').pop()!;
+    if (rawName.includes('-thumb')) continue;
+    const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
+    const stem = ext ? rawName.slice(0, -ext.length) : rawName;
+    const translated = translateExportName(stem, ext, vocabMap);
+    const destFile = await join(pkg, translated);
+
+    if (dryRun) {
+      appendLog('success', `  ✓  [DRY] package ← ${rawName} → ${translated}`);
+      result.copied += 1;
+      continue;
+    }
+
+    if (await isUnchanged(srcFile, destFile)) {
+      appendLog('dim', `  ↷  package unchanged: ${translated}`);
+      result.skipped += 1;
+      continue;
+    }
+
+    try {
+      await mkdir(await dirname(destFile), { recursive: true });
+      await copyFile(srcFile, destFile);
+      appendLog('success', `  ✓  package ← ${rawName} → ${translated}`);
+      result.copied += 1;
+    } catch (e) {
+      appendLog('error', `  ✕  package update failed: ${rawName} — ${e}`);
+      onError?.(rawName, String(e));
+      result.errors += 1;
+    }
+  }
+
+  return result;
 }
 
 /* ── Collect publishable files from a directory ─────────────────────────── */
@@ -190,36 +306,6 @@ async function collectFiles(dir: string, s: AppSettings, directOnly = false): Pr
   return results;
 }
 
-/** Files under a package folder with paths relative to the package root. */
-async function collectPackageFiles(
-  packageDir: string,
-  s: AppSettings,
-): Promise<Array<{ srcPath: string; relativePath: string }>> {
-  const results: Array<{ srcPath: string; relativePath: string }> = [];
-  async function walk(dir: string, rel: string) {
-    const entries = await listDir(dir);
-    for (const e of entries) {
-      if (e.name.startsWith('.') || shouldSkip(e.name, s)) continue;
-      const childPath = await join(dir, e.name);
-      const childRel = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isFile) {
-        if (isPublishableFile(e.name) && !e.name.includes('-thumb')) {
-          results.push({ srcPath: childPath, relativePath: childRel });
-        }
-      } else if (e.isDirectory) {
-        await walk(childPath, childRel);
-      }
-    }
-  }
-  await walk(packageDir, '');
-  if (!s.keepHighestVersion || results.length === 0) return results;
-
-  // Keep only highest semantic version per base+ext (same rule as Distribute).
-  const names = results.map(r => r.relativePath.split('/').pop()!);
-  const kept = new Set(filterHighestVersions(names));
-  return results.filter(r => kept.has(r.relativePath.split('/').pop()!));
-}
-
 /* ── Unchanged check (mtime — dest missing/older → copy, dest newer-or-same → skip) ── */
 
 async function isUnchanged(src: string, dest: string): Promise<boolean> {
@@ -234,7 +320,7 @@ async function isUnchanged(src: string, dest: string): Promise<boolean> {
 
 async function runDistribute(ctx: RunContext, stats: RunStats): Promise<void> {
   const { settings, appendLog, addIssue, setProgress } = ctx;
-  const { sourceFolder: source, dryRun, keepHighestVersion } = settings;
+  const { sourceFolder: source, dryRun } = settings;
 
   if (!source) {
     appendLog('error', 'Source folder not configured — skipping collect.');
@@ -243,6 +329,7 @@ async function runDistribute(ctx: RunContext, stats: RunStats): Promise<void> {
 
   appendLog('section', `━━━ ${dryRun ? 'DRY RUN' : 'COLLECTING'} ━━━`);
   appendLog('dim', `  Source: ${source}`);
+  appendLog('dim', '  Always highest version only → package folders');
 
   const packages = await findPackageFolders(source, settings);
   if (!packages.length) {
@@ -252,146 +339,37 @@ async function runDistribute(ctx: RunContext, stats: RunStats): Promise<void> {
 
   appendLog('info', `  Found ${packages.length} package folder(s)`);
   const total = packages.length;
+  const vocabMap = buildVocabContext(ctx.vocab);
 
   for (let idx = 0; idx < packages.length; idx++) {
     const pkg = packages[idx];
     const pkgName = await basename(pkg);
-    const parent  = await dirname(pkg);
     appendLog('section', `📦  ${pkgName}`);
 
-    const parentEntries = await listDirLogged(parent, appendLog);
-    const siblings = parentEntries.filter(
-      e => e.isDirectory && !isPackageFolder(e.name, settings) && !shouldSkip(e.name, settings)
+    const sync = await syncPackageFromOut(
+      pkg,
+      settings,
+      vocabMap,
+      dryRun,
+      appendLog,
+      (file, reason) => addIssue({ category: 'error', file, reason }),
     );
 
-    const sourceDirs: Array<{ path: string; isOrphan: boolean }> = [];
-    for (const sib of siblings) {
-      const sibPath  = await join(parent, sib.name);
-      const outPath  = await join(sibPath, settings.outFolder);
-      const outEntries = await listDir(outPath);
-      if (outEntries.length > 0 || await dirExists(outPath)) {
-        sourceDirs.push({ path: outPath, isOrphan: false });
-        appendLog('dim', `  ├─ ${settings.outFolder}: …/${sib.name}/${settings.outFolder}`);
-      } else {
-        const sibEntries = await listDir(sibPath);
-        const hasFiles = sibEntries.some(e => e.isFile && isPublishableFile(e.name));
-        if (hasFiles) {
-          sourceDirs.push({ path: sibPath, isOrphan: true });
-          appendLog('dim', `  ├─ 📂 orphan: …/${sib.name}`);
-        }
-      }
-    }
-
-    if (!sourceDirs.length) {
-      appendLog('dim', `  └─ no ${settings.outFolder} or publishable files found in siblings — skipping`);
+    if (!sync.sources.length) {
       setProgress(Math.round(((idx + 1) / total) * 100));
       continue;
-    }
-
-    let allFiles: string[] = [];
-    for (const sd of sourceDirs) {
-      const files = await collectFiles(sd.path, settings, sd.isOrphan);
-      allFiles.push(...files);
-    }
-
-    if (!allFiles.length) {
-      appendLog('dim', `  └─ ${settings.outFolder} folders are empty — skipping`);
-      setProgress(Math.round(((idx + 1) / total) * 100));
-      continue;
-    }
-
-    const vocabMap = buildVocabContext(ctx.vocab);
-    let droppedSrc: string[] = [];
-
-    if (keepHighestVersion) {
-      const names = allFiles.map(f => f.split('/').pop()!);
-      const kept  = new Set(filterHighestVersions(names));
-      const before = allFiles.length;
-      droppedSrc = allFiles.filter(f => !kept.has(f.split('/').pop()!));
-      allFiles = allFiles.filter(f => kept.has(f.split('/').pop()!));
-      const dropped = before - allFiles.length;
-      if (dropped > 0) {
-        appendLog('skip', `  ⊘  skipped ${dropped} older version(s)`);
-        stats.skipped += dropped;
-      }
     }
 
     stats.packages += 1;
+    stats.copied += sync.copied;
+    stats.skipped += sync.skipped;
+    stats.errors += sync.errors;
 
-    // Remove superseded copies already sitting in the package (previous runs).
-    // Keep-highest only skipped re-copying them — it never deleted leftovers.
-    if (keepHighestVersion && !dryRun) {
-      const toRemove = new Set<string>();
-      for (const srcFile of droppedSrc) {
-        const rawName = srcFile.split('/').pop()!;
-        const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
-        const stem = ext ? rawName.slice(0, -ext.length) : rawName;
-        const translated = translateExportName(stem, ext, vocabMap);
-        // Packages may still hold the coded OUT name and/or a previously translated copy.
-        toRemove.add(rawName);
-        toRemove.add(translated);
-        toRemove.add(`${stem}-thumb.webp`);
-        const tStem = translated.includes('.') ? translated.slice(0, translated.lastIndexOf('.')) : translated;
-        toRemove.add(`${tStem}-thumb.webp`);
-      }
-      // Upcoming kept copies + whatever remains: drop any lower version sharing a base.
-      const existing = await collectPackageFiles(pkg, { ...settings, keepHighestVersion: false });
-      const upcomingNames = allFiles.map(srcFile => {
-        const rawName = srcFile.split('/').pop()!;
-        const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
-        const stem = ext ? rawName.slice(0, -ext.length) : rawName;
-        return translateExportName(stem, ext, vocabMap);
-      });
-      const existingNames = existing.map(f => f.relativePath.split('/').pop()!);
-      const keepNames = new Set(filterHighestVersions([...existingNames, ...upcomingNames]));
-      for (const f of existing) {
-        const name = f.relativePath.split('/').pop()!;
-        if (!keepNames.has(name)) toRemove.add(f.relativePath);
-      }
-
-      for (const rel of toRemove) {
-        const abs = await join(pkg, rel);
-        try {
-          if (await exists(abs)) {
-            await remove(abs);
-            appendLog('dim', `  🗑  removed older package file: ${rel}`);
-          }
-        } catch (e) {
-          appendLog('warn', `  ⚠  could not remove ${rel}: ${e}`);
-        }
-      }
-    }
-
-    for (const srcFile of allFiles) {
-      const rawName    = srcFile.split('/').pop()!;
-      const ext        = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
-      const stem       = ext ? rawName.slice(0, -ext.length) : rawName;
-      ctx.processedPackages?.push(stem); // one entry per asset file, stem = shortcode
-      const translated = translateExportName(stem, ext, vocabMap);
-      const destFile   = await join(pkg, translated);
-
-      if (dryRun) {
-        appendLog('success', `  ✓  [DRY] would copy: ${rawName} → ${translated}`);
-        stats.copied += 1;
-        continue;
-      }
-
-      if (await isUnchanged(srcFile, destFile)) {
-        appendLog('dim', `  ↷  unchanged: ${translated}`);
-        stats.skipped += 1;
-        continue;
-      }
-
-      try {
-        await mkdir(await dirname(destFile), { recursive: true });
-        await copyFile(srcFile, destFile);
-        appendLog('success', `  ✓  copied: ${rawName} → ${translated}`);
-        stats.copied += 1;
-      } catch (e) {
-        appendLog('error', `  ✕  failed: ${rawName} — ${e}`);
-        addIssue({ category: 'error', file: rawName, reason: String(e) });
-        stats.errors += 1;
-      }
+    for (const srcFile of sync.sources) {
+      const rawName = srcFile.split('/').pop()!;
+      const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
+      const stem = ext ? rawName.slice(0, -ext.length) : rawName;
+      ctx.processedPackages?.push(stem);
     }
 
     setProgress(Math.round(((idx + 1) / total) * 100));
@@ -507,11 +485,10 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
 
   const layout: DestExportLayout = ctx.localExportLayout ?? 'folders';
   const includePackages = layout === 'folders' && !!ctx.localIncludePackages;
-  const keepHighest = !!settings.keepHighestVersion;
 
   appendLog('section', `━━━ ${dryRun ? 'DRY RUN' : 'PUBLISHING'} ━━━`);
   appendLog('dim', `  → ${targetFolder}`);
-  appendLog('dim', `  Layout: ${layout}${includePackages ? ' + nested packages' : ''}${keepHighest ? ' · highest version only' : ''}`);
+  appendLog('dim', `  Layout: ${layout}${includePackages ? ' + nested packages' : ''} · always highest version only`);
 
   const livePub = new Set<string>();
   const vocabMap = buildVocabContext(vocab);
@@ -543,58 +520,34 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
     }
   }
 
-  /* Optional: copy package folders into the target at their nested source-relative paths.
-     Source of truth is sibling OUT (same as Distribute), not the package folder —
-     packages often still contain an older translated file until Distribute is re-run. */
+  /* Nested packages: refresh package folder from OUT, then copy to destination. */
   async function publishNestedPackages() {
     const packages = await findPackageFolders(sourceFolder, settings);
     if (!packages.length) {
-      appendLog('warn', `  No folders matching "${settings.packagePrefix}" — run Distribute packages first.`);
+      appendLog('warn', `  No folders matching "${settings.packagePrefix}".`);
       return;
     }
     appendLog('info', `  Nested packages: ${packages.length} folder(s)`);
-    appendLog('dim', `  keepHighestVersion=${keepHighest ? 'ON' : 'OFF'}`);
     for (const pkg of packages) {
       const rel = nestedPublishRel(sourceFolder, pkg);
-      if (!rel || !rel.includes('/')) {
-        appendLog('dim', `  Package at source root: ${rel || await basename(pkg)}`);
-      }
       const destPkg = await join(targetFolder, rel);
       stats.pubFolders += 1;
       livePub.add(destPkg);
       appendLog('section', `📦  ${rel}`);
 
-      let sources = await collectSiblingOutSources(pkg, settings);
-      let fromOut = sources.length > 0;
-      if (!fromOut) {
-        const pkgFiles = await collectPackageFiles(pkg, { ...settings, keepHighestVersion: false });
-        sources = pkgFiles.map(f => f.srcPath);
-        appendLog('dim', '  └─ no sibling OUT — falling back to package folder contents');
-      } else {
-        appendLog('dim', `  └─ sourcing ${sources.length} file(s) from sibling OUT`);
-      }
+      const sync = await syncPackageFromOut(
+        pkg,
+        settings,
+        vocabMap,
+        dryRun,
+        appendLog,
+        (file, reason) => addIssue({ category: 'error', file, reason }),
+      );
+      if (!sync.sources.length) continue;
 
-      if (keepHighest && sources.length > 1) {
-        const { kept, dropped } = applyHighestVersionFilter(sources);
-        if (dropped.length) {
-          appendLog(
-            'skip',
-            `  ⊘  package export keeps highest only — dropped: ${dropped.map(p => p.split('/').pop()).join(', ')}`,
-          );
-          appendLog(
-            'info',
-            `  ✓  keeping: ${kept.map(p => p.split('/').pop()).join(', ')}`,
-          );
-        }
-        sources = kept;
-      }
+      appendLog('info', `  ✓  export ${sync.sources.map(p => p.split('/').pop()).join(', ')}`);
 
-      if (!sources.length) {
-        appendLog('dim', '  └─ empty — skipping');
-        continue;
-      }
-
-      for (const srcPath of sources) {
+      for (const srcPath of sync.sources) {
         const rawName = srcPath.split('/').pop()!;
         const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
         const stem = ext ? rawName.slice(0, -ext.length) : rawName;
@@ -609,11 +562,9 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
     let assets = (ctx.collectedAssets?.length
       ? ctx.collectedAssets
       : await scanAllAssets(sourceFolder, settings));
-    if (keepHighest) {
-      const { kept, dropped } = filterCdnEligible(assets);
-      assets = kept;
-      if (dropped > 0) appendLog('skip', `  ⊘  ${dropped} older version file(s) excluded from publish`);
-    }
+    const { kept, dropped } = keepOnlyHighestVersions(assets);
+    assets = kept;
+    if (dropped.length) appendLog('skip', `  ⊘  dropped ${dropped.length} older version(s)`);
     stats.pubFolders += 1;
     for (const srcPath of assets) {
       const rawName = srcPath.split('/').pop()!;
@@ -632,23 +583,21 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
         item => item.isFile && !shouldSkip(item.name, settings)
           && isPublishableFile(item.name) && !item.name.includes('-thumb'),
       );
-      let publishFiles = fileItems;
-      if (keepHighest && fileItems.length > 1) {
-        const kept = new Set(filterHighestVersions(fileItems.map(f => f.name)));
-        const before = fileItems.length;
-        publishFiles = fileItems.filter(f => kept.has(f.name));
-        const dropped = before - publishFiles.length;
-        if (dropped > 0) {
-          appendLog('skip', `  ⊘  ${dropped} older version(s) in ${dirPath.split('/').pop()}`);
-        }
+      const paths = await Promise.all(fileItems.map(f => join(dirPath, f.name)));
+      const { kept, dropped } = keepOnlyHighestVersions(paths);
+      if (dropped.length) {
+        appendLog('skip', `  ⊘  dropped ${dropped.map(p => p.split('/').pop()).join(', ')}`);
+      }
+      if (kept.length) {
+        appendLog('info', `  ✓  export ${kept.map(p => p.split('/').pop()).join(', ')}`);
       }
 
-      for (const item of publishFiles) {
-        const fileSrc    = await join(dirPath, item.name);
-        const ext        = item.name.includes('.') ? '.' + item.name.split('.').pop()! : '';
-        const stem       = ext ? item.name.slice(0, -ext.length) : item.name;
+      for (const fileSrc of kept) {
+        const name = fileSrc.split('/').pop()!;
+        const ext = name.includes('.') ? '.' + name.split('.').pop()! : '';
+        const stem = ext ? name.slice(0, -ext.length) : name;
         const translated = translateExportName(stem, ext, vocabMap);
-        await copyOne(fileSrc, await join(targetDir, translated), `${item.name} → ${translated}`);
+        await copyOne(fileSrc, await join(targetDir, translated), `${name} → ${translated}`);
       }
       for (const item of items) {
         if (shouldSkip(item.name, settings) || !item.isDirectory) continue;
@@ -918,14 +867,6 @@ export async function scanVersionMap(
   return vmap;
 }
 
-/* ── Helper: check if directory exists ──────────────────────────────────── */
-
-async function dirExists(path: string): Promise<boolean> {
-  try {
-    const entries = await readDir(path);
-    return entries !== null;
-  } catch { return false; }
-}
 
 
 
@@ -973,8 +914,10 @@ function rememberR2Upload(
   cache[r2CacheKey(bucket, objectKey)] = { mtimeMs, size, sha256 };
 }
 
-function r2PublicUrl(publicDomain: string, objectKey: string): string {
-  return `${publicDomain.replace(/\/+$/, '')}/${objectKey}`;
+function r2PublicUrl(publicDomain: string, objectKey: string, contentHash?: string): string {
+  const base = `${publicDomain.replace(/\/+$/, '')}/${objectKey}`;
+  if (!contentHash) return base;
+  return `${base}?v=${contentHash.slice(0, 12)}`;
 }
 
 /* ── Local cloud-export cache — same idea as R2: mtime+size fast-path so
@@ -1112,13 +1055,6 @@ async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<void> {
   for (let i = 0; i < thumbFiles.length; i += CONCURRENCY) {
     const batch = thumbFiles.slice(i, i + CONCURRENCY);
     await Promise.all(batch.map(async ({ thumbPath, stem }) => {
-      // Skip if URL already known from DB inventory — no CDN request needed
-      // Also check by shortcode (version-stripped) so other versions of the same asset skip too
-      const shortcode = stem.replace(/\s+[vV]\d+(?:[-._]\d+)*\s*$/, '').trim();
-      if (ctx.cdnUrls?.has(stem) || ctx.cdnUrls?.has(shortcode)) {
-        skipped += 1;
-        return;
-      }
       // Check thumbnail exists locally before attempting upload
       let thumbInfo;
       try { thumbInfo = await stat(thumbPath); } catch {
@@ -1137,16 +1073,15 @@ async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<void> {
 
       // Cheap local check (mtime+size, no file read/hash/network) before the real thing.
       // A manifest that says the key is gone from R2 overrides the cache — re-upload.
+      // Do NOT skip just because DB already has a URL — version bumps overwrite the same
+      // key; we still need a fresh ?v= hash in cdnUrls for browser cache busting.
       const cacheKey = r2CacheKey(r2.bucket, objectKey);
       const cacheEntry = r2Cache[cacheKey];
       const mtimeMs = thumbInfo.mtime?.getTime() ?? -1;
       if (cacheEntry && cacheEntry.size === thumbInfo.size && cacheEntry.mtimeMs === mtimeMs
           && remoteKeys?.has(objectKey) !== false) {
-        // Supabase sync writes thumbnail_url from ctx.cdnUrls, and the DB
-        // pre-population regex misses stable-identity keys — leaving the map
-        // unset here would null the column on the next sync.
-        if (ctx.cdnUrls && !ctx.cdnUrls.has(stem)) {
-          ctx.cdnUrls.set(stem, r2PublicUrl(r2.publicDomain, objectKey));
+        if (ctx.cdnUrls) {
+          ctx.cdnUrls.set(stem, r2PublicUrl(r2.publicDomain, objectKey, cacheEntry.sha256));
         }
         cached += 1;
         stats.cdnThumbCached += 1;
@@ -1277,8 +1212,8 @@ async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promise<void
         // Supabase sync writes download_url from ctx.originalUrls — there is no DB
         // pre-population for originals, so skipping without setting the map would
         // null the column on the next sync (the web portal's download button).
-        if (ctx.originalUrls && !ctx.originalUrls.has(stem)) {
-          ctx.originalUrls.set(stem, r2PublicUrl(r2.publicDomain, objectKey));
+        if (ctx.originalUrls) {
+          ctx.originalUrls.set(stem, r2PublicUrl(r2.publicDomain, objectKey, cacheEntry.sha256));
         }
         cached += 1;
         stats.cdnOrigCached += 1;
@@ -1527,10 +1462,10 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
 
   // Default OUT-tree file list (used when dest layout is folders or flat).
   let outAssetPaths = collectedAssets ?? [];
-  if (settings.keepHighestVersion && outAssetPaths.length) {
-    const { kept, dropped } = filterCdnEligible(outAssetPaths);
+  if (outAssetPaths.length) {
+    const { kept, dropped } = keepOnlyHighestVersions(outAssetPaths);
     outAssetPaths = kept;
-    if (dropped > 0) appendLog('skip', `  ⊘  ${dropped} older version file(s) excluded from cloud export`);
+    if (dropped.length) appendLog('skip', `  ⊘  dropped ${dropped.length} older version(s) from cloud export`);
   }
   const outFiles = outAssetPaths.map(srcPath => {
     const fileName = srcPath.split('/').pop()!;
@@ -1556,18 +1491,18 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
     if (!source) return [];
     const packages = await findPackageFolders(source, settings);
     const jobs: CloudFileJob[] = [];
-    const keepHighest = !!settings.keepHighestVersion;
     for (const pkg of packages) {
       const relPkg = nestedPublishRel(source, pkg);
-      let sources = await collectSiblingOutSources(pkg, settings);
-      if (!sources.length) {
-        const pkgFiles = await collectPackageFiles(pkg, { ...settings, keepHighestVersion: false });
-        sources = pkgFiles.map(f => f.srcPath);
-      }
-      if (keepHighest && sources.length > 1) {
-        sources = applyHighestVersionFilter(sources).kept;
-      }
-      for (const srcPath of sources) {
+      appendLog('section', `📦  ${relPkg}`);
+      const sync = await syncPackageFromOut(
+        pkg,
+        settings,
+        vocabMap,
+        !!settings.dryRun,
+        appendLog,
+      );
+      if (!sync.sources.length) continue;
+      for (const srcPath of sync.sources) {
         const rawName = srcPath.split('/').pop()!;
         const dotIdx = rawName.lastIndexOf('.');
         const ext = dotIdx > 0 ? rawName.slice(dotIdx) : '';

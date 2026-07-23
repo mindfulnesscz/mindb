@@ -2,7 +2,13 @@
 
 ## Package distribution
 
-The collect/distribute stage finds folders beginning with `packagePrefix`. For each package it inspects sibling folders, prefers their configured `OUT`, and also recognizes direct “orphan” files. Selected files are translated through the naming vocabulary and copied into the package.
+The collect/distribute stage finds folders beginning with `packagePrefix`. For each package it collects files from sibling **OUT** folders (OUT as a direct sibling of the package, or OUT nested under a sibling asset folder), keeps the **highest version only** per base+extension, translates filenames through the naming vocabulary, and copies them into the package.
+
+The source package folder is a **hard mirror of that live OUT set**:
+
+- Anything in the package that is not a live highest-version OUT file is **deleted** (older versions, orphans, leftover coded names).
+- **Never** `🚫`-disconnect inside the source package — disconnect renaming is only for publish **targets**.
+- **Never** keep thumbnails in source packages (`*-thumb.webp` is removed on sync). Sidecars stay next to OUT sources for CDN/Obsidian.
 
 The unchanged test compares destination mtime with source mtime; if mtimes are unavailable it compares size. A destination at least as new is skipped. This is fast but not cryptographic: equal size is not proof of equal content.
 
@@ -10,6 +16,8 @@ Stable-identity migration removes the package prefix and appends ` __<8 hex>`. S
 
 ## Local target publishing
 
-The publish stage mirrors the relevant source hierarchy into `targetFolder`, translating published filenames and removing stable-ID suffixes from destination folder names. Previously published items missing from the current source are renamed with a `🚫` prefix rather than deleted, making disconnection visible and reversible.
+Publish always exports **highest version only**. With `includePackages`, each source package is refreshed from OUT first (same mirror rules as Distribute), then those files are copied into the target at nested source-relative paths.
+
+Previously published items missing from the current export are renamed on the **target** with a `🚫` prefix rather than deleted, making disconnection visible and reversible where live links may still exist.
 
 Use local publishing for a filesystem-synced SharePoint/OneDrive tree when folder structure is important. Use [cloud publishing](/cloud-storage/publishing) when flat per-file API delivery and share-link collection are preferred.

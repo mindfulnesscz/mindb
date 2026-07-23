@@ -32,42 +32,48 @@ For each collected asset, the Rust backend renders a WebP thumbnail (PPTX/PDF vi
 
 ### CDN upload
 
-Runs only when thumbnails are enabled **and** the Control API grant succeeds (`r2-grant`). Uploads each thumbnail and original to Cloudflare R2 under `{client_id}/thumbnails/` or `{client_id}/originals/`. At the start of a run, the pipeline may pre-populate a `stem → CDN URL` map from existing DB records so already-uploaded assets are skipped — gallery children (shortcodes containing `|`) are deliberately excluded from that pre-population so the first child image is always re-verified.
+Runs only when thumbnails are enabled **and** the Control API grant succeeds (`r2-grant`). Uploads each thumbnail and original to Cloudflare R2 under `{client_id}/thumbnails/` or `{client_id}/originals/`.
 
-**Only the highest version uploads.** When several version files of one asset sit in the same folder (`v0-3-7` next to `v0-3-8`), only the highest per base+extension is eligible — they all share one version-stable object key, so uploading more than one would make them overwrite each other every run. The log reports `⊘ N older version file(s) excluded from CDN`.
+**Only the highest version uploads.** When several version files of one asset sit in the same folder (`v0-3-7` next to `v0-3-8`), only the highest per base+extension is eligible — they all share one version-stable object key, so uploading more than one would make them overwrite each other every run. The log reports older versions excluded from CDN.
+
+**Browser cache busting.** Object keys are version-stable (same path after a content bump), so public URLs include `?v=<content-hash>` and uploads set long-lived `Cache-Control`. When bytes change, the gallery URL changes and browsers fetch the new image without a hard refresh.
 
 **Skip mechanics (fast path first):**
 1. One `ListObjectsV2` sweep per prefix at phase start builds an existence manifest — no per-file HEAD/LIST requests.
-2. A local upload cache (mtime + size + sha256, per machine) skips unchanged files with zero network calls; the cached public URL is still recorded so the Supabase sync never sees a gap.
+2. A local upload cache (mtime + size + sha256, per machine) skips unchanged files with zero network calls; the cached public URL (with `?v=`) is still recorded so the Supabase sync never sees a gap.
 3. On a cache miss, the Rust backend hashes the file and compares against the caller's cached hash or the object's `x-amz-meta-sha256` — content must differ for an actual upload to happen.
 
 Stable-identity clients key uploads per **file** (`{client_id}/originals/{stableId}/{childId}.ext` from the `.dchub.json` manifest), so files differing only by extension get distinct keys. A stale-sibling cleanup removes an old object when a version bump changes the file extension — but never a key claimed by another file in the same run.
 
 ### 2 — Distribute packages
 
-Finds folders matching the configured package prefix (e.g. `[📦]`), then for each one looks at its sibling folders for loose files or an `OUT` folder, and copies those files *into* the package, translating filenames through the naming convention as it copies. Effectively: "pull raw/loose assets into their package structure." Its own log section is labeled "COLLECTING."
+Finds folders matching the configured package prefix (e.g. `[📦]`), then for each one finds sibling **OUT** folders (OUT as a direct sibling of the package, or OUT nested under a sibling asset folder) and copies the **highest version only** into the package, translating filenames. Its log section is labeled "COLLECTING."
 
-Copy decisions use an mtime check (`isUnchanged`): if the destination file already exists and is the same age or newer than the source, it's skipped; if it's missing or older, it's (re)copied. This is deliberately tolerant of interruptions — re-running is always safe and only touches files that actually need it.
+The package folder is treated as a **hard mirror of live OUT**:
+- Files no longer present in OUT (or superseded by a higher version) are **deleted** from the source package — not `🚫`-disconnected. Disconnect renaming is only for publish **targets**, where live links may still exist.
+- **Thumbnails are never kept** in source packages (`*-thumb.webp` is purged on sync).
+
+Copy decisions use an mtime check (`isUnchanged`): if the destination file already exists and is the same age or newer than the source, it's skipped; if it's missing or older, it's (re)copied. Re-running is always safe.
 
 **Known limitation:** package discovery here is purely a folder-name-prefix match. A folder migrated to [folder-based stable identity](#supabase-sync) (renamed to `Name __hash`, prefix stripped) is no longer recognized as a package by this step, since the prefix is gone. Files inside it need one of the other export steps.
 
 ### 3 — Export to destinations
 
-Resolves the checked **local** destination’s machine path (or legacy `settings.targetFolder`). Shape comes from `exportLayout` + optional `includePackages`:
+Resolves the checked **local** destination’s machine path (or legacy `settings.targetFolder`). Shape comes from `exportLayout` + optional `includePackages`. Publish/export always keeps **highest version only** (one file per base+extension).
 
 - **`folders` (default):** mirrors the source tree looking for `OUT`, publishes contents (filenames translated), recurses otherwise. Stable-identity hash suffixes (` __a1b2c3d4`) are stripped from folder names. Package folders next to OUT are skipped here unless packages are included.
 - **`flat`:** all publishable OUT files into the target root (no nesting).
-- **`includePackages` (with folders):** also copies package folders into the target at their **nested source-relative paths** (after Distribute) — not dumped at the target root. Package **filenames are translated** to full labels the same way as OUT/flat.
+- **`includePackages` (with folders):** first **refreshes each source package from sibling OUT** (same mirror rules as Distribute), then copies those live files into the target at their **nested source-relative paths**. Package filenames are translated. Never dumps packages alone at target root.
 
-Orphan `🚫` flagging always runs for the folders layout (including leftover root package dumps from older publish modes). Flat mode only flags root-level entries.
+Orphan `🚫` flagging runs on the **target** for the folders layout (including leftover root package dumps from older publish modes). Flat mode only flags root-level entries. Source packages never use `🚫`.
 
 ### 4 — Cloud export
 
 For each cloud destination with a valid OAuth token:
 
-- **`folders`:** uploads collected OUT assets, preserving folders under OUT.
+- **`folders`:** uploads collected OUT assets, preserving folders under OUT (highest version only).
 - **`flat`:** dumps files into `remotePath`.
-- **`includePackages`:** additionally uploads package files under their nested relative paths.
+- **`includePackages`:** refreshes source packages from OUT, then uploads package files under their nested relative paths.
 
 Sharing links (when `generateLink`) are later written to Supabase for the portal.
 

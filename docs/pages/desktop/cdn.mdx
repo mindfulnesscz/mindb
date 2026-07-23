@@ -69,7 +69,7 @@ supabase secrets set R2_BUCKET=… R2_PUBLIC_DOMAIN=… CF_API_TOKEN=… CF_ACCO
 supabase functions deploy
 ```
 
-Local stack: put the same values in `supabase/functions/.env` (gitignored) and run `supabase functions serve r2-grant r2-branding-upload`. Until provisioned, pipeline logs `CDN steps disabled — Storage grant refused (503)` and skips uploads.
+Local stack: put the same values in `supabase/functions/.env` (gitignored). With `supabase start`, the edge runtime container loads that file. If CDN returns **503 `name resolution failed`**, the edge runtime container is down (common after Docker Desktop / Mac sleep) — restart it (`docker start supabase_edge_runtime_dc-hub` or `npx supabase stop && npx supabase start`). A 503 body about missing `R2_BUCKET` / Cloudflare secrets means the `.env` is incomplete. Until provisioned, pipeline logs `CDN steps disabled — Storage grant refused (503)` and skips uploads.
 
 Do **not** paste Access Key / Secret into desktop Settings. The desktop never stores parent R2 keys.
 
@@ -79,11 +79,11 @@ Do **not** paste Access Key / Secret into desktop Settings. The desktop never st
 2. Enable **Generate thumbnails** or **Upload originals to CDN**.
 3. Run the pipeline against a small test asset.
 4. Confirm R2 contains keys under `{client_id}/thumbnails/` or `{client_id}/originals/`.
-5. Open the public URL; confirm portal download works.
+5. Open the public URL; confirm portal download works. Gallery URLs should include `?v=<hash>`.
 
 ## How publishing works
 
-When thumbnails are enabled and the grant succeeds, the pipeline uploads via native Rust (`upload_to_r2`): SHA-256, signed HEAD, skip if unchanged. Originals have a separate toggle. A database-inventory shortcut can skip re-upload when a stem already has a URL in Supabase — separate from content-hash verification.
+When thumbnails are enabled and the grant succeeds, the pipeline uploads via native Rust (`upload_to_r2`): SHA-256 content check, skip if unchanged, set `Cache-Control: public, max-age=31536000, immutable`. Public URLs stored in Supabase include `?v=<content-hash>` so version bumps that overwrite a stable object key still change the gallery URL and bust browser cache. Originals have a separate toggle. Local mtime/size cache and content-hash dedupe skip unnecessary PUTs; a DB inventory URL alone does **not** skip re-verification.
 
 ## Object keys
 
@@ -94,15 +94,17 @@ Keys always start with the client UUID (or `branding/{client_id}/` for logos):
 | Migrated package | `{client_id}/thumbnails/<stableId>/<childId>.webp` | `{client_id}/originals/<stableId>/<childId><ext>` |
 | Legacy/fallback | `{client_id}/thumbnails/<full-stem>-thumb.webp` | `{client_id}/originals/<version-stripped-shortcode><ext>` |
 
-After an original upload, sibling objects with the same key prefix but a stale extension may be removed. Whole-bucket orphan cleanup is not an automatic UI action.
+Public URLs append `?v=<12-char content hash>`. After an original upload, sibling objects with the same key prefix but a stale extension may be removed. Whole-bucket orphan cleanup is not an automatic UI action.
 
 ## Troubleshooting
 
 | Symptom | Check |
 |---|---|
-| **CDN steps disabled / grant 503** | Edge secrets set and functions deployed; `R2_BUCKET` / `R2_PUBLIC_DOMAIN` present |
+| **CDN steps disabled / grant 503** | Edge secrets set and functions deployed; `R2_BUCKET` / `R2_PUBLIC_DOMAIN` present. Locally: edge runtime container running + `supabase/functions/.env` |
+| **503 `name resolution failed` (local)** | `supabase_edge_runtime_*` exited — restart edge runtime / `supabase start` |
 | **Public URL is 404/403** | Domain Active, object key has `{client_id}/` prefix, domain has no trailing slash |
 | **Download opens in a new tab** | CORS `GET`/`HEAD` from `*`; purge CDN cache after CORS changes |
+| **Gallery shows old thumbnail after version bump** | Re-run CDN + sync so `thumbnail_url` gets a new `?v=` hash; hard-refresh only needed for URLs written before cache-busting |
 | **Logo upload 503** | Same secrets; `r2-branding-upload` deployed; user is **admin** |
 | **Unexpected `//thumbnails` URL** | Remove trailing slash from `R2_PUBLIC_DOMAIN` |
 

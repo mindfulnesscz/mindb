@@ -767,7 +767,8 @@ export async function exportAssetsToSupabase(
   // Collect R2 object keys to delete (returned to caller; actual deletion handled by pipeline)
   function urlToObjectKey(url: string | null): string | null {
     if (!url) return null;
-    const m = url.match(/(?:thumbnails|originals)\/.+/);
+    const path = url.split('?')[0];
+    const m = path.match(/(?:thumbnails|originals)\/.+/);
     return m ? m[0] : null;
   }
 
