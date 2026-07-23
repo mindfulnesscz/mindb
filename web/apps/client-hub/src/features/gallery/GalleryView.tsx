@@ -147,11 +147,18 @@ function AssetCard({
           {asset.name}
         </h3>
         <div className="flex flex-wrap gap-1 mb-3">
-          <span className="text-[11px] font-sans font-medium bg-gray-150 px-2 py-0.5 rounded-chip">
-            {asset.entity}
-          </span>
+          {(asset.entities?.length ? asset.entities : [asset.entity].filter(Boolean)).map(e => (
+            <span key={`e-${e}`} className="text-[11px] font-sans font-medium bg-gray-150 px-2 py-0.5 rounded-chip">
+              {e}
+            </span>
+          ))}
+          {(asset.angles?.length ? asset.angles : [asset.angle].filter(Boolean)).map(a => (
+            <span key={`a-${a}`} className="text-[11px] font-sans font-medium bg-gray-150 px-2 py-0.5 rounded-chip">
+              {a}
+            </span>
+          ))}
           {asset.formats.map(f => (
-            <span key={f} className="text-[11px] font-sans font-medium bg-gray-150 px-2 py-0.5 rounded-chip">
+            <span key={`f-${f}`} className="text-[11px] font-sans font-medium bg-gray-150 px-2 py-0.5 rounded-chip">
               {f}
             </span>
           ))}

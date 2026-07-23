@@ -169,7 +169,12 @@ async function collectPackageFiles(
     }
   }
   await walk(packageDir, '');
-  return results;
+  if (!s.keepHighestVersion || results.length === 0) return results;
+
+  // Keep only highest semantic version per base+ext (same rule as Distribute).
+  const names = results.map(r => r.relativePath.split('/').pop()!);
+  const kept = new Set(filterHighestVersions(names));
+  return results.filter(r => kept.has(r.relativePath.split('/').pop()!));
 }
 
 /* ── Unchanged check (mtime — dest missing/older → copy, dest newer-or-same → skip) ── */
