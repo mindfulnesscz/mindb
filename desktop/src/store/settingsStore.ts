@@ -49,7 +49,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   doCdnOriginals: true,
 
   dryRun:            false,
-  keepHighestVersion: false,
+  keepHighestVersion: true,
   preserveStructure:  false,
 
   packagePrefix: '[00] 📦',
