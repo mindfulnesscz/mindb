@@ -1,7 +1,7 @@
 import { readFile, readTextFile, writeTextFile, exists as fsExists } from '@tauri-apps/plugin-fs';
 import { parseFilename, buildVocabContext } from '../domain/filenameTranslator';
 import type { CloudDestination } from '../domain/client';
-import { normalizeDestination } from '../domain/client';
+import { normalizeDestination, resolveExportShape } from '../domain/client';
 import { extractStableId, stripStableId } from '../domain/stableId';
 import { filterHighestVersions, parseVersion, compareVersions } from '../domain/version';
 import type { VocabularyData } from '../domain/vocabulary';
@@ -157,8 +157,14 @@ async function fetchVHForAssets(
 
 /** Strips the OAuth token from a destination's config before it's written to Supabase. */
 function stripToken(dest: CloudDestination): CloudDestination {
-  if (dest.config.type === 'local') return dest;
-  return { ...dest, config: { ...dest.config, token: null } };
+  const shape = resolveExportShape(dest);
+  const base = { ...dest, exportLayout: shape.exportLayout, includePackages: shape.includePackages };
+  if (base.config.type === 'local') {
+    return { ...base, config: { type: 'local', path: '' } };
+  }
+  const config = { ...base.config, token: null };
+  if (config.type === 'gdrive') config.clientSecret = '';
+  return { ...base, config };
 }
 
 export async function fetchCloudDestinationDefs(
@@ -286,20 +292,34 @@ export function parseAssetForSupabase(assetStem: string, vocab: VocabularyData) 
   const formatTags = parsed.tags.filter(t => t.slot === 'format');
   const angleTags  = parsed.tags.filter(t => t.slot === 'angle');
 
-  const nameParts = [
-    ...parsed.tags.map(t => t.label),
-    ...parsed.unknownTags.map(u => `[${u}]`),
-  ];
+  // Preserve filename order; drop duplicate labels (same shortcode twice, or
+  // two shortcodes sharing one display name across slots).
+  const nameParts: string[] = [];
+  const seenLabels = new Set<string>();
+  for (const t of parsed.tags) {
+    if (seenLabels.has(t.label)) continue;
+    seenLabels.add(t.label);
+    nameParts.push(t.label);
+  }
+  for (const u of parsed.unknownTags) {
+    const token = `[${u}]`;
+    if (seenLabels.has(token)) continue;
+    seenLabels.add(token);
+    nameParts.push(token);
+  }
   let name = nameParts.join(' ');
   if (parsed.description) name += ` — ${parsed.description}`;
+
+  const uniqLabels = (tags: typeof parsed.tags) =>
+    [...new Set(tags.map(t => t.label).filter(Boolean))];
 
   return {
     shortcode,
     name:       name.trim() || shortcode,
-    entities:   entityTags.map(t => t.label),
-    formats:    formatTags.map(t => t.label),
-    angles:     angleTags.map(t => t.label),
-    tags:       parsed.tags.map(t => t.label),
+    entities:   uniqLabels(entityTags),
+    formats:    uniqLabels(formatTags),
+    angles:     uniqLabels(angleTags),
+    tags:       [...seenLabels].filter(l => !l.startsWith('[')),
     version:    parsed.version ?? '',
     year_month: parsed.yymm    ?? null,
   };
@@ -747,7 +767,8 @@ export async function exportAssetsToSupabase(
   // Collect R2 object keys to delete (returned to caller; actual deletion handled by pipeline)
   function urlToObjectKey(url: string | null): string | null {
     if (!url) return null;
-    const m = url.match(/(?:thumbnails|originals)\/.+/);
+    const path = url.split('?')[0];
+    const m = path.match(/(?:thumbnails|originals)\/.+/);
     return m ? m[0] : null;
   }
 

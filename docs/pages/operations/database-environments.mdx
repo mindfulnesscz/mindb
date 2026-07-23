@@ -137,6 +137,19 @@ R2 follows the same tiers as databases: one bucket + public domain **per environ
 
 ### Provisioning secrets (per environment)
 
+**Checklist — repeat for every hosted project (staging, production, …):**
+
+| Step | Action | Verify |
+|------|--------|--------|
+| 1 | Cloudflare: create R2 bucket + public domain (r2.dev or custom) | Bucket exists; CORS allows `GET`/`HEAD` |
+| 2 | Cloudflare: create R2 API token (Workers R2 Storage Read+Edit) | Token verify returns success |
+| 3 | `supabase link --project-ref <ref>` | `supabase projects list` shows linked project |
+| 4 | Set **all five** edge secrets (below) | `supabase secrets list` shows every name |
+| 5 | `supabase functions deploy` (or merge to `staging`/`main` and let CI deploy) | Dashboard → `r2-grant` is deployed |
+| 6 | Desktop / portal: point environment at this project's URL + anon key | Pipeline CDN grant returns 200, not 503 |
+
+Missing **any** of the five names causes `r2-grant` **503** — common partial setup: only the Cloudflare trio (`CF_*`, `R2_PARENT_*`) without `R2_BUCKET` / `R2_PUBLIC_DOMAIN`.
+
 | Secret | Source |
 |--------|--------|
 | `R2_BUCKET` | Bucket name (e.g. `dc-hub-staging`) |
@@ -148,10 +161,23 @@ R2 follows the same tiers as databases: one bucket + public domain **per environ
 ```bash
 supabase link --project-ref <env-ref>
 supabase secrets set R2_BUCKET=… R2_PUBLIC_DOMAIN=… CF_API_TOKEN=… CF_ACCOUNT_ID=… R2_PARENT_ACCESS_KEY_ID=…
+supabase secrets list   # names only — values are never shown again
 supabase functions deploy
 ```
 
-Local stack: `supabase/functions/.env` + `supabase functions serve r2-grant r2-branding-upload`. Until provisioned: `CDN steps disabled — Storage grant refused (503)`.
+**CLI: remote vs local.** `supabase link` only tells the CLI which **hosted** project receives `db push`, `secrets set`, etc. It does **not** stop or replace the local Docker stack. Local database is always separate:
+
+```bash
+npm run db:start    # local Postgres/API at 127.0.0.1:54321
+npm run db:reset    # replay migrations + seed locally
+supabase status     # local URLs and keys (when stack is running)
+```
+
+To stop targeting a remote project from this repo checkout: `supabase unlink`. Re-link anytime with `supabase link --project-ref <ref>`. The link is stored under `.supabase/` in the repo (gitignored) — it is per working copy, not global.
+
+For a **new environment end-to-end** (schema, functions, secrets, auth URLs, founding admin), see [Configuration and deployment — Standing up a new environment](/operations/deployment#standing-up-a-new-environment) and `npm run bootstrap:env` — it sets all five secrets from `scripts/environments/<name>.env` in one pass after you fill the template.
+
+Local stack only: `supabase/functions/.env` + `supabase functions serve r2-grant r2-branding-upload`. Until provisioned: `CDN steps disabled — Storage grant refused (503)`.
 
 Functions deploy with CI on push to `staging` / `main`.
 
@@ -162,11 +188,10 @@ Update env `R2_PUBLIC_DOMAIN`, then run the pipeline once so URL columns are rew
 **Symptom → cause cheat-sheet** (all seen in the wild):
 
 - **Portal thumbnails blank, but the image opens fine in a new tab** — the CDN domain has Cloudflare **Hotlink Protection** on (blocks cross-site `<img>` by Referer). Turn it off for a public asset CDN; the portal also loads images with `referrerPolicy="no-referrer"` as a belt-and-braces.
-- **Thumbnail requests return `200 text/html` (the app's `index.html`)** — the stored `thumbnail_url`s are **relative/hostless**, so the browser resolves them against the portal origin. Cause: the client synced with an **empty `r2_public_domain`** (URL became `"" + /thumbnails/…`). Fix: set the client's Public domain, **null the poisoned rows** (`update assets set thumbnail_url=null, download_url=null where client_id=…`) so the next run doesn't skip them, then run the pipeline.
-- **CDN URL returns `403`** — the object isn't in the bucket (never uploaded, or wrong bucket). Re-run the pipeline with the correct `r2_bucket`.
+- **Thumbnail requests return `200 text/html` (the app's `index.html`)** — the stored `thumbnail_url`s are **relative/hostless**, so the browser resolves them against the portal origin. Cause: historically an empty public domain. Fix: set env `R2_PUBLIC_DOMAIN`, null poisoned rows if needed (`update assets set thumbnail_url=null, download_url=null where client_id=…`), then re-run CDN + sync.
+- **CDN URL returns `403`** — the object isn't in the bucket (never uploaded, or wrong bucket). Re-run the pipeline with the correct environment secrets.
 - **Download saves a `.html` file** — same as the `text/html` case: `download_url` points at an HTML 404/error page, not the object.
-
-The `update … set thumbnail_url=null` step matters because the pipeline pre-loads existing URLs from the DB and skips re-uploading anything it thinks is already there — stale URLs would otherwise make it skip forever.
+- **Gallery shows an older thumbnail after a version bump** — stable object keys overwrite the same path; public URLs now include `?v=<content-hash>`. Re-run CDN + sync so rows pick up the new query. Local 503 `name resolution failed` usually means the edge runtime container exited — restart it.
 
 ### End-to-end rehearsal
 

@@ -3,7 +3,7 @@
    Thumbnail generation delegates to a Rust command (generate_thumbnail). */
 
 import {
-  readDir, readFile, copyFile, mkdir, stat, rename,
+  readDir, readFile, copyFile, mkdir, stat, rename, remove,
   readTextFile, writeTextFile, exists,
   type DirEntry,
 } from '@tauri-apps/plugin-fs';
@@ -17,7 +17,8 @@ import { filterHighestVersions } from '../domain/version';
 import { buildVocabContext, translateExportName, parseFilename } from '../domain/filenameTranslator';
 import { runObsidian } from './damService';
 import { uploadDropboxFile, uploadOneDriveFile, uploadGDriveFile } from './cloudService';
-import type { CloudDestination } from '../domain/client';
+import type { CloudDestination, DestExportLayout } from '../domain/client';
+import { resolveExportShape } from '../domain/client';
 import { stripStableId } from '../domain/stableId';
 import { resolveCdnIdentity } from './supabaseService';
 import { storageKey } from './pipeline/storageKey';
@@ -53,6 +54,9 @@ export interface RunContext {
   originalUrls?:     Map<string, string>;                  // stem → public CDN URL of the original file (version-stable key)
   cloudUrls?:        Map<string, CloudUrlEntry[]>;         // stem → cloud sharing URLs, populated by cloud export
   cloudDestinations?: CloudDestination[];                  // active cloud destinations to export to
+  /** Local publish shape from the checked local destination. */
+  localExportLayout?: DestExportLayout;
+  localIncludePackages?: boolean;
   identityMigrated?: boolean;
   cdnIdentity?:      Map<string, { stableId: string; childId: string }>;
   storageKeyPrefix?: string;  // mirrors r2.keyPrefix when CDN enabled
@@ -124,6 +128,165 @@ async function findPackageFolders(root: string, s: AppSettings): Promise<string[
   return results;
 }
 
+/**
+ * Files to put in a package export: sibling OUT next to the package folder
+ * (same layout Distribute uses). Do NOT read the package folder — it often
+ * still holds an older translated copy.
+ */
+async function collectSiblingOutSources(
+  packageDir: string,
+  s: AppSettings,
+): Promise<string[]> {
+  const parent = await dirname(packageDir);
+  const parentEntries = await listDir(parent);
+  const allFiles: string[] = [];
+
+  for (const e of parentEntries) {
+    if (!e.isDirectory || isPackageFolder(e.name, s) || shouldSkip(e.name, s)) continue;
+    const sibPath = await join(parent, e.name);
+
+    // OUT is often a direct sibling of the package folder.
+    if (isOutFolder(e.name, s)) {
+      allFiles.push(...await collectFiles(sibPath, s, false));
+      continue;
+    }
+
+    // Or: sibling asset folder that contains an OUT child.
+    const sibEntries = await listDir(sibPath);
+    for (const se of sibEntries) {
+      if (!se.isDirectory || !isOutFolder(se.name, s)) continue;
+      allFiles.push(...await collectFiles(await join(sibPath, se.name), s, false));
+    }
+  }
+  return allFiles;
+}
+
+/** Always keep highest version for export — one file per base+ext. */
+function keepOnlyHighestVersions(paths: string[]): { kept: string[]; dropped: string[] } {
+  if (paths.length <= 1) return { kept: paths, dropped: [] };
+  const keptNames = new Set(filterHighestVersions(paths.map(f => f.split('/').pop()!)));
+  const kept: string[] = [];
+  const dropped: string[] = [];
+  for (const p of paths) {
+    (keptNames.has(p.split('/').pop()!) ? kept : dropped).push(p);
+  }
+  return { kept, dropped };
+}
+
+/**
+ * Refresh a package folder from sibling OUT: copy highest versions (translated),
+ * then hard-delete anything else in the package (no 🚫 — that is target-only).
+ * Returns kept OUT source paths for further export.
+ */
+async function syncPackageFromOut(
+  pkg: string,
+  s: AppSettings,
+  vocabMap: ReturnType<typeof buildVocabContext>,
+  dryRun: boolean,
+  appendLog: (t: LogType, m: string) => void,
+  onError?: (file: string, reason: string) => void,
+): Promise<{ sources: string[]; copied: number; skipped: number; removed: number; errors: number }> {
+  const result = { sources: [] as string[], copied: 0, skipped: 0, removed: 0, errors: 0 };
+
+  const fromOut = await collectSiblingOutSources(pkg, s);
+  if (!fromOut.length) {
+    appendLog('warn', '  └─ no sibling OUT files found');
+    return result;
+  }
+
+  const { kept, dropped } = keepOnlyHighestVersions(fromOut);
+  if (dropped.length) {
+    appendLog('skip', `  ⊘  OUT older versions not packaged: ${dropped.map(p => p.split('/').pop()).join(', ')}`);
+  }
+  result.sources = kept.filter(p => !p.split('/').pop()!.includes('-thumb'));
+
+  const liveNames = new Set<string>();
+  for (const srcFile of kept) {
+    const rawName = srcFile.split('/').pop()!;
+    if (rawName.includes('-thumb')) continue; // never package thumbnails
+    const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
+    const stem = ext ? rawName.slice(0, -ext.length) : rawName;
+    liveNames.add(translateExportName(stem, ext, vocabMap));
+  }
+
+  // Package folder = exact mirror of live OUT assets (no thumbs). Delete orphans /
+  // older copies / any -thumb.webp outright (🚫 disconnect is target-only).
+  const purgeRels = new Set<string>();
+  async function collectPurge(dir: string, rel: string) {
+    const entries = await listDir(dir);
+    for (const e of entries) {
+      if (e.name.startsWith('.') || shouldSkip(e.name, s)) continue;
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      const childPath = await join(dir, e.name);
+      if (e.isDirectory) {
+        await collectPurge(childPath, childRel);
+        continue;
+      }
+      if (!e.isFile) continue;
+      // Never keep thumbnails in source packages.
+      if (e.name.includes('-thumb')) {
+        purgeRels.add(childRel);
+        continue;
+      }
+      if (liveNames.has(e.name)) continue;
+      if (isPublishableFile(e.name)) purgeRels.add(childRel);
+    }
+  }
+  await collectPurge(pkg, '');
+
+  for (const rel of purgeRels) {
+    const abs = await join(pkg, rel);
+    if (dryRun) {
+      appendLog('dim', `  🗑  [DRY] would remove from package: ${rel}`);
+      result.removed += 1;
+      continue;
+    }
+    try {
+      if (await exists(abs)) {
+        await remove(abs);
+        appendLog('dim', `  🗑  removed from package: ${rel}`);
+        result.removed += 1;
+      }
+    } catch (err) {
+      appendLog('warn', `  ⚠  could not remove ${rel}: ${err}`);
+    }
+  }
+
+  for (const srcFile of kept) {
+    const rawName = srcFile.split('/').pop()!;
+    if (rawName.includes('-thumb')) continue;
+    const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
+    const stem = ext ? rawName.slice(0, -ext.length) : rawName;
+    const translated = translateExportName(stem, ext, vocabMap);
+    const destFile = await join(pkg, translated);
+
+    if (dryRun) {
+      appendLog('success', `  ✓  [DRY] package ← ${rawName} → ${translated}`);
+      result.copied += 1;
+      continue;
+    }
+
+    if (await isUnchanged(srcFile, destFile)) {
+      appendLog('dim', `  ↷  package unchanged: ${translated}`);
+      result.skipped += 1;
+      continue;
+    }
+
+    try {
+      await mkdir(await dirname(destFile), { recursive: true });
+      await copyFile(srcFile, destFile);
+      appendLog('success', `  ✓  package ← ${rawName} → ${translated}`);
+      result.copied += 1;
+    } catch (e) {
+      appendLog('error', `  ✕  package update failed: ${rawName} — ${e}`);
+      onError?.(rawName, String(e));
+      result.errors += 1;
+    }
+  }
+
+  return result;
+}
+
 /* ── Collect publishable files from a directory ─────────────────────────── */
 
 async function collectFiles(dir: string, s: AppSettings, directOnly = false): Promise<string[]> {
@@ -157,7 +320,7 @@ async function isUnchanged(src: string, dest: string): Promise<boolean> {
 
 async function runDistribute(ctx: RunContext, stats: RunStats): Promise<void> {
   const { settings, appendLog, addIssue, setProgress } = ctx;
-  const { sourceFolder: source, dryRun, keepHighestVersion } = settings;
+  const { sourceFolder: source, dryRun } = settings;
 
   if (!source) {
     appendLog('error', 'Source folder not configured — skipping collect.');
@@ -166,6 +329,7 @@ async function runDistribute(ctx: RunContext, stats: RunStats): Promise<void> {
 
   appendLog('section', `━━━ ${dryRun ? 'DRY RUN' : 'COLLECTING'} ━━━`);
   appendLog('dim', `  Source: ${source}`);
+  appendLog('dim', '  Always highest version only → package folders');
 
   const packages = await findPackageFolders(source, settings);
   if (!packages.length) {
@@ -175,100 +339,37 @@ async function runDistribute(ctx: RunContext, stats: RunStats): Promise<void> {
 
   appendLog('info', `  Found ${packages.length} package folder(s)`);
   const total = packages.length;
+  const vocabMap = buildVocabContext(ctx.vocab);
 
   for (let idx = 0; idx < packages.length; idx++) {
     const pkg = packages[idx];
     const pkgName = await basename(pkg);
-    const parent  = await dirname(pkg);
     appendLog('section', `📦  ${pkgName}`);
 
-    const parentEntries = await listDirLogged(parent, appendLog);
-    const siblings = parentEntries.filter(
-      e => e.isDirectory && !isPackageFolder(e.name, settings) && !shouldSkip(e.name, settings)
+    const sync = await syncPackageFromOut(
+      pkg,
+      settings,
+      vocabMap,
+      dryRun,
+      appendLog,
+      (file, reason) => addIssue({ category: 'error', file, reason }),
     );
 
-    const sourceDirs: Array<{ path: string; isOrphan: boolean }> = [];
-    for (const sib of siblings) {
-      const sibPath  = await join(parent, sib.name);
-      const outPath  = await join(sibPath, settings.outFolder);
-      const outEntries = await listDir(outPath);
-      if (outEntries.length > 0 || await dirExists(outPath)) {
-        sourceDirs.push({ path: outPath, isOrphan: false });
-        appendLog('dim', `  ├─ ${settings.outFolder}: …/${sib.name}/${settings.outFolder}`);
-      } else {
-        const sibEntries = await listDir(sibPath);
-        const hasFiles = sibEntries.some(e => e.isFile && isPublishableFile(e.name));
-        if (hasFiles) {
-          sourceDirs.push({ path: sibPath, isOrphan: true });
-          appendLog('dim', `  ├─ 📂 orphan: …/${sib.name}`);
-        }
-      }
-    }
-
-    if (!sourceDirs.length) {
-      appendLog('dim', `  └─ no ${settings.outFolder} or publishable files found in siblings — skipping`);
+    if (!sync.sources.length) {
       setProgress(Math.round(((idx + 1) / total) * 100));
       continue;
-    }
-
-    let allFiles: string[] = [];
-    for (const sd of sourceDirs) {
-      const files = await collectFiles(sd.path, settings, sd.isOrphan);
-      allFiles.push(...files);
-    }
-
-    if (!allFiles.length) {
-      appendLog('dim', `  └─ ${settings.outFolder} folders are empty — skipping`);
-      setProgress(Math.round(((idx + 1) / total) * 100));
-      continue;
-    }
-
-    if (keepHighestVersion) {
-      const names = allFiles.map(f => f.split('/').pop()!);
-      const kept  = new Set(filterHighestVersions(names));
-      const before = allFiles.length;
-      allFiles = allFiles.filter(f => kept.has(f.split('/').pop()!));
-      const dropped = before - allFiles.length;
-      if (dropped > 0) {
-        appendLog('skip', `  ⊘  skipped ${dropped} older version(s)`);
-        stats.skipped += dropped;
-      }
     }
 
     stats.packages += 1;
+    stats.copied += sync.copied;
+    stats.skipped += sync.skipped;
+    stats.errors += sync.errors;
 
-    const vocabMap = buildVocabContext(ctx.vocab);
-
-    for (const srcFile of allFiles) {
-      const rawName    = srcFile.split('/').pop()!;
-      const ext        = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
-      const stem       = ext ? rawName.slice(0, -ext.length) : rawName;
-      ctx.processedPackages?.push(stem); // one entry per asset file, stem = shortcode
-      const translated = translateExportName(stem, ext, vocabMap);
-      const destFile   = await join(pkg, translated);
-
-      if (dryRun) {
-        appendLog('success', `  ✓  [DRY] would copy: ${rawName} → ${translated}`);
-        stats.copied += 1;
-        continue;
-      }
-
-      if (await isUnchanged(srcFile, destFile)) {
-        appendLog('dim', `  ↷  unchanged: ${translated}`);
-        stats.skipped += 1;
-        continue;
-      }
-
-      try {
-        await mkdir(await dirname(destFile), { recursive: true });
-        await copyFile(srcFile, destFile);
-        appendLog('success', `  ✓  copied: ${rawName} → ${translated}`);
-        stats.copied += 1;
-      } catch (e) {
-        appendLog('error', `  ✕  failed: ${rawName} — ${e}`);
-        addIssue({ category: 'error', file: rawName, reason: String(e) });
-        stats.errors += 1;
-      }
+    for (const srcFile of sync.sources) {
+      const rawName = srcFile.split('/').pop()!;
+      const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
+      const stem = ext ? rawName.slice(0, -ext.length) : rawName;
+      ctx.processedPackages?.push(stem);
     }
 
     setProgress(Math.round(((idx + 1) / total) * 100));
@@ -287,10 +388,11 @@ async function flagDisconnected(
   stats:     RunStats,
   appendLog: (t: LogType, m: string) => void,
   addIssue:  (i: { category: 'skipped'|'disconnected'|'version-conflict'|'error'; file: string; reason: string }) => void,
+  opts: { layout: DestExportLayout },
 ): Promise<void> {
-  /* Walk target directory and rename anything not in livePub to "🚫 name".
-     Files already prefixed with 🚫 are left alone.
-     Folders are processed shallowest first so a renamed parent also moves its children. */
+  /* Rename target entries not in livePub.
+     Folders layout manages the whole tree (including leftover package folders
+     from older root-dump runs). Flat only manages root-level entries. */
   async function collectAll(dir: string, acc: { path: string; isDir: boolean }[]) {
     const entries = await listDir(dir);
     for (const e of entries) {
@@ -304,24 +406,36 @@ async function flagDisconnected(
   const all: { path: string; isDir: boolean }[] = [];
   await collectAll(targetDir, all);
 
-  /* Pre-compute all ancestor folders implied by live files so we never flag
-     an intermediate directory that contains live content.
-     e.g. livePub has "target/A/B/file.pdf" → liveFolderAncestors gets "target/A" and "target/A/B" */
+  const targetNorm = targetDir.replace(/\\/g, '/').replace(/\/+$/, '');
+
+  function inLayoutScope(abs: string): boolean {
+    if (opts.layout === 'flat') {
+      const rel = abs.replace(/\\/g, '/').replace(targetNorm, '').replace(/^\/+/, '');
+      return rel.length > 0 && !rel.includes('/');
+    }
+    return true;
+  }
+
+  const scoped = all.filter(x => inLayoutScope(x.path));
+
   const liveFolderAncestors = new Set<string>();
   for (const p of livePub) {
-    const parts = p.split('/');
+    const parts = p.replace(/\\/g, '/').split('/');
     for (let i = 1; i < parts.length; i++) {
       liveFolderAncestors.add(parts.slice(0, i).join('/'));
     }
   }
 
-  const files   = all.filter(x => !x.isDir);
-  const folders = all.filter(x => x.isDir).sort((a, b) => a.path.split('/').length - b.path.split('/').length);
+  // Normalize livePub keys for comparison (Tauri join vs walk can differ on trailing style).
+  const liveNorm = new Set([...livePub].map(p => p.replace(/\\/g, '/').replace(/\/+$/, '')));
+
+  const files   = scoped.filter(x => !x.isDir);
+  const folders = scoped.filter(x => x.isDir).sort((a, b) => a.path.split('/').length - b.path.split('/').length);
 
   for (const { path: existingPath, isDir } of [...files, ...folders]) {
-    /* Files: exact match in livePub. Folders: live if any file was published inside them. */
-    if (!isDir && livePub.has(existingPath)) continue;
-    if (isDir  && liveFolderAncestors.has(existingPath)) continue;
+    const existingNorm = existingPath.replace(/\\/g, '/').replace(/\/+$/, '');
+    if (!isDir && liveNorm.has(existingNorm)) continue;
+    if (isDir  && (liveNorm.has(existingNorm) || liveFolderAncestors.has(existingNorm))) continue;
 
     const name = existingPath.split('/').pop()!;
     if (name.startsWith('🚫')) continue;
@@ -330,12 +444,32 @@ async function flagDisconnected(
       await rename(existingPath, flagged);
       const rel = existingPath.replace(targetDir, '').replace(/^\//, '');
       appendLog('disconnected', `  🚫 DISCONNECTED: ${rel}`);
-      addIssue({ category: 'disconnected', file: rel, reason: 'No longer in source [03] OUT' });
+      addIssue({ category: 'disconnected', file: rel, reason: 'No longer in source for this export layout' });
       stats.disconnected += 1;
     } catch {
       /* entry already moved as child of a renamed parent — ignore */
     }
   }
+}
+
+/** Relative path from source root → target, stripping stable-id suffixes on ancestors. */
+function nestedPublishRel(sourceRoot: string, absPath: string): string {
+  const root = sourceRoot.replace(/\\/g, '/').replace(/\/+$/, '');
+  const abs  = absPath.replace(/\\/g, '/').replace(/\/+$/, '');
+  let rel: string;
+  if (abs === root) {
+    rel = '';
+  } else if (abs.startsWith(root + '/')) {
+    rel = abs.slice(root.length + 1);
+  } else {
+    // Fallback: find root as a path prefix (handles mild join/realpath drift).
+    const idx = abs.toLowerCase().indexOf(root.toLowerCase() + '/');
+    rel = idx >= 0 ? abs.slice(idx + root.length + 1) : (abs.split('/').pop() ?? '');
+  }
+  const parts = rel.split('/').filter(Boolean);
+  return parts
+    .map((seg, i) => (i < parts.length - 1 ? stripStableId(seg) : seg))
+    .join('/');
 }
 
 /* ── Publish operation ──────────────────────────────────────────────────── */
@@ -349,79 +483,164 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
     return;
   }
 
+  const layout: DestExportLayout = ctx.localExportLayout ?? 'folders';
+  const includePackages = layout === 'folders' && !!ctx.localIncludePackages;
+
   appendLog('section', `━━━ ${dryRun ? 'DRY RUN' : 'PUBLISHING'} ━━━`);
   appendLog('dim', `  → ${targetFolder}`);
+  appendLog('dim', `  Layout: ${layout}${includePackages ? ' + nested packages' : ''} · always highest version only`);
 
-  const vocabMap  = buildVocabContext(vocab);
-  const livePub   = new Set<string>(); // all dest paths published this run
+  const livePub = new Set<string>();
+  const vocabMap = buildVocabContext(vocab);
 
-  /* Publish all files from dirPath into targetDir, translating filenames. */
-  async function publishDir(dirPath: string, targetDir: string) {
-    const items = await listDir(dirPath);
-    for (const item of items) {
-      if (shouldSkip(item.name, settings)) continue;
-      if (item.isFile) {
-        if (!isPublishableFile(item.name) || item.name.includes('-thumb')) continue;
-        const fileSrc    = await join(dirPath, item.name);
-        const ext        = item.name.includes('.') ? '.' + item.name.split('.').pop()! : '';
-        const stem       = ext ? item.name.slice(0, -ext.length) : item.name;
+  async function copyOne(srcPath: string, fileDest: string, logName: string) {
+    if (livePub.has(fileDest)) { stats.skipped += 1; return; }
+    livePub.add(fileDest);
+    const destParent = await dirname(fileDest);
+    livePub.add(destParent);
+
+    if (dryRun) {
+      appendLog('success', `  [DRY] → ${logName}`);
+      stats.published += 1;
+      return;
+    }
+    try {
+      await mkdir(destParent, { recursive: true });
+      if (!await isUnchanged(srcPath, fileDest)) {
+        await copyFile(srcPath, fileDest);
+        appendLog('success', `  ✓  ${logName}`);
+        stats.published += 1;
+      } else {
+        stats.skipped += 1;
+      }
+    } catch (err) {
+      appendLog('error', `  ✕  publish failed: ${logName} — ${err}`);
+      addIssue({ category: 'error', file: logName, reason: String(err) });
+      stats.errors += 1;
+    }
+  }
+
+  /* Nested packages: refresh package folder from OUT, then copy to destination. */
+  async function publishNestedPackages() {
+    const packages = await findPackageFolders(sourceFolder, settings);
+    if (!packages.length) {
+      appendLog('warn', `  No folders matching "${settings.packagePrefix}".`);
+      return;
+    }
+    appendLog('info', `  Nested packages: ${packages.length} folder(s)`);
+    for (const pkg of packages) {
+      const rel = nestedPublishRel(sourceFolder, pkg);
+      const destPkg = await join(targetFolder, rel);
+      stats.pubFolders += 1;
+      livePub.add(destPkg);
+      appendLog('section', `📦  ${rel}`);
+
+      const sync = await syncPackageFromOut(
+        pkg,
+        settings,
+        vocabMap,
+        dryRun,
+        appendLog,
+        (file, reason) => addIssue({ category: 'error', file, reason }),
+      );
+      if (!sync.sources.length) continue;
+
+      appendLog('info', `  ✓  export ${sync.sources.map(p => p.split('/').pop()).join(', ')}`);
+
+      for (const srcPath of sync.sources) {
+        const rawName = srcPath.split('/').pop()!;
+        const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
+        const stem = ext ? rawName.slice(0, -ext.length) : rawName;
         const translated = translateExportName(stem, ext, vocabMap);
-        const fileDest   = await join(targetDir, translated);
-        if (livePub.has(fileDest)) { stats.skipped += 1; continue; } // same dest already written this run
-        livePub.add(fileDest);
-        if (dryRun) {
-          appendLog('success', `  [DRY] → ${translated}`);
-          stats.published += 1;
-        } else {
-          try {
-            await mkdir(targetDir, { recursive: true });
-            if (!await isUnchanged(fileSrc, fileDest)) {
-              await copyFile(fileSrc, fileDest);
-              appendLog('success', `  ✓  ${item.name} → ${translated}`);
-              stats.published += 1;
-            } else {
-              stats.skipped += 1;
-            }
-          } catch (err) {
-            appendLog('error', `  ✕  publish failed: ${item.name} — ${err}`);
-            addIssue({ category: 'error', file: item.name, reason: String(err) });
-            stats.errors += 1;
-          }
-        }
-      } else if (item.isDirectory) {
+        await copyOne(srcPath, await join(destPkg, translated), `${rel}/${translated}`);
+      }
+    }
+  }
+
+  if (layout === 'flat') {
+    appendLog('dim', '  Mode: flat (all files into target root)');
+    let assets = (ctx.collectedAssets?.length
+      ? ctx.collectedAssets
+      : await scanAllAssets(sourceFolder, settings));
+    const { kept, dropped } = keepOnlyHighestVersions(assets);
+    assets = kept;
+    if (dropped.length) appendLog('skip', `  ⊘  dropped ${dropped.length} older version(s)`);
+    stats.pubFolders += 1;
+    for (const srcPath of assets) {
+      const rawName = srcPath.split('/').pop()!;
+      if (!isPublishableFile(rawName) || rawName.includes('-thumb')) continue;
+      const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
+      const stem = ext ? rawName.slice(0, -ext.length) : rawName;
+      const translated = translateExportName(stem, ext, vocabMap);
+      await copyOne(srcPath, await join(targetFolder, translated), translated);
+    }
+  } else {
+    appendLog('dim', '  Mode: full folders (OUT tree)');
+
+    async function publishDir(dirPath: string, targetDir: string) {
+      const items = await listDir(dirPath);
+      const fileItems = items.filter(
+        item => item.isFile && !shouldSkip(item.name, settings)
+          && isPublishableFile(item.name) && !item.name.includes('-thumb'),
+      );
+      const paths = await Promise.all(fileItems.map(f => join(dirPath, f.name)));
+      const { kept, dropped } = keepOnlyHighestVersions(paths);
+      if (dropped.length) {
+        appendLog('skip', `  ⊘  dropped ${dropped.map(p => p.split('/').pop()).join(', ')}`);
+      }
+      if (kept.length) {
+        appendLog('info', `  ✓  export ${kept.map(p => p.split('/').pop()).join(', ')}`);
+      }
+
+      for (const fileSrc of kept) {
+        const name = fileSrc.split('/').pop()!;
+        const ext = name.includes('.') ? '.' + name.split('.').pop()! : '';
+        const stem = ext ? name.slice(0, -ext.length) : name;
+        const translated = translateExportName(stem, ext, vocabMap);
+        await copyOne(fileSrc, await join(targetDir, translated), `${name} → ${translated}`);
+      }
+      for (const item of items) {
+        if (shouldSkip(item.name, settings) || !item.isDirectory) continue;
         const subSrc    = await join(dirPath, item.name);
         const subTarget = await join(targetDir, item.name);
         livePub.add(subTarget);
         await publishDir(subSrc, subTarget);
       }
     }
-  }
 
-  async function publishFolder(src: string, target: string) {
-    const entries = await listDirLogged(src, appendLog);
-    for (const e of entries) {
-      if (shouldSkip(e.name, settings)) continue;
-      if (!e.isDirectory) continue;
-      const childSrc = await join(src, e.name);
+    async function publishFolder(src: string, target: string) {
+      const entries = await listDirLogged(src, appendLog);
+      for (const e of entries) {
+        if (shouldSkip(e.name, settings)) continue;
+        if (!e.isDirectory) continue;
+        // Package dirs next to OUT are handled by publishNestedPackages when enabled.
+        if (isPackageFolder(e.name, settings)) continue;
+        const childSrc = await join(src, e.name);
 
-      if (isOutFolder(e.name, settings)) {
-        stats.pubFolders += 1;
-        await publishDir(childSrc, target);
-      } else {
-        const hasSiblingOut = entries.some(sib => sib.isDirectory && isOutFolder(sib.name, settings));
-        if (hasSiblingOut) continue;
-        // Strip the folder-identity hash suffix — it's an internal source-side anchor
-        // (see domain/stableId.ts) and must never leak into a published/shared copy.
-        await publishFolder(childSrc, await join(target, stripStableId(e.name)));
+        if (isOutFolder(e.name, settings)) {
+          stats.pubFolders += 1;
+          await publishDir(childSrc, target);
+        } else {
+          const hasSiblingOut = entries.some(sib => sib.isDirectory && isOutFolder(sib.name, settings));
+          if (hasSiblingOut) continue;
+          await publishFolder(childSrc, await join(target, stripStableId(e.name)));
+        }
       }
+    }
+
+    await publishFolder(sourceFolder, targetFolder);
+
+    if (includePackages) {
+      await publishNestedPackages();
     }
   }
 
-  await publishFolder(sourceFolder, targetFolder);
-
-  /* Orphan scan — skip if nothing was published (avoids false positives on empty runs) */
-  if (stats.published > 0 && !dryRun) {
-    await flagDisconnected(targetFolder, livePub, stats, appendLog, addIssue);
+  // Always scan for leftovers (even when every file was unchanged) so root package
+  // dumps from older publish modes get disconnected.
+  if (!dryRun) {
+    await flagDisconnected(targetFolder, livePub, stats, appendLog, addIssue, {
+      layout,
+    });
   }
 
   appendLog('section',
@@ -648,14 +867,6 @@ export async function scanVersionMap(
   return vmap;
 }
 
-/* ── Helper: check if directory exists ──────────────────────────────────── */
-
-async function dirExists(path: string): Promise<boolean> {
-  try {
-    const entries = await readDir(path);
-    return entries !== null;
-  } catch { return false; }
-}
 
 
 
@@ -703,8 +914,10 @@ function rememberR2Upload(
   cache[r2CacheKey(bucket, objectKey)] = { mtimeMs, size, sha256 };
 }
 
-function r2PublicUrl(publicDomain: string, objectKey: string): string {
-  return `${publicDomain.replace(/\/+$/, '')}/${objectKey}`;
+function r2PublicUrl(publicDomain: string, objectKey: string, contentHash?: string): string {
+  const base = `${publicDomain.replace(/\/+$/, '')}/${objectKey}`;
+  if (!contentHash) return base;
+  return `${base}?v=${contentHash.slice(0, 12)}`;
 }
 
 /* ── Local cloud-export cache — same idea as R2: mtime+size fast-path so
@@ -842,13 +1055,6 @@ async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<void> {
   for (let i = 0; i < thumbFiles.length; i += CONCURRENCY) {
     const batch = thumbFiles.slice(i, i + CONCURRENCY);
     await Promise.all(batch.map(async ({ thumbPath, stem }) => {
-      // Skip if URL already known from DB inventory — no CDN request needed
-      // Also check by shortcode (version-stripped) so other versions of the same asset skip too
-      const shortcode = stem.replace(/\s+[vV]\d+(?:[-._]\d+)*\s*$/, '').trim();
-      if (ctx.cdnUrls?.has(stem) || ctx.cdnUrls?.has(shortcode)) {
-        skipped += 1;
-        return;
-      }
       // Check thumbnail exists locally before attempting upload
       let thumbInfo;
       try { thumbInfo = await stat(thumbPath); } catch {
@@ -867,16 +1073,15 @@ async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<void> {
 
       // Cheap local check (mtime+size, no file read/hash/network) before the real thing.
       // A manifest that says the key is gone from R2 overrides the cache — re-upload.
+      // Do NOT skip just because DB already has a URL — version bumps overwrite the same
+      // key; we still need a fresh ?v= hash in cdnUrls for browser cache busting.
       const cacheKey = r2CacheKey(r2.bucket, objectKey);
       const cacheEntry = r2Cache[cacheKey];
       const mtimeMs = thumbInfo.mtime?.getTime() ?? -1;
       if (cacheEntry && cacheEntry.size === thumbInfo.size && cacheEntry.mtimeMs === mtimeMs
           && remoteKeys?.has(objectKey) !== false) {
-        // Supabase sync writes thumbnail_url from ctx.cdnUrls, and the DB
-        // pre-population regex misses stable-identity keys — leaving the map
-        // unset here would null the column on the next sync.
-        if (ctx.cdnUrls && !ctx.cdnUrls.has(stem)) {
-          ctx.cdnUrls.set(stem, r2PublicUrl(r2.publicDomain, objectKey));
+        if (ctx.cdnUrls) {
+          ctx.cdnUrls.set(stem, r2PublicUrl(r2.publicDomain, objectKey, cacheEntry.sha256));
         }
         cached += 1;
         stats.cdnThumbCached += 1;
@@ -1007,8 +1212,8 @@ async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promise<void
         // Supabase sync writes download_url from ctx.originalUrls — there is no DB
         // pre-population for originals, so skipping without setting the map would
         // null the column on the next sync (the web portal's download button).
-        if (ctx.originalUrls && !ctx.originalUrls.has(stem)) {
-          ctx.originalUrls.set(stem, r2PublicUrl(r2.publicDomain, objectKey));
+        if (ctx.originalUrls) {
+          ctx.originalUrls.set(stem, r2PublicUrl(r2.publicDomain, objectKey, cacheEntry.sha256));
         }
         cached += 1;
         stats.cdnOrigCached += 1;
@@ -1251,35 +1456,103 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
   }
 
   const outFolder = settings.outFolder || 'OUT';
-  const files = (collectedAssets ?? []).map(srcPath => {
+  const vocabMap = buildVocabContext(vocab);
+  const cloudCache = await loadCloudCache();
+  let cloudCacheDirty = false;
+
+  // Default OUT-tree file list (used when dest layout is folders or flat).
+  let outAssetPaths = collectedAssets ?? [];
+  if (outAssetPaths.length) {
+    const { kept, dropped } = keepOnlyHighestVersions(outAssetPaths);
+    outAssetPaths = kept;
+    if (dropped.length) appendLog('skip', `  ⊘  dropped ${dropped.length} older version(s) from cloud export`);
+  }
+  const outFiles = outAssetPaths.map(srcPath => {
     const fileName = srcPath.split('/').pop()!;
     const dotIdx   = fileName.lastIndexOf('.');
     const ext      = dotIdx > 0 ? fileName.slice(dotIdx) : '';
     const stem     = dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName;
     const { dir: relativeDir } = relativeUnderOut(srcPath, outFolder);
-    return { srcPath, stem, ext, fileName, relativeDir };
+    return { srcPath, stem, ext, fileName, relativeDir, nestedOverride: null as string | null };
   });
 
-  if (!files.length) {
-    appendLog('dim', '  No assets found in source — skipping.');
-    return;
+  type CloudFileJob = {
+    srcPath: string;
+    stem: string;
+    ext: string;
+    fileName: string;
+    relativeDir: string;
+    /** When set, used as the full remote relative path (package mode). */
+    nestedOverride: string | null;
+  };
+
+  async function packageFileJobsNested(): Promise<CloudFileJob[]> {
+    const source = settings.sourceFolder;
+    if (!source) return [];
+    const packages = await findPackageFolders(source, settings);
+    const jobs: CloudFileJob[] = [];
+    for (const pkg of packages) {
+      const relPkg = nestedPublishRel(source, pkg);
+      appendLog('section', `📦  ${relPkg}`);
+      const sync = await syncPackageFromOut(
+        pkg,
+        settings,
+        vocabMap,
+        !!settings.dryRun,
+        appendLog,
+      );
+      if (!sync.sources.length) continue;
+      for (const srcPath of sync.sources) {
+        const rawName = srcPath.split('/').pop()!;
+        const dotIdx = rawName.lastIndexOf('.');
+        const ext = dotIdx > 0 ? rawName.slice(dotIdx) : '';
+        const stem = dotIdx > 0 ? rawName.slice(0, dotIdx) : rawName;
+        const destRel = translateExportName(stem, ext, vocabMap);
+        const fileName = destRel.split('/').pop()!;
+        jobs.push({
+          srcPath,
+          stem: fileName.includes('.') ? fileName.slice(0, fileName.lastIndexOf('.')) : fileName,
+          ext: fileName.includes('.') ? fileName.slice(fileName.lastIndexOf('.')) : '',
+          fileName,
+          relativeDir: '',
+          nestedOverride: `${relPkg}/${destRel}`,
+        });
+      }
+    }
+    return jobs;
   }
 
-  appendLog('info', `  ${activeDests.length} destination(s) · ${files.length} asset(s)`);
-  const vocabMap = buildVocabContext(vocab);
-  const cloudCache = await loadCloudCache();
-  let cloudCacheDirty = false;
+  if (!outFiles.length) {
+    appendLog('dim', '  No OUT assets scanned — destinations with nested packages may still export.');
+  }
+
+  appendLog('info', `  ${activeDests.length} destination(s)`);
 
   for (const dest of activeDests) {
     const cfg = dest.config;
     if (cfg.type === 'local') continue;
 
-    // Preserve OUT-relative folders by default; dest.flatExport dumps everything into remotePath.
-    const flatten = dest.flatExport === true;
-    if (flatten) {
+    const { exportLayout: layout, includePackages } = resolveExportShape(dest);
+    const flatten = layout === 'flat';
+    let files: CloudFileJob[] = [...outFiles];
+
+    if (layout === 'folders' && includePackages) {
+      const pkgJobs = await packageFileJobsNested();
+      if (!pkgJobs.length) {
+        appendLog('warn', `  ${dest.name}: no package folders — run Distribute packages first (OUT folders still export).`);
+      } else {
+        files = [...outFiles, ...pkgJobs];
+        appendLog('dim', `  ${dest.name}: folders + nested packages (${outFiles.length} OUT · ${pkgJobs.length} package file(s))`);
+      }
+    } else if (flatten) {
       appendLog('dim', `  ${dest.name}: flat export (folder structure ignored)`);
     } else {
-      appendLog('dim', `  ${dest.name}: preserving folders under OUT`);
+      appendLog('dim', `  ${dest.name}: full folders under OUT`);
+    }
+
+    if (!files.length) {
+      appendLog('dim', `  ${dest.name}: no assets — skipping.`);
+      continue;
     }
 
     if (!dest.generateLink) {
@@ -1298,16 +1571,29 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
     const CONCURRENCY = 8;
     for (let i = 0; i < files.length; i += CONCURRENCY) {
       const batch = files.slice(i, i + CONCURRENCY);
-      await Promise.all(batch.map(async ({ srcPath, stem, ext, relativeDir }) => {
-        const translated = translateExportName(stem, ext, vocabMap);
-        const nestedName = !flatten && relativeDir
-          ? `${relativeDir}/${translated}`
+      await Promise.all(batch.map(async ({ srcPath, stem, ext, relativeDir, nestedOverride }) => {
+        const translated = nestedOverride
+          ? nestedOverride.split('/').pop()!
+          : translateExportName(stem, ext, vocabMap);
+        const nestedName = nestedOverride
+          ?? (!flatten && relativeDir ? `${relativeDir}/${translated}` : translated);
+        const gdriveFolderPath = (() => {
+          if (nestedOverride) {
+            const parts = nestedName.split('/');
+            parts.pop();
+            const sub = parts.join('/');
+            return [cfg.remotePath.replace(/\/$/, ''), sub].filter(Boolean).join('/');
+          }
+          return !flatten && relativeDir
+            ? [cfg.remotePath.replace(/\/$/, ''), relativeDir].filter(Boolean).join('/')
+            : cfg.remotePath;
+        })();
+        const gdriveFileName = nestedOverride
+          ? nestedName.split('/').pop()!
           : translated;
+
         let url: string | null = null;
         try {
-          // Cheap local fast-path (CDN-style): matching mtime+size → skip with no
-          // file read and no provider API. Requires a prior successful upload/skip
-          // that wrote this cache entry; first run still hits the network.
           let srcInfo: Awaited<ReturnType<typeof stat>>;
           try {
             srcInfo = await stat(srcPath);
@@ -1316,7 +1602,6 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
           }
           const mtimeMs = srcInfo.mtime?.getTime() ?? -1;
           const cacheEntry = cloudCache[cloudCacheKey(dest.id, nestedName)];
-          // URL is optional — missing link must not force a network round-trip every run.
           if (cacheEntry && cacheEntry.size === srcInfo.size && cacheEntry.mtimeMs === mtimeMs) {
             url = dest.generateLink ? (cacheEntry.url ?? null) : null;
             cached += 1;
@@ -1366,17 +1651,13 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
             uploaded += 1;
             stats.published += 1;
           } else if (cfg.type === 'gdrive') {
-            const folderPath = !flatten && relativeDir
-              ? [cfg.remotePath.replace(/\/$/, ''), relativeDir].filter(Boolean).join('/')
-              : cfg.remotePath;
-            // Lazy bytes: unchanged Drive files never leave disk into the webview.
             const result = await uploadGDriveFile(
               cfg.token!.accessToken,
               srcInfo.size,
               () => readFile(srcPath),
               mimeFromExt(ext),
-              translated,
-              folderPath,
+              gdriveFileName,
+              gdriveFolderPath,
               dest.generateLink,
               cfg.sharedDriveId,
             );
@@ -1399,8 +1680,6 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
           rememberCloudUpload(cloudCache, dest.id, nestedName, mtimeMs, srcInfo.size, url);
           cloudCacheDirty = true;
 
-          // Only client-role destinations feed the client-facing web portal —
-          // internal-team links should never end up there.
           if (url && cloudUrls && dest.role === 'client') {
             const mapKey = relativeDir ? `${relativeDir}/${stem}` : stem;
             const existing = cloudUrls.get(mapKey) ?? cloudUrls.get(stem) ?? [];

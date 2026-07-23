@@ -1,9 +1,9 @@
 # Cloud publishing internals
 
-Cloud export activates only when its pipeline toggle is on and selected non-local destinations contain an access token. Each scanned asset name is translated through the vocabulary. The configured provider remote folder is combined with the translated filename; source subdirectories are not reproduced by this stage.
+Cloud export activates only when its pipeline toggle is on and selected non-local destinations contain an access token. Each scanned asset name is translated through the vocabulary. Shape comes from `exportLayout` (`folders` \| `flat`) plus optional `includePackages` (nested package paths inside the tree).
 
-Destinations run sequentially; within one destination files run two at a time. Failure of one file increments errors and does not stop its siblings. There is no provider rollback and no remote deletion/reconciliation when a source disappears.
+Destinations run sequentially; within one destination files run with high concurrency. Failure of one file increments errors and does not stop its siblings. There is no provider rollback and no remote deletion/reconciliation when a source disappears.
 
 When `generateLink` is off, upload still happens but no link can be stored. When on, links are collected by source stem. Only `client`-role destinations contribute entries; same destination name replaces its previous entry for that asset. These entries later populate Supabase `download_urls`, while R2 populates singular `download_url`.
 
-The `flatExport` property exists on destination definitions, but current cloud export is effectively flat for every provider; the global `doFlatExport` setting is the execution toggle. Do not infer per-destination folder preservation from the field name.
+Legacy `flatExport` / `exportPackages` / `exportLayout: "packages"` map to `folders` + `includePackages` on read.

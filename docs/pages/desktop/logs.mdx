@@ -11,6 +11,6 @@ Always read the section header before interpreting a symbol.
 | `CLOUD EXPORT` green `✓` | Provider call succeeded; Dropbox separately logs existing paths as dim skips |
 | red `✕` | That file/operation failed; sibling jobs usually continue |
 
-Counters are shared across stages. `published` can include multiple destinations, so it is not a unique-asset count. `skipped` includes benign unchanged work and contributes to “completed with issues.” CDN thumbnail summary’s “no thumb” bucket also includes inventory shortcuts, not only missing local files.
+Counters are shared across stages. `published` can include multiple destinations, so it is not a unique-asset count. `skipped` includes benign unchanged work and contributes to “completed with issues.” CDN thumbnail summary’s “no thumb” bucket means a missing local sidecar (not an inventory shortcut).
 
 For proof, inspect the target appropriate to the phase: local filesystem for generation, R2 metadata/object URL for CDN, provider UI/API for cloud export, and Supabase row for portal state.

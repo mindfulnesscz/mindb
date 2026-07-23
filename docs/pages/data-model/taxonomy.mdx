@@ -15,9 +15,9 @@ Internal tag dimensions are always **entity**, **angle**, and **format** (machin
 
 Desktop Vocabulary **Sync** publishes dirty **leaves** then reloads from the DB. It never creates parent groups. Parent choice on desktop is a select of groups already in the portal.
 
-## Import from JSON
+## Import / export JSON
 
-Templates are **local JSON files** (not rows in the database). On create client, optionally attach a file; on an existing client use **Import from JSON** in Tags.
+Templates are **local JSON files** (not rows in the database). On create client, optionally attach a file; on an existing client use **Import from JSON** or **Export JSON** in Tags.
 
 Sample file in the portal app: `web/apps/client-hub/public/taxonomy.sample.json`.
 
@@ -36,6 +36,8 @@ Sample file in the portal app: `web/apps/client-hub/public/taxonomy.sample.json`
 - **`parent_key`** — tree grouping: nodes **without** `shortcode` are **parent groups** (portal-managed); leaves have a `shortcode`
 - **`shortcode`** — filename token (leaves only)
 
-Parse/validate/import: `taxonomyImport.ts` (`parseAndValidateTaxonomyJson`, `importTaxonomyToClient`). Desktop loads shortcoded tags from the DB for filename parsing and groups them by parent.
+Parse/validate/import: `taxonomyImport.ts` (`parseAndValidateTaxonomyJson`, `importTaxonomyToClient`). Export rebuilds the same document from the live DB (`buildTaxonomyDocument` / **Export JSON**). Desktop loads shortcoded tags from the DB for filename parsing and groups them by parent.
+
+Renaming a leaf’s **display name** on the portal also rewrites that label on the client’s asset rows (`name`, `entities` / `angles` / `formats`, `tags`) so the gallery updates without waiting for a desktop run. Shortcode renames still enqueue `rename_tasks` for filesystem updates.
 
 See [Platform division](/getting-started/platform-division) and [Naming and vocabulary](/desktop/naming).

@@ -10,6 +10,7 @@ Where taxonomy and cloud delivery are edited, what each surface owns, and how po
 | Parent tag groups (no shortcode) | `tags` rows | Portal **Tags** only | Loads for grouping; cannot create |
 | Leaf tags (have shortcode) | `tags` rows | Portal **Tags**, or desktop Vocabulary (then Sync) | Parses filenames; may publish dirty leaves |
 | Export destination structure | `clients.cloud_destinations` | Portal **Export destinations** | Sync / pull; connect OAuth |
+| Local destination filesystem path | Machine-local only | Desktop Cloud destinations → Browse | Never written to Supabase |
 | OAuth tokens & Google client secret | Machine-local only | Desktop Settings → Cloud destinations | Never written to Supabase |
 | Source / vault folders | Machine-local | Desktop Pipeline / Settings | Reveal bridge uses `sourceFolder` |
 
@@ -40,7 +41,7 @@ dimension (entity | angle | format)
 - Change dimension labels (admin)
 - Create / rename / delete **parent groups**
 - Create / edit leaf tags (name, shortcode, key, parent)
-- **Import from JSON** (`taxonomy.sample.json` shape) for bulk bootstrap
+- **Import from JSON** / **Export JSON** (`taxonomy.sample.json` shape) for bulk bootstrap or backup
 
 **Desktop** — Vocabulary screen
 
@@ -63,6 +64,8 @@ Portal tags DB  ──load / Sync──►  Desktop vocabulary cache
 
 Filename parsing and package scaffolding still depend on shortcodes. Changing a shortcode without a rename pipeline pass will break discovery for files that still use the old token. See [Naming and vocabulary](/desktop/naming) and [Taxonomy](/data-model/taxonomy).
 
+Changing a tag’s **display name** (full label) on the portal updates matching `assets.name` / facet arrays immediately. Desktop pipeline refreshes vocabulary from the portal at the start of each run (unless there are unpublished local leaf edits), so export translation and the next sync keep the new labels — and no longer overwrite portal renames from a stale cache.
+
 ---
 
 ## Export destinations
@@ -73,12 +76,15 @@ Each destination in `clients.cloud_destinations` includes:
 
 | Field | Meaning |
 |---|---|
-| `name`, `config.type`, remote/local path | Where files go |
+| `name`, `config.type` | Identity + provider |
+| `config.remotePath` | Cloud folder root (portal). **Local path is desktop-only** — portal stores `path: ""` for `local` |
 | `role` `internal` \| `client` | Pipeline audience — only **client** feeds portal `download_urls` |
 | `minRole` | Minimum hub role that may see this dest’s share links |
 | `showInPortal` | Whether links appear on asset detail at all |
 | `allowRevealLocal` | Whether “Reveal in Finder” is offered for roles ≥ `minRole` |
-| `generateLink` / `flatExport` / `enabled` | Pipeline behavior |
+| `exportLayout` | Required: `folders` (OUT tree) \| `flat` (one folder) |
+| `includePackages` | Optional with `folders`: refresh source packages from OUT, then copy them **nested** at source-relative paths. Never dumps packages alone at target root. Source packages delete orphans (no `🚫`); targets may disconnect. |
+| `generateLink` / `enabled` | Pipeline behavior |
 | `config.token` | **Always null in DB** — tokens live only on the workstation |
 
 Public OAuth app ids may be stored in the portal definition. Google **client secret** and all refresh/access tokens stay on desktop.
@@ -88,12 +94,13 @@ Public OAuth app ids may be stored in the portal definition. Google **client sec
 **Portal** — Admin → client drawer → **Export destinations**
 
 - Add / edit / remove destination structure
-- Set `minRole`, portal visibility, Reveal flag, generate-link, flat export
+- Set `minRole`, portal visibility, Reveal flag, generate-link, **export layout** (`folders` / `flat`) and optional **include packages**
+- Do **not** set local filesystem paths (those are per machine)
 
 **Desktop** — Settings → Cloud destinations
 
-- **Sync** pulls definitions and merges with local tokens
-- Connect / refresh / disconnect OAuth (or browse a machine-local path)
+- **Sync** pulls definitions and merges with local tokens / machine paths
+- Connect / refresh / disconnect OAuth, or **Browse** a local folder path
 - Override client id / secret locally when needed
 - Pipeline checkboxes choose which destinations run on this machine — that selection is local, not pushed back to the portal
 
@@ -137,9 +144,9 @@ Desktop must be running with that client selected and a valid source folder. Wit
 
 **New delivery target**
 
-1. Portal: add Export destination (`role`, `minRole`, path, generate link)  
-2. Desktop: Cloud destinations → Sync → Connect  
-3. Pipeline: check the destination → run  
+1. Portal: add Export destination (`role`, `minRole`, remote path / package flag, generate link)  
+2. Desktop: Cloud destinations → Sync → set local path or Connect OAuth  
+3. Pipeline: check the destination → run (Distribute first if `includePackages`)  
 4. Confirm asset detail Source links for a test member role  
 
 **Someone can’t see a Drive link**

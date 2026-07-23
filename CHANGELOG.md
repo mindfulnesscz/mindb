@@ -5,6 +5,17 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Package sync mirrors OUT** — Distribute / nested package export always take highest version from sibling OUT, hard-delete orphans in the source package (no `🚫` there), and never keep thumbnails in source packages. Publish destinations still use `🚫` disconnect.
+- **CDN browser cache after version bumps** — public URLs append `?v=<content-hash>`; uploads set immutable long cache; DB inventory alone no longer skips re-verification.
+
+### Docs
+
+- Pipeline, distribution, CDN, settings, and environments docs updated for the above; tag label-rename notes in taxonomy / tags-and-destinations.
+
 ## [2.4.1] — 2026-07-13
 
 Deployment plumbing and field fixes shaken out while standing up staging and running production against the new auth/storage model.
