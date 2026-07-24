@@ -20,6 +20,7 @@ import { uploadDropboxFile, uploadOneDriveFile, uploadGDriveFile } from './cloud
 import type { CloudDestination, DestExportLayout } from '../domain/client';
 import { resolveExportShape } from '../domain/client';
 import { stripStableId } from '../domain/stableId';
+import { isOutFolder as namingIsOutFolder, isPackageFolder as namingIsPackageFolder, stripWorkflowPrefix } from '../domain/naming';
 import { resolveCdnIdentity } from './supabaseService';
 import { storageKey } from './pipeline/storageKey';
 
@@ -71,12 +72,25 @@ function shouldSkip(name: string, s: AppSettings): boolean {
   return s.excludeMark ? name.includes(s.excludeMark) : false;
 }
 
+/** Prefix packages — skipped during OUT-tree walks / collected for nested export. */
 function isPackageFolder(name: string, s: AppSettings): boolean {
-  return s.packagePrefix ? name.startsWith(s.packagePrefix) : false;
+  return namingIsPackageFolder(name, {
+    packagePrefix: s.packagePrefix,
+    outFolder:     s.outFolder,
+    excludeMark:   s.excludeMark,
+    includeMark:   s.includeMark,
+    filterMode:    s.filterMode,
+  });
 }
 
 function isOutFolder(name: string, s: AppSettings): boolean {
-  return s.outFolder ? name.toLowerCase() === s.outFolder.toLowerCase() : false;
+  return namingIsOutFolder(name, {
+    packagePrefix: s.packagePrefix,
+    outFolder:     s.outFolder,
+    excludeMark:   s.excludeMark,
+    includeMark:   s.includeMark,
+    filterMode:    s.filterMode,
+  });
 }
 
 function isPublishableFile(name: string): boolean {
@@ -109,6 +123,12 @@ async function listDirLogged(
 
 /* ── Package folder discovery ───────────────────────────────────────────── */
 
+/**
+ * Only folders matching the configured package prefix (e.g. `📦` / `[00] 📦`).
+ * Migrated `Name __hash` asset folders and `.dchub.json` are NOT packages —
+ * treating them as such made Collect a no-op on prod and skipped their OUT
+ * when filling real 📦 anchors.
+ */
 async function findPackageFolders(root: string, s: AppSettings): Promise<string[]> {
   const results: string[] = [];
   async function walk(dir: string) {
@@ -129,36 +149,39 @@ async function findPackageFolders(root: string, s: AppSettings): Promise<string[
 }
 
 /**
- * Files to put in a package export: sibling OUT next to the package folder
- * (same layout Distribute uses). Do NOT read the package folder — it often
- * still holds an older translated copy.
+ * Gather OUT deliverables for a 📦 anchor: every OUT under the package's parent
+ * tree (siblings + nested assets), skipping other package folders. Walks into
+ * migrated `Name __hash` assets so their OUT is included.
  */
-async function collectSiblingOutSources(
+async function collectOutUnderParent(
+  parentDir: string,
+  s: AppSettings,
+): Promise<string[]> {
+  const results: string[] = [];
+  async function walk(dir: string) {
+    const entries = await listDir(dir);
+    for (const e of entries) {
+      if (!e.isDirectory || shouldSkip(e.name, s)) continue;
+      // Never harvest from (or through) another 📦 anchor.
+      if (isPackageFolder(e.name, s)) continue;
+      const childPath = await join(dir, e.name);
+      if (isOutFolder(e.name, s)) {
+        results.push(...await collectFiles(childPath, s, false));
+      } else {
+        await walk(childPath);
+      }
+    }
+  }
+  await walk(parentDir);
+  return results;
+}
+
+async function collectPackageOutSources(
   packageDir: string,
   s: AppSettings,
 ): Promise<string[]> {
   const parent = await dirname(packageDir);
-  const parentEntries = await listDir(parent);
-  const allFiles: string[] = [];
-
-  for (const e of parentEntries) {
-    if (!e.isDirectory || isPackageFolder(e.name, s) || shouldSkip(e.name, s)) continue;
-    const sibPath = await join(parent, e.name);
-
-    // OUT is often a direct sibling of the package folder.
-    if (isOutFolder(e.name, s)) {
-      allFiles.push(...await collectFiles(sibPath, s, false));
-      continue;
-    }
-
-    // Or: sibling asset folder that contains an OUT child.
-    const sibEntries = await listDir(sibPath);
-    for (const se of sibEntries) {
-      if (!se.isDirectory || !isOutFolder(se.name, s)) continue;
-      allFiles.push(...await collectFiles(await join(sibPath, se.name), s, false));
-    }
-  }
-  return allFiles;
+  return collectOutUnderParent(parent, s);
 }
 
 /** Always keep highest version for export — one file per base+ext. */
@@ -174,43 +197,18 @@ function keepOnlyHighestVersions(paths: string[]): { kept: string[]; dropped: st
 }
 
 /**
- * Refresh a package folder from sibling OUT: copy highest versions (translated),
- * then hard-delete anything else in the package (no 🚫 — that is target-only).
- * Returns kept OUT source paths for further export.
+ * Hard-mirror purge for a package folder (source or target): delete anything that
+ * isn't in liveNames — older versions, renamed taxonomy files, thumbs, prior 🚫 marks.
+ * Package collections are pickup mirrors; they must not accumulate stale files.
  */
-async function syncPackageFromOut(
-  pkg: string,
+async function purgePackageMirror(
+  pkgDir: string,
+  liveNames: Set<string>,
   s: AppSettings,
-  vocabMap: ReturnType<typeof buildVocabContext>,
   dryRun: boolean,
   appendLog: (t: LogType, m: string) => void,
-  onError?: (file: string, reason: string) => void,
-): Promise<{ sources: string[]; copied: number; skipped: number; removed: number; errors: number }> {
-  const result = { sources: [] as string[], copied: 0, skipped: 0, removed: 0, errors: 0 };
-
-  const fromOut = await collectSiblingOutSources(pkg, s);
-  if (!fromOut.length) {
-    appendLog('warn', '  └─ no sibling OUT files found');
-    return result;
-  }
-
-  const { kept, dropped } = keepOnlyHighestVersions(fromOut);
-  if (dropped.length) {
-    appendLog('skip', `  ⊘  OUT older versions not packaged: ${dropped.map(p => p.split('/').pop()).join(', ')}`);
-  }
-  result.sources = kept.filter(p => !p.split('/').pop()!.includes('-thumb'));
-
-  const liveNames = new Set<string>();
-  for (const srcFile of kept) {
-    const rawName = srcFile.split('/').pop()!;
-    if (rawName.includes('-thumb')) continue; // never package thumbnails
-    const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
-    const stem = ext ? rawName.slice(0, -ext.length) : rawName;
-    liveNames.add(translateExportName(stem, ext, vocabMap));
-  }
-
-  // Package folder = exact mirror of live OUT assets (no thumbs). Delete orphans /
-  // older copies / any -thumb.webp outright (🚫 disconnect is target-only).
+  logPrefix = 'package',
+): Promise<number> {
   const purgeRels = new Set<string>();
   async function collectPurge(dir: string, rel: string) {
     const entries = await listDir(dir);
@@ -223,8 +221,7 @@ async function syncPackageFromOut(
         continue;
       }
       if (!e.isFile) continue;
-      // Never keep thumbnails in source packages.
-      if (e.name.includes('-thumb')) {
+      if (e.name.includes('-thumb') || e.name.startsWith('🚫')) {
         purgeRels.add(childRel);
         continue;
       }
@@ -232,27 +229,69 @@ async function syncPackageFromOut(
       if (isPublishableFile(e.name)) purgeRels.add(childRel);
     }
   }
-  await collectPurge(pkg, '');
+  await collectPurge(pkgDir, '');
 
+  let removed = 0;
   for (const rel of purgeRels) {
-    const abs = await join(pkg, rel);
+    const abs = await join(pkgDir, rel);
     if (dryRun) {
-      appendLog('dim', `  🗑  [DRY] would remove from package: ${rel}`);
-      result.removed += 1;
+      appendLog('dim', `  🗑  [DRY] would remove from ${logPrefix}: ${rel}`);
+      removed += 1;
       continue;
     }
     try {
       if (await exists(abs)) {
         await remove(abs);
-        appendLog('dim', `  🗑  removed from package: ${rel}`);
-        result.removed += 1;
+        appendLog('dim', `  🗑  removed from ${logPrefix}: ${rel}`);
+        removed += 1;
       }
     } catch (err) {
       appendLog('warn', `  ⚠  could not remove ${rel}: ${err}`);
     }
   }
+  return removed;
+}
 
-  for (const srcFile of kept) {
+/**
+ * Refresh a package folder from sibling OUT: copy highest versions (translated),
+ * then hard-delete anything else in the package (no 🚫).
+ * Returns kept OUT source paths for further export.
+ */
+async function syncPackageFromOut(
+  pkg: string,
+  s: AppSettings,
+  vocabMap: ReturnType<typeof buildVocabContext>,
+  dryRun: boolean,
+  appendLog: (t: LogType, m: string) => void,
+  onError?: (file: string, reason: string) => void,
+): Promise<{ sources: string[]; copied: number; skipped: number; removed: number; errors: number }> {
+  const result = { sources: [] as string[], copied: 0, skipped: 0, removed: 0, errors: 0 };
+
+  const fromOut = await collectPackageOutSources(pkg, s);
+  if (!fromOut.length) {
+    appendLog('warn', '  └─ no OUT files found under parent (siblings + nested)');
+    return result;
+  }
+
+  const { kept, dropped } = keepOnlyHighestVersions(fromOut);
+  if (dropped.length) {
+    appendLog('skip', `  ⊘  OUT older versions not packaged: ${dropped.map(p => p.split('/').pop()).join(', ')}`);
+  }
+  result.sources = kept.filter(p => !p.split('/').pop()!.includes('-thumb'));
+  appendLog('dim', `  └─ ${result.sources.length} OUT file(s) from siblings/nested → package`);
+
+  const liveNames = new Set<string>();
+  for (const srcFile of result.sources) {
+    const rawName = srcFile.split('/').pop()!;
+    if (rawName.includes('-thumb')) continue;
+    const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
+    const stem = ext ? rawName.slice(0, -ext.length) : rawName;
+    liveNames.add(translateExportName(stem, ext, vocabMap));
+  }
+
+  result.removed = await purgePackageMirror(pkg, liveNames, s, dryRun, appendLog, 'package');
+
+  for (const srcFile of result.sources) {
     const rawName = srcFile.split('/').pop()!;
     if (rawName.includes('-thumb')) continue;
     const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
@@ -329,11 +368,16 @@ async function runDistribute(ctx: RunContext, stats: RunStats): Promise<void> {
 
   appendLog('section', `━━━ ${dryRun ? 'DRY RUN' : 'COLLECTING'} ━━━`);
   appendLog('dim', `  Source: ${source}`);
-  appendLog('dim', '  Always highest version only → package folders');
+  appendLog('dim',
+    `  Fill "${settings.packagePrefix}" anchors from sibling + nested OUT (highest version only)`,
+  );
 
   const packages = await findPackageFolders(source, settings);
   if (!packages.length) {
-    appendLog('skip', `  No folders matching "${settings.packagePrefix}" found.`);
+    appendLog('skip',
+      `  No package folders found matching prefix "${settings.packagePrefix}". `
+      + 'Name __hash asset folders are not package anchors.',
+    );
     return;
   }
 
@@ -376,7 +420,8 @@ async function runDistribute(ctx: RunContext, stats: RunStats): Promise<void> {
   }
 
   appendLog('section',
-    `━━━ COLLECT DONE — ${stats.copied} copied · ${stats.skipped} skipped · ${stats.errors} errors ━━━`
+    `━━━ COLLECT DONE — ${stats.packages} package(s) · `
+    + `${stats.copied} copied · ${stats.skipped} unchanged · ${stats.errors} errors ━━━`,
   );
 }
 
@@ -388,11 +433,10 @@ async function flagDisconnected(
   stats:     RunStats,
   appendLog: (t: LogType, m: string) => void,
   addIssue:  (i: { category: 'skipped'|'disconnected'|'version-conflict'|'error'; file: string; reason: string }) => void,
-  opts: { layout: DestExportLayout },
+  opts: { layout: DestExportLayout; settings: AppSettings },
 ): Promise<void> {
-  /* Rename target entries not in livePub.
-     Folders layout manages the whole tree (including leftover package folders
-     from older root-dump runs). Flat only manages root-level entries. */
+  /* Orphans: 🚫-rename outside package folders; hard-delete inside 📦 mirrors
+     (pickup collections must not keep older versions / renamed tags). */
   async function collectAll(dir: string, acc: { path: string; isDir: boolean }[]) {
     const entries = await listDir(dir);
     for (const e of entries) {
@@ -414,6 +458,14 @@ async function flagDisconnected(
       return rel.length > 0 && !rel.includes('/');
     }
     return true;
+  }
+
+  function insidePackageCollection(abs: string): boolean {
+    const absN = abs.replace(/\\/g, '/');
+    const rel = absN.startsWith(targetNorm + '/')
+      ? absN.slice(targetNorm.length + 1)
+      : absN;
+    return rel.split('/').some(seg => isPackageFolder(seg, opts.settings));
   }
 
   const scoped = all.filter(x => inLayoutScope(x.path));
@@ -438,11 +490,25 @@ async function flagDisconnected(
     if (isDir  && (liveNorm.has(existingNorm) || liveFolderAncestors.has(existingNorm))) continue;
 
     const name = existingPath.split('/').pop()!;
+    const rel = existingPath.replace(targetDir, '').replace(/^\//, '');
+    const inPackage = insidePackageCollection(existingPath);
+
+    // Package mirrors: wipe stale entries (and prior 🚫 marks) instead of disconnect-rename.
+    if (inPackage) {
+      try {
+        await remove(existingPath, { recursive: true });
+        appendLog('dim', `  🗑  removed stale from package: ${rel}`);
+        stats.disconnected += 1;
+      } catch {
+        /* already removed with parent */
+      }
+      continue;
+    }
+
     if (name.startsWith('🚫')) continue;
     const flagged = await join(existingPath.substring(0, existingPath.lastIndexOf('/')), `🚫 ${name}`);
     try {
       await rename(existingPath, flagged);
-      const rel = existingPath.replace(targetDir, '').replace(/^\//, '');
       appendLog('disconnected', `  🚫 DISCONNECTED: ${rel}`);
       addIssue({ category: 'disconnected', file: rel, reason: 'No longer in source for this export layout' });
       stats.disconnected += 1;
@@ -468,7 +534,7 @@ function nestedPublishRel(sourceRoot: string, absPath: string): string {
   }
   const parts = rel.split('/').filter(Boolean);
   return parts
-    .map((seg, i) => (i < parts.length - 1 ? stripStableId(seg) : seg))
+    .map(seg => stripStableId(seg))
     .join('/');
 }
 
@@ -524,7 +590,10 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
   async function publishNestedPackages() {
     const packages = await findPackageFolders(sourceFolder, settings);
     if (!packages.length) {
-      appendLog('warn', `  No folders matching "${settings.packagePrefix}".`);
+      appendLog('warn',
+        `  No package folders found (prefix "${settings.packagePrefix}").`
+        + ` OUT setting="${settings.outFolder}".`,
+      );
       return;
     }
     appendLog('info', `  Nested packages: ${packages.length} folder(s)`);
@@ -543,8 +612,12 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
         appendLog,
         (file, reason) => addIssue({ category: 'error', file, reason }),
       );
-      if (!sync.sources.length) continue;
+      if (!sync.sources.length) {
+        appendLog('warn', `  └─ package had no OUT files (looked for "${settings.outFolder}" / OUT)`);
+        continue;
+      }
 
+      const liveNames = new Set<string>();
       appendLog('info', `  ✓  export ${sync.sources.map(p => p.split('/').pop()).join(', ')}`);
 
       for (const srcPath of sync.sources) {
@@ -552,8 +625,15 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
         const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
         const stem = ext ? rawName.slice(0, -ext.length) : rawName;
         const translated = translateExportName(stem, ext, vocabMap);
+        liveNames.add(translated);
         await copyOne(srcPath, await join(destPkg, translated), `${rel}/${translated}`);
       }
+
+      // Target 📦 = exact live mirror — wipe older versions / renamed tags (no 🚫).
+      const wiped = await purgePackageMirror(
+        destPkg, liveNames, settings, dryRun, appendLog, 'target package',
+      );
+      if (wiped) stats.disconnected += wiped;
     }
   }
 
@@ -640,6 +720,7 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
   if (!dryRun) {
     await flagDisconnected(targetFolder, livePub, stats, appendLog, addIssue, {
       layout,
+      settings,
     });
   }
 
@@ -1425,7 +1506,9 @@ function relativeUnderOut(srcPath: string, outFolderName: string): { dir: string
   const parts = srcPath.replace(/\\/g, '/').split('/');
   let outIdx = -1;
   for (let i = parts.length - 1; i >= 0; i--) {
-    if (parts[i].toLowerCase() === outFolderName.toLowerCase()) { outIdx = i; break; }
+    const want = stripWorkflowPrefix(outFolderName || 'OUT').toLowerCase();
+    const got  = stripWorkflowPrefix(parts[i]).toLowerCase();
+    if (got === want || got === 'out') { outIdx = i; break; }
   }
   const fileName = parts[parts.length - 1] ?? '';
   if (outIdx < 0) return { dir: '', fileName };
