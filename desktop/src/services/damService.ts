@@ -11,6 +11,7 @@ import type { AppSettings } from '../store/settingsStore';
 import type { RunStats } from '../store/pipelineStore';
 import type { LogType } from '../store/pipelineStore';
 import type { RunContext, CloudUrlEntry } from './pipelineService';
+import { isOutFolder as namingIsOutFolder, isPackageFolder as namingIsPackageFolder } from '../domain/naming';
 import {
   buildVocabContext, parseFilename, buildNoteName, translateExportName,
   type ParsedFilename, type VocabContext,
@@ -97,11 +98,23 @@ function shouldSkip(name: string, s: AppSettings): boolean {
 }
 
 function isOutFolder(name: string, s: AppSettings): boolean {
-  return s.outFolder ? name.toLowerCase() === s.outFolder.toLowerCase() : false;
+  return namingIsOutFolder(name, {
+    packagePrefix: s.packagePrefix,
+    outFolder:     s.outFolder,
+    excludeMark:   s.excludeMark,
+    includeMark:   s.includeMark,
+    filterMode:    s.filterMode,
+  });
 }
 
 function isPackageFolder(name: string, s: AppSettings): boolean {
-  return s.packagePrefix ? name.startsWith(s.packagePrefix) : false;
+  return namingIsPackageFolder(name, {
+    packagePrefix: s.packagePrefix,
+    outFolder:     s.outFolder,
+    excludeMark:   s.excludeMark,
+    includeMark:   s.includeMark,
+    filterMode:    s.filterMode,
+  });
 }
 
 function safeName(name: string): string {
