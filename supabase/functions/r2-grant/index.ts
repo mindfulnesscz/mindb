@@ -40,15 +40,16 @@ Deno.serve(async (req) => {
   const { data: profile } = await supa
     .from('profiles').select('role').eq('id', userData.user.id).single();
 
+  const isAdminOrAbove = !!profile && ['admin', 'super_admin'].includes(profile.role);
   if (purpose === 'branding') {
-    if (!profile || profile.role !== 'admin') {
+    if (!isAdminOrAbove) {
       return json(403, { error: 'Branding uploads are admin-only' });
     }
   } else {
-    if (!profile || !['editor', 'admin'].includes(profile.role)) {
+    if (!profile || !['editor', 'admin', 'super_admin'].includes(profile.role)) {
       return json(403, { error: 'Storage grants are for editor/admin roles' });
     }
-    if (profile.role !== 'admin') {
+    if (!isAdminOrAbove) {
       const { data: membership } = await supa
         .from('client_members').select('client_id')
         .eq('user_id', userData.user.id).eq('client_id', client_id).maybeSingle();

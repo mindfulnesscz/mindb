@@ -11,5 +11,5 @@
     "build:vercel": "node scripts/vercel-build.mjs",
     "typecheck": "npm run typecheck --workspace=packages/asset-library && npm run typecheck --workspace=packages/database && npm run typecheck --workspace=apps/client-hub"
   },
-  "version": "2.4.1"
+  "version": "2.4.2"
 }

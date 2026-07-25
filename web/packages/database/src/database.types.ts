@@ -419,6 +419,7 @@ export type Database = {
       }
       profiles: {
         Row: {
+          can_create_clients: boolean
           client_id: string | null
           company: string
           country: string
@@ -430,6 +431,7 @@ export type Database = {
           role: string
         }
         Insert: {
+          can_create_clients?: boolean
           client_id?: string | null
           company?: string
           country?: string
@@ -441,6 +443,7 @@ export type Database = {
           role?: string
         }
         Update: {
+          can_create_clients?: boolean
           client_id?: string | null
           company?: string
           country?: string
@@ -674,6 +677,7 @@ export type Database = {
       get_all_profiles: {
         Args: never
         Returns: {
+          can_create_clients: boolean
           client_id: string
           client_name: string
           created_at: string
@@ -705,6 +709,7 @@ export type Database = {
       my_member_client_ids: { Args: never; Returns: string[] }
       update_user_access: {
         Args: {
+          p_can_create_clients?: boolean
           p_client_id?: string
           p_member_client_ids?: string[]
           p_role: string

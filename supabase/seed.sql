@@ -3,7 +3,7 @@
 -- pipeline instead; this file exists so a local portal has something to show.
 --
 -- Seeded sign-ins (LOCAL ONLY — never reuse this pattern on a hosted tier):
---   admin@acme.test  / password: dchub-local   (role: admin — full portal + admin area)
+--   admin@acme.test  / password: dchub-local   (role: super_admin — full access: environments, client creation, admin management)
 --   Additional users: create in Studio (http://localhost:54323 → Authentication);
 --   any @acme.test address auto-joins Acme Studio as role 'member'.
 
@@ -82,7 +82,10 @@ insert into auth.identities (
   'email', now(), now(), now()
 );
 
-update public.profiles set role = 'admin', name = 'Local Admin', initials = 'LA'
+-- Seeded as super_admin so a fresh local reset can exercise every capability:
+-- environment management, client creation, and granting admins the create-client
+-- right. (On hosted tiers, super_admin is assigned deliberately — never seeded.)
+update public.profiles set role = 'super_admin', name = 'Local Super Admin', initials = 'LS'
   where id = '00000000-0000-0000-0000-0000000000ad';
 
 insert into public.client_members (user_id, client_id) values

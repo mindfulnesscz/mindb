@@ -20,7 +20,7 @@ export interface AuthServerConfig { url: string; anonKey: string }
 export interface AuthProfile { id: string; name: string; role: string }
 
 /** Roles allowed to operate the desktop app. */
-export const DESKTOP_ROLES = ['editor', 'admin'];
+export const DESKTOP_ROLES = ['editor', 'admin', 'super_admin'];
 
 export const AUTH_CALLBACK_URL = 'http://localhost:7623/auth-callback';
 
