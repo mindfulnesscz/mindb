@@ -12,7 +12,7 @@
 
 The app generates a random PKCE verifier/challenge and CSRF `state`, starts a native listener on `127.0.0.1:7623`, then opens Dropbox authorization in the system browser. After consent, the listener returns the callback query. The app verifies `state`, exchanges the code with the verifier, and stores access token, refresh token, and expiry in local client configuration. The listener times out after three minutes and only one process can bind the port.
 
-During export, Rust first calls `files/get_metadata`. HTTP 409 is treated as “missing”; an existing path is skipped without comparing bytes, mtime, size, or hash. If link generation is enabled, an existing link is reused or a public one is created. New content uses `files/upload` with overwrite mode, but that branch is only reached when metadata says the path is absent.
+During export, Rust first calls `files/get_metadata`. HTTP 409 is treated as “missing”; an existing path is skipped without comparing bytes, mtime, size, or hash. If link generation is enabled, an existing link is reused or a public one is created. New content up to 150 MB uses `files/upload` with overwrite mode; **larger files use a chunked upload session** (`upload_session/start` → `append_v2` → `finish`, 48 MB chunks), so large assets upload reliably past the simple-upload limit.
 
 ## Strengths and weaknesses
 

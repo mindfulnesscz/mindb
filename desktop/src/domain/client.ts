@@ -28,6 +28,8 @@ export interface OneDriveDestConfig {
   clientId:   string;
   tenantId:   string;   // Azure AD tenant GUID, or 'common' for multi-tenant/personal apps
   remotePath: string;
+  driveId?:   string;   // SharePoint / OneDrive-for-Business drive ID. Empty → signed-in user's own drive (/me/drive).
+  siteUrl?:   string;   // SharePoint site URL, kept for reference / re-resolving driveId.
   token:      CloudToken | null;
 }
 

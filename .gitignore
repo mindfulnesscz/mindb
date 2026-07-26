@@ -27,5 +27,5 @@ scripts/environments/*.env
 # the source of "module does not provide an export named X" errors in Vite.
 web/apps/client-hub/src/**/*.js
 web/apps/client-hub/src/**/*.js.map
-web/packages/*/src/**/*.js
-web/packages/*/src/**/*.js.map
+packages/*/src/**/*.js
+packages/*/src/**/*.js.map

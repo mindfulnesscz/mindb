@@ -11,7 +11,15 @@
  * file — it must be available before any sign-in and is not a pipeline setting.
  * Only the anon key is stored here; it is a public value by design.
  */
-import { createClient, type SupabaseClient, type Session } from '@supabase/supabase-js';
+import type { Session } from '@supabase/supabase-js';
+import {
+  createAuthClient,
+  checkEmailAuth,
+  sendMagicLink as sendMagicLinkCore,
+  signOut as signOutCore,
+  type DcHubClient,
+  type EmailAuthType,
+} from '@dc-hub/auth';
 import { invoke } from '@tauri-apps/api/core';
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { appDataDir, join } from '@tauri-apps/api/path';
@@ -41,7 +49,7 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): 
   ]);
 }
 
-let client: SupabaseClient | null = null;
+let client: DcHubClient | null = null;
 let clientKey = '';
 let authSubscription: { unsubscribe: () => void } | null = null;
 let currentAccessToken: string | null = null;
@@ -66,16 +74,14 @@ function teardownAuthClient(): void {
   clientKey = '';
 }
 
-function mountAuthClient(config: AuthServerConfig): SupabaseClient {
-  client = createClient(config.url, config.anonKey, {
-    auth: {
-      flowType: 'pkce',
-      persistSession: true,
-      autoRefreshToken: true,
-      detectSessionInUrl: false,
-      storageKey: authStorageKey(config.url),
-    },
-  });
+function mountAuthClient(config: AuthServerConfig): DcHubClient {
+  // Desktop flow: detectSessionInUrl false — the Rust loopback listener
+  // captures the ?code= and waitForMagicLink() exchanges it manually. A
+  // per-environment storageKey keeps sessions from colliding across projects.
+  client = createAuthClient(
+    { url: config.url, anonKey: config.anonKey },
+    { detectSessionInUrl: false, storageKey: authStorageKey(config.url) },
+  );
   clientKey = `${config.url}::${config.anonKey}`;
   const { data } = client.auth.onAuthStateChange((_event, session) => {
     currentAccessToken = session?.access_token ?? null;
@@ -84,7 +90,7 @@ function mountAuthClient(config: AuthServerConfig): SupabaseClient {
   return client;
 }
 
-export function initAuthClient(config: AuthServerConfig): SupabaseClient {
+export function initAuthClient(config: AuthServerConfig): DcHubClient {
   const key = `${config.url}::${config.anonKey}`;
   if (client && clientKey === key) return client;
   teardownAuthClient();
@@ -93,7 +99,7 @@ export function initAuthClient(config: AuthServerConfig): SupabaseClient {
 
 /** Tear down the previous project's session storage lock before switching
  * environments — without this, getSession() can stall indefinitely. */
-export async function switchAuthClient(config: AuthServerConfig): Promise<SupabaseClient> {
+export async function switchAuthClient(config: AuthServerConfig): Promise<DcHubClient> {
   const key = `${config.url}::${config.anonKey}`;
   if (client && clientKey === key) return client;
 
@@ -109,7 +115,7 @@ export async function switchAuthClient(config: AuthServerConfig): Promise<Supaba
   return mountAuthClient(config);
 }
 
-export function getAuthClient(): SupabaseClient | null {
+export function getAuthClient(): DcHubClient | null {
   return client;
 }
 
@@ -139,22 +145,19 @@ export async function saveAuthServer(config: AuthServerConfig): Promise<void> {
 
 /* ── Sign-in flow ────────────────────────────────────────────────────────── */
 
-export type EmailAuthType = 'staff' | 'whitelisted' | 'returning' | 'unknown';
+export type { EmailAuthType };
 
 export async function checkEmail(email: string): Promise<EmailAuthType> {
   if (!client) throw new Error('Auth client not initialized');
-  const { data, error } = await client.rpc('check_email_auth', { p_email: email });
-  if (error) throw new Error(error.message);
-  return data as EmailAuthType;
+  return checkEmailAuth(client, email);
 }
 
 export async function sendMagicLink(email: string): Promise<void> {
   if (!client) throw new Error('Auth client not initialized');
-  const { error } = await client.auth.signInWithOtp({
-    email,
-    options: { emailRedirectTo: AUTH_CALLBACK_URL, shouldCreateUser: false },
+  await sendMagicLinkCore(client, email, {
+    emailRedirectTo: AUTH_CALLBACK_URL,
+    shouldCreateUser: false,
   });
-  if (error) throw new Error(error.message);
 }
 
 /** Blocks until the user clicks the emailed link (3-minute listener timeout),
@@ -212,5 +215,5 @@ export async function loadProfile(): Promise<AuthProfile> {
 
 export async function signOut(): Promise<void> {
   if (!client) return;
-  await client.auth.signOut();
+  await signOutCore(client);
 }

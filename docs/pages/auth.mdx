@@ -1,6 +1,83 @@
 # Authentication
 
-DC Hub uses **Supabase magic links** — no passwords anywhere in the system. Users receive a one-time email link that signs them in automatically.
+The portal offers **OAuth sign-in (Microsoft, Google, GitHub)** plus **email magic link / OTP** as a fallback — no passwords anywhere in the system. OAuth is preferred for corporate users: it avoids the email step entirely, so link-scanners like Microsoft Safe Links can't consume a one-time link before the user clicks. The desktop app remains on magic link.
+
+## OAuth providers
+
+The portal sign-in shows **Continue with Microsoft / Google / GitHub** above the email option. Provisioning is identical to the email path: OAuth returns the user's verified email, so the domain-whitelist trigger below still maps them to a client and role. A first-time OAuth user on a non-whitelisted domain lands as `public` and is assigned by an admin. OAuth can't carry a portal `client_id` into user metadata, so whitelist matching is by email domain.
+
+The Supabase callback URL is the redirect URI for every provider:
+
+- Local: `http://127.0.0.1:54321/auth/v1/callback`
+- Prod: `https://<project-ref>.supabase.co/auth/v1/callback`
+
+Confirm the portal origins are in **Auth → URL Configuration → Redirect URLs** (e.g. `https://hub.disruptcollective.com/**`).
+
+### Microsoft (Entra ID)
+
+Use a **multi-tenant** app so any client organization can sign in. This can be the *same* Entra app used for SharePoint uploads — see [Microsoft & SharePoint setup](/cloud-storage/microsoft-setup).
+
+1. Entra ID → **App registrations → New registration**; supported account types **Accounts in any organizational directory (multi-tenant)**.
+2. Add a **Web** redirect URI = the Supabase callback URL.
+3. **Certificates & secrets → New client secret**; copy the *Value*.
+4. Copy the **Application (client) ID**.
+5. Supabase → **Auth → Providers → Azure**: enable, paste Client ID + secret, set **Azure Tenant URL** to `https://login.microsoftonline.com/common`.
+
+Multi-tenant apps may require one-time **admin consent** from each client organization's IT.
+
+### Google
+
+1. Google Cloud Console → **APIs & Services → Credentials → Create OAuth client ID** (configure the consent screen first if prompted). Application type **Web**.
+2. Authorized redirect URI = the Supabase callback URL.
+3. Supabase → **Auth → Providers → Google**: enable, paste Client ID + secret.
+
+### GitHub
+
+1. GitHub → **Settings → Developer settings → OAuth Apps → New OAuth App**.
+2. Authorization callback URL = the Supabase callback URL.
+3. Supabase → **Auth → Providers → GitHub**: enable, paste Client ID + secret.
+
+### Local development
+
+`supabase/config.toml` enables `azure`, `google`, and `github` with `env(...)` secret substitution. Export the credentials before `supabase start`:
+
+```
+export SUPABASE_AUTH_EXTERNAL_AZURE_CLIENT_ID=…
+export SUPABASE_AUTH_EXTERNAL_AZURE_SECRET=…
+export SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID=…
+export SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET=…
+export SUPABASE_AUTH_EXTERNAL_GITHUB_CLIENT_ID=…
+export SUPABASE_AUTH_EXTERNAL_GITHUB_SECRET=…
+```
+
+Until a provider's credentials are set, its button appears but errors; email sign-in still works.
+
+## Adding a client domain
+
+The OAuth provider callback is **always the Supabase project's callback** (`…/auth/v1/callback`), never a portal domain. It is fixed **per environment** — local, staging, and production are three separate Supabase projects with three refs, so there are three callbacks — and it never changes when you onboard a client. **Client portal domains never touch the provider apps.**
+
+After auth, Supabase redirects the user back to wherever the portal runs (the `redirectTo` passed to sign-in, which defaults to the current portal URL). That target only has to be in **Supabase's redirect allowlist**:
+
+- **Local** — `supabase/config.toml` → `auth.additional_redirect_urls`, already wildcarded for `http://localhost:5173/**` and `http://127.0.0.1:5173/**`.
+- **Staging / production** — the project's **Auth → URL Configuration → Redirect URLs** in the dashboard, or keep the list in `config.toml` and run `supabase config push` for that project so it stays version-controlled.
+
+To onboard a new client portal (e.g. `https://hub.acme.com`), add one entry to that environment's redirect allowlist:
+
+```
+https://hub.acme.com/**
+```
+
+That is the only change — no new provider app, no new callback, no new secret. If clients live on your own subdomains, a single wildcard covers all of them:
+
+```
+https://*.disruptcollective.com/**
+```
+
+The trailing `/**` matters: it matches any path under the origin, so a redirect back to `/:slug` or a share link resolves. A bare origin (`https://hub.acme.com`) only matches that exact URL.
+
+## Email magic link / OTP
+
+Users can still receive a one-time email link (or OTP code) that signs them in automatically.
 
 ## Sign-in flow
 
@@ -70,4 +147,4 @@ In **Authentication → URL Configuration**:
 - **Site URL**: `http://localhost:5173` (dev) / production domain
 - **Allowed Redirect URLs**: `http://localhost:5173/**` (dev) / `https://yourdomain.com/**` (prod)
 
-Without the redirect URLs, clicking the magic link shows "Email link is invalid or has expired".
+Without the redirect URLs, clicking the magic link shows "Email link is invalid or has expired". The same message also appears when a **corporate mail scanner (Microsoft Safe Links) pre-clicks and consumes the one-time link** before the user does — the fix is to use OAuth (above) for those users, and to run a custom SMTP for deliverability.

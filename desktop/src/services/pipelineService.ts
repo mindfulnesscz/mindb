@@ -1723,7 +1723,7 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
             const bytes = await readFile(srcPath);
             const base   = cfg.remotePath.replace(/^\//, '').replace(/\/$/, '');
             const remote = base ? `${base}/${nestedName}` : nestedName;
-            url = await uploadOneDriveFile(cfg.token!.accessToken, bytes, remote, dest.generateLink);
+            url = await uploadOneDriveFile(cfg.token!.accessToken, bytes, remote, dest.generateLink, cfg.driveId);
             if (uploadLogged < 3) {
               appendLog('success', `  ✓  ${nestedName}`);
               uploadLogged += 1;

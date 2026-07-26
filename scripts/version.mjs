@@ -17,16 +17,16 @@ const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 const packageFiles = [
   'package.json',
   'desktop/package.json',
-  'web/package.json',
   'web/apps/client-hub/package.json',
-  'web/packages/asset-library/package.json',
+  'packages/asset-library/package.json',
   'docs/package.json',
 ]
 
-// npm lockfiles: file → the `packages` entries that carry a version
+// npm lockfiles: file → the `packages` entries that carry a version.
+// The web workspace is now part of the repo-root lockfile.
 const lockFiles = {
   'desktop/package-lock.json': [''],
-  'web/package-lock.json': ['', 'apps/client-hub', 'packages/asset-library'],
+  'package-lock.json': ['', 'web/apps/client-hub', 'packages/asset-library'],
   'docs/package-lock.json': [''],
 }
 

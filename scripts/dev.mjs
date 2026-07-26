@@ -3,7 +3,7 @@ import process from 'node:process'
 
 const services = [
   { name: 'desktop', color: '\x1b[36m', args: ['--prefix', 'desktop', 'run', 'tauri', 'dev'] },
-  { name: 'web', color: '\x1b[35m', args: ['--prefix', 'web', 'run', 'dev'] },
+  { name: 'web', color: '\x1b[35m', args: ['run', 'dev', '--workspace=web/apps/client-hub'] },
   { name: 'docs', color: '\x1b[33m', args: ['--prefix', 'docs', 'run', 'dev'] },
 ]
 

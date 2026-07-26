@@ -1,0 +1,24 @@
+{
+  "name": "@dc-hub/auth",
+  "version": "2.4.2",
+  "private": false,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@dc-hub/database": "*"
+  },
+  "peerDependencies": {
+    "@supabase/supabase-js": "^2.110.0"
+  },
+  "devDependencies": {
+    "@supabase/supabase-js": "^2.110.0",
+    "typescript": "^5.6.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}
