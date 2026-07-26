@@ -99,7 +99,7 @@ Deno.serve(async (req) => {
 
   const { data: profile } = await supa
     .from('profiles').select('role').eq('id', userData.user.id).single();
-  if (!profile || profile.role !== 'admin') return json(req, 403, { error: 'Admin only' });
+  if (!profile || !['admin', 'super_admin'].includes(profile.role)) return json(req, 403, { error: 'Admin only' });
 
   const body = (await req.json().catch(() => ({}))) as UploadBody;
   const { client_id, filename, content_type, data_base64 } = body;

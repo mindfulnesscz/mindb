@@ -88,7 +88,11 @@ Deno.serve(async (req) => {
 
   const { data: profile } = await userClient
     .from('profiles').select('role').eq('id', userData.user.id).single();
-  if (!profile || profile.role !== 'admin') return json(req, 403, { error: 'Admin only' });
+  const callerRole = profile?.role ?? '';
+  if (callerRole !== 'admin' && callerRole !== 'super_admin') {
+    return json(req, 403, { error: 'Admin only' });
+  }
+  const callerIsSuperAdmin = callerRole === 'super_admin';
 
   const body = (await req.json().catch(() => ({}))) as CreateUserBody;
   const email = (body.email ?? '').trim().toLowerCase();
@@ -101,8 +105,11 @@ Deno.serve(async (req) => {
   if (!email || !email.includes('@')) {
     return json(req, 400, { error: 'Valid email required' });
   }
-  if (!['public', 'member', 'editor', 'admin'].includes(role)) {
+  if (!['public', 'member', 'editor', 'admin', 'super_admin'].includes(role)) {
     return json(req, 400, { error: 'Invalid role' });
+  }
+  if ((role === 'admin' || role === 'super_admin') && !callerIsSuperAdmin) {
+    return json(req, 403, { error: 'Only a super admin can create admin users' });
   }
   if (role === 'member' && !clientId) {
     return json(req, 400, { error: 'Member role requires a client' });

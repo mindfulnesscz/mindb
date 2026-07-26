@@ -1,0 +1,809 @@
+{
+  "version": 1,
+  "name": "ESS",
+  "description": "ESS taxonomy seed converted from desktop/src-tauri/resources/vocabulary.json. Parent groups from parentGroup; leaf keys keep the original Obsidian key when unique (first wins on collision; others use a label/shortcode-qualified key).",
+  "dimension_labels": {
+    "entity": "Entity",
+    "angle": "Angle",
+    "format": "Format"
+  },
+  "nodes": [
+    {
+      "key": "entity.company",
+      "dimension": "entity",
+      "name": "Company",
+      "parent_key": null,
+      "sort_order": 1
+    },
+    {
+      "key": "entity.product",
+      "dimension": "entity",
+      "name": "Product",
+      "parent_key": null,
+      "sort_order": 2
+    },
+    {
+      "key": "entity.customer",
+      "dimension": "entity",
+      "name": "Customer",
+      "parent_key": null,
+      "sort_order": 3
+    },
+    {
+      "key": "entity.partner",
+      "dimension": "entity",
+      "name": "Partner",
+      "parent_key": null,
+      "sort_order": 4
+    },
+    {
+      "key": "entity.event",
+      "dimension": "entity",
+      "name": "Event",
+      "parent_key": null,
+      "sort_order": 5
+    },
+    {
+      "key": "angle.sales-mktg",
+      "dimension": "angle",
+      "name": "Sales & Marketing",
+      "parent_key": null,
+      "sort_order": 1
+    },
+    {
+      "key": "angle.content",
+      "dimension": "angle",
+      "name": "Content",
+      "parent_key": null,
+      "sort_order": 2
+    },
+    {
+      "key": "angle.context",
+      "dimension": "angle",
+      "name": "Context",
+      "parent_key": null,
+      "sort_order": 3
+    },
+    {
+      "key": "format.document",
+      "dimension": "format",
+      "name": "Document",
+      "parent_key": null,
+      "sort_order": 1
+    },
+    {
+      "key": "format.media",
+      "dimension": "format",
+      "name": "Media",
+      "parent_key": null,
+      "sort_order": 2
+    },
+    {
+      "key": "format.image-var",
+      "dimension": "format",
+      "name": "Image variants",
+      "parent_key": null,
+      "sort_order": 3
+    },
+    {
+      "key": "ess",
+      "dimension": "entity",
+      "name": "ESS",
+      "parent_key": "entity.company",
+      "shortcode": "ESS",
+      "sort_order": 1
+    },
+    {
+      "key": "rinsing",
+      "dimension": "entity",
+      "name": "Rinsing",
+      "parent_key": "entity.product",
+      "shortcode": "p-Rns",
+      "sort_order": 1
+    },
+    {
+      "key": "dip-paint",
+      "dimension": "entity",
+      "name": "Dip Paint",
+      "parent_key": "entity.product",
+      "shortcode": "p-DpP",
+      "sort_order": 2
+    },
+    {
+      "key": "e-coating",
+      "dimension": "entity",
+      "name": "E-Coating",
+      "parent_key": "entity.product",
+      "shortcode": "p-ECt",
+      "sort_order": 3
+    },
+    {
+      "key": "oven",
+      "dimension": "entity",
+      "name": "Oven",
+      "parent_key": "entity.product",
+      "shortcode": "p-Ovn",
+      "sort_order": 4
+    },
+    {
+      "key": "sealing",
+      "dimension": "entity",
+      "name": "Sealing",
+      "parent_key": "entity.product",
+      "shortcode": "p-Sln",
+      "sort_order": 5
+    },
+    {
+      "key": "sealing-iq",
+      "dimension": "entity",
+      "name": "SealingIQ",
+      "parent_key": "entity.product",
+      "shortcode": "p-SIQ",
+      "sort_order": 6
+    },
+    {
+      "key": "waxing",
+      "dimension": "entity",
+      "name": "Waxing",
+      "parent_key": "entity.product",
+      "shortcode": "p-Wax",
+      "sort_order": 7
+    },
+    {
+      "key": "spray-waxing",
+      "dimension": "entity",
+      "name": "Spray Waxing",
+      "parent_key": "entity.product",
+      "shortcode": "p-SpW",
+      "sort_order": 8
+    },
+    {
+      "key": "top-coating",
+      "dimension": "entity",
+      "name": "Top Coating",
+      "parent_key": "entity.product",
+      "shortcode": "p-TpC",
+      "sort_order": 9
+    },
+    {
+      "key": "powder-coating",
+      "dimension": "entity",
+      "name": "Powder Coating",
+      "parent_key": "entity.product",
+      "shortcode": "p-PwC",
+      "sort_order": 10
+    },
+    {
+      "key": "anodizing",
+      "dimension": "entity",
+      "name": "Anodizing",
+      "parent_key": "entity.product",
+      "shortcode": "p-And",
+      "sort_order": 11
+    },
+    {
+      "key": "cloud",
+      "dimension": "entity",
+      "name": "Cloud",
+      "parent_key": "entity.product",
+      "shortcode": "p-Cld",
+      "sort_order": 12
+    },
+    {
+      "key": "anode-iq",
+      "dimension": "entity",
+      "name": "AnodeIQ",
+      "parent_key": "entity.product",
+      "shortcode": "p-AIQ",
+      "sort_order": 13
+    },
+    {
+      "key": "black-box",
+      "dimension": "entity",
+      "name": "Black Box",
+      "parent_key": "entity.product",
+      "shortcode": "p-BlB",
+      "sort_order": 14
+    },
+    {
+      "key": "paint-iq",
+      "dimension": "entity",
+      "name": "PaintIQ",
+      "parent_key": "entity.product",
+      "shortcode": "p-PIQ",
+      "sort_order": 15
+    },
+    {
+      "key": "automate-reporting",
+      "dimension": "entity",
+      "name": "Automate Reporting",
+      "parent_key": "entity.product",
+      "shortcode": "p-AtR",
+      "sort_order": 16
+    },
+    {
+      "key": "merge",
+      "dimension": "entity",
+      "name": "Merge",
+      "parent_key": "entity.product",
+      "shortcode": "p-Mrg",
+      "sort_order": 17
+    },
+    {
+      "key": "alsim",
+      "dimension": "entity",
+      "name": "Alsim",
+      "parent_key": "entity.product",
+      "shortcode": "p-Als",
+      "sort_order": 18
+    },
+    {
+      "key": "encapsulated-oven",
+      "dimension": "entity",
+      "name": "Encapsulated Oven",
+      "parent_key": "entity.product",
+      "shortcode": "p-EnO",
+      "sort_order": 19
+    },
+    {
+      "key": "encapsulated-paintshop",
+      "dimension": "entity",
+      "name": "Encapsulated Paint Shop",
+      "parent_key": "entity.product",
+      "shortcode": "p-EnP",
+      "sort_order": 20
+    },
+    {
+      "key": "abb",
+      "dimension": "entity",
+      "name": "ABB",
+      "parent_key": "entity.customer",
+      "shortcode": "c-ABB",
+      "sort_order": 1
+    },
+    {
+      "key": "audi",
+      "dimension": "entity",
+      "name": "Audi",
+      "parent_key": "entity.customer",
+      "shortcode": "c-AUD",
+      "sort_order": 2
+    },
+    {
+      "key": "bmw",
+      "dimension": "entity",
+      "name": "BMW",
+      "parent_key": "entity.customer",
+      "shortcode": "c-BMW",
+      "sort_order": 3
+    },
+    {
+      "key": "cee",
+      "dimension": "entity",
+      "name": "CEE",
+      "parent_key": "entity.customer",
+      "shortcode": "c-CEE",
+      "sort_order": 4
+    },
+    {
+      "key": "ebz",
+      "dimension": "entity",
+      "name": "EBZ",
+      "parent_key": "entity.customer",
+      "shortcode": "c-EBZ",
+      "sort_order": 5
+    },
+    {
+      "key": "gm",
+      "dimension": "entity",
+      "name": "GM",
+      "parent_key": "entity.customer",
+      "shortcode": "c-GM",
+      "sort_order": 6
+    },
+    {
+      "key": "ineos",
+      "dimension": "entity",
+      "name": "INEOS",
+      "parent_key": "entity.customer",
+      "shortcode": "c-INE",
+      "sort_order": 7
+    },
+    {
+      "key": "jlr",
+      "dimension": "entity",
+      "name": "JLR",
+      "parent_key": "entity.customer",
+      "shortcode": "c-JLR",
+      "sort_order": 8
+    },
+    {
+      "key": "mrc",
+      "dimension": "entity",
+      "name": "MRC",
+      "parent_key": "entity.customer",
+      "shortcode": "c-MRC",
+      "sort_order": 9
+    },
+    {
+      "key": "mts",
+      "dimension": "entity",
+      "name": "MTS",
+      "parent_key": "entity.customer",
+      "shortcode": "c-MTS",
+      "sort_order": 10
+    },
+    {
+      "key": "skoda",
+      "dimension": "entity",
+      "name": "Skoda",
+      "parent_key": "entity.customer",
+      "shortcode": "c-SKD",
+      "sort_order": 11
+    },
+    {
+      "key": "stellantis",
+      "dimension": "entity",
+      "name": "Stellantis",
+      "parent_key": "entity.customer",
+      "shortcode": "c-STE",
+      "sort_order": 12
+    },
+    {
+      "key": "coa-cfd",
+      "dimension": "entity",
+      "name": "COA-CFD",
+      "parent_key": "entity.customer",
+      "shortcode": "c-COA",
+      "sort_order": 13
+    },
+    {
+      "key": "gui",
+      "dimension": "entity",
+      "name": "GUI",
+      "parent_key": "entity.customer",
+      "shortcode": "c-GUI",
+      "sort_order": 14
+    },
+    {
+      "key": "autoform",
+      "dimension": "entity",
+      "name": "Autoform",
+      "parent_key": "entity.partner",
+      "shortcode": "x-AuF",
+      "sort_order": 1
+    },
+    {
+      "key": "jj",
+      "dimension": "entity",
+      "name": "JJ",
+      "parent_key": "entity.partner",
+      "shortcode": "x-JJ",
+      "sort_order": 2
+    },
+    {
+      "key": "paint-expo",
+      "dimension": "entity",
+      "name": "Paint Expo",
+      "parent_key": "entity.event",
+      "shortcode": "e-PEX",
+      "sort_order": 1
+    },
+    {
+      "key": "ps-2030",
+      "dimension": "entity",
+      "name": "PS-2030",
+      "parent_key": "entity.event",
+      "shortcode": "e-PS30",
+      "sort_order": 2
+    },
+    {
+      "key": "ps-d",
+      "dimension": "entity",
+      "name": "PS-D",
+      "parent_key": "entity.event",
+      "shortcode": "e-PSD",
+      "sort_order": 3
+    },
+    {
+      "key": "ics",
+      "dimension": "entity",
+      "name": "ICS",
+      "parent_key": "entity.event",
+      "shortcode": "e-ICS",
+      "sort_order": 4
+    },
+    {
+      "key": "src",
+      "dimension": "entity",
+      "name": "SRC",
+      "parent_key": "entity.event",
+      "shortcode": "e-SRC",
+      "sort_order": 5
+    },
+    {
+      "key": "sae",
+      "dimension": "entity",
+      "name": "SAE",
+      "parent_key": "entity.event",
+      "shortcode": "e-SAE",
+      "sort_order": 6
+    },
+    {
+      "key": "webinar",
+      "dimension": "entity",
+      "name": "Webinar",
+      "parent_key": "entity.event",
+      "shortcode": "e-Wbn",
+      "sort_order": 7
+    },
+    {
+      "key": "sales",
+      "dimension": "angle",
+      "name": "Sales",
+      "parent_key": "angle.sales-mktg",
+      "shortcode": "SAL",
+      "sort_order": 1
+    },
+    {
+      "key": "technical",
+      "dimension": "angle",
+      "name": "Technical",
+      "parent_key": "angle.sales-mktg",
+      "shortcode": "TEC",
+      "sort_order": 2
+    },
+    {
+      "key": "overview",
+      "dimension": "angle",
+      "name": "Overview",
+      "parent_key": "angle.sales-mktg",
+      "shortcode": "OVR",
+      "sort_order": 3
+    },
+    {
+      "key": "business-case",
+      "dimension": "angle",
+      "name": "Business Case",
+      "parent_key": "angle.sales-mktg",
+      "shortcode": "BCS",
+      "sort_order": 4
+    },
+    {
+      "key": "account-based",
+      "dimension": "angle",
+      "name": "Account-Based",
+      "parent_key": "angle.sales-mktg",
+      "shortcode": "ABM",
+      "sort_order": 5
+    },
+    {
+      "key": "testimonial",
+      "dimension": "angle",
+      "name": "Testimonial",
+      "parent_key": "angle.sales-mktg",
+      "shortcode": "TST",
+      "sort_order": 6
+    },
+    {
+      "key": "case-study",
+      "dimension": "angle",
+      "name": "Case Study",
+      "parent_key": "angle.sales-mktg",
+      "shortcode": "CSS",
+      "sort_order": 7
+    },
+    {
+      "key": "success-story",
+      "dimension": "angle",
+      "name": "Success Story",
+      "parent_key": "angle.sales-mktg",
+      "shortcode": "SUC",
+      "sort_order": 8
+    },
+    {
+      "key": "use-case",
+      "dimension": "angle",
+      "name": "Use Case",
+      "parent_key": "angle.sales-mktg",
+      "shortcode": "UC",
+      "sort_order": 9
+    },
+    {
+      "key": "pain-point",
+      "dimension": "angle",
+      "name": "Pain Point",
+      "parent_key": "angle.sales-mktg",
+      "shortcode": "PPT",
+      "sort_order": 10
+    },
+    {
+      "key": "simulation",
+      "dimension": "angle",
+      "name": "Simulation",
+      "parent_key": "angle.sales-mktg",
+      "shortcode": "SML",
+      "sort_order": 11
+    },
+    {
+      "key": "campaign",
+      "dimension": "angle",
+      "name": "Campaign",
+      "parent_key": "angle.content",
+      "shortcode": "CMP",
+      "sort_order": 1
+    },
+    {
+      "key": "product-release",
+      "dimension": "angle",
+      "name": "Product Release",
+      "parent_key": "angle.content",
+      "shortcode": "REL",
+      "sort_order": 2
+    },
+    {
+      "key": "social-media",
+      "dimension": "angle",
+      "name": "Social Media",
+      "parent_key": "angle.content",
+      "shortcode": "SM",
+      "sort_order": 3
+    },
+    {
+      "key": "training",
+      "dimension": "angle",
+      "name": "Training",
+      "parent_key": "angle.content",
+      "shortcode": "TRN",
+      "sort_order": 4
+    },
+    {
+      "key": "sustainability",
+      "dimension": "angle",
+      "name": "Sustainability",
+      "parent_key": "angle.content",
+      "shortcode": "SUS",
+      "sort_order": 5
+    },
+    {
+      "key": "hiring",
+      "dimension": "angle",
+      "name": "Hiring",
+      "parent_key": "angle.content",
+      "shortcode": "HRE",
+      "sort_order": 6
+    },
+    {
+      "key": "illustration",
+      "dimension": "angle",
+      "name": "Illustration",
+      "parent_key": "angle.content",
+      "shortcode": "ILL",
+      "sort_order": 7
+    },
+    {
+      "key": "3d",
+      "dimension": "angle",
+      "name": "3D",
+      "parent_key": "angle.content",
+      "shortcode": "3D",
+      "sort_order": 8
+    },
+    {
+      "key": "brand",
+      "dimension": "angle",
+      "name": "Brand",
+      "parent_key": "angle.context",
+      "shortcode": "BRD",
+      "sort_order": 1
+    },
+    {
+      "key": "corporate",
+      "dimension": "angle",
+      "name": "Corporate",
+      "parent_key": "angle.context",
+      "shortcode": "CRP",
+      "sort_order": 2
+    },
+    {
+      "key": "event",
+      "dimension": "angle",
+      "name": "Event",
+      "parent_key": "angle.context",
+      "shortcode": "EVT",
+      "sort_order": 3
+    },
+    {
+      "key": "partner",
+      "dimension": "angle",
+      "name": "Partner",
+      "parent_key": "angle.context",
+      "shortcode": "PTN",
+      "sort_order": 4
+    },
+    {
+      "key": "add-on",
+      "dimension": "angle",
+      "name": "Add-On",
+      "parent_key": "angle.context",
+      "shortcode": "ADD",
+      "sort_order": 5
+    },
+    {
+      "key": "deck",
+      "dimension": "format",
+      "name": "Slide Deck",
+      "parent_key": "format.document",
+      "shortcode": "SlD",
+      "sort_order": 1
+    },
+    {
+      "key": "pdf",
+      "dimension": "format",
+      "name": "PDF",
+      "parent_key": "format.document",
+      "shortcode": "PDF",
+      "sort_order": 2
+    },
+    {
+      "key": "doc",
+      "dimension": "format",
+      "name": "Word Document",
+      "parent_key": "format.document",
+      "shortcode": "Dcm",
+      "sort_order": 3
+    },
+    {
+      "key": "onepager",
+      "dimension": "format",
+      "name": "One-Pager",
+      "parent_key": "format.document",
+      "shortcode": "1Pg",
+      "sort_order": 4
+    },
+    {
+      "key": "handover",
+      "dimension": "format",
+      "name": "Handover",
+      "parent_key": "format.document",
+      "shortcode": "Hnd",
+      "sort_order": 5
+    },
+    {
+      "key": "manual",
+      "dimension": "format",
+      "name": "Manual",
+      "parent_key": "format.document",
+      "shortcode": "Mnl",
+      "sort_order": 6
+    },
+    {
+      "key": "article",
+      "dimension": "format",
+      "name": "Article",
+      "parent_key": "format.document",
+      "shortcode": "Art",
+      "sort_order": 7
+    },
+    {
+      "key": "video",
+      "dimension": "format",
+      "name": "Video",
+      "parent_key": "format.media",
+      "shortcode": "Vid",
+      "sort_order": 1
+    },
+    {
+      "key": "image",
+      "dimension": "format",
+      "name": "Static Image",
+      "parent_key": "format.media",
+      "shortcode": "Img",
+      "sort_order": 2
+    },
+    {
+      "key": "carousel",
+      "dimension": "format",
+      "name": "Carousel",
+      "parent_key": "format.media",
+      "shortcode": "Crs",
+      "sort_order": 3
+    },
+    {
+      "key": "banner",
+      "dimension": "format",
+      "name": "Banner",
+      "parent_key": "format.media",
+      "shortcode": "Bnn",
+      "sort_order": 4
+    },
+    {
+      "key": "print",
+      "dimension": "format",
+      "name": "Print",
+      "parent_key": "format.media",
+      "shortcode": "Prn",
+      "sort_order": 5
+    },
+    {
+      "key": "web",
+      "dimension": "format",
+      "name": "Web Asset",
+      "parent_key": "format.media",
+      "shortcode": "Web",
+      "sort_order": 6
+    },
+    {
+      "key": "goodie",
+      "dimension": "format",
+      "name": "Goodie",
+      "parent_key": "format.media",
+      "shortcode": "Gdy",
+      "sort_order": 7
+    },
+    {
+      "key": "profile-picture",
+      "dimension": "format",
+      "name": "Profile Picture",
+      "parent_key": "format.media",
+      "shortcode": "PrP",
+      "sort_order": 8
+    },
+    {
+      "key": "gallery",
+      "dimension": "format",
+      "name": "Gallery",
+      "parent_key": "format.media",
+      "shortcode": "Gll",
+      "sort_order": 9
+    },
+    {
+      "key": "white-bkg",
+      "dimension": "format",
+      "name": "White Background",
+      "parent_key": "format.image-var",
+      "shortcode": "WhtB",
+      "sort_order": 1
+    },
+    {
+      "key": "gray-bkg",
+      "dimension": "format",
+      "name": "Gray Background",
+      "parent_key": "format.image-var",
+      "shortcode": "GryB",
+      "sort_order": 2
+    },
+    {
+      "key": "transp-bkg",
+      "dimension": "format",
+      "name": "Transparent Bkg",
+      "parent_key": "format.image-var",
+      "shortcode": "TrpB",
+      "sort_order": 3
+    },
+    {
+      "key": "cbp26-event",
+      "dimension": "entity",
+      "name": "cbp26-event",
+      "parent_key": "entity.event",
+      "shortcode": "e-CBP26",
+      "sort_order": 8
+    },
+    {
+      "key": "corrosion-protection",
+      "dimension": "entity",
+      "name": "Corrosion",
+      "parent_key": "entity.product",
+      "shortcode": "p-CrP",
+      "sort_order": 21
+    },
+    {
+      "key": "iscs26",
+      "dimension": "entity",
+      "name": "ISCS26",
+      "parent_key": "entity.event",
+      "shortcode": "e-ISCS26",
+      "sort_order": 9
+    }
+  ]
+}

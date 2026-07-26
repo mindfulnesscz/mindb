@@ -18,10 +18,11 @@ interface RoleContextValue {
 const RoleContext = createContext<RoleContextValue | null>(null)
 
 const DEMO_USERS: Record<Role, { name: string; initials: string }> = {
-  public:  { name: 'Guest',       initials: 'G'  },
-  member:  { name: 'Jana K.',     initials: 'JK' },
-  editor:  { name: 'Petr Mucha',  initials: 'PM' },
-  admin:   { name: 'Petr Mucha',  initials: 'PM' },
+  public:      { name: 'Guest',       initials: 'G'  },
+  member:      { name: 'Jana K.',     initials: 'JK' },
+  editor:      { name: 'Petr Mucha',  initials: 'PM' },
+  admin:       { name: 'Petr Mucha',  initials: 'PM' },
+  super_admin: { name: 'Petr Mucha',  initials: 'PM' },
 }
 
 export function RoleProvider({ children }: { children: ReactNode }) {

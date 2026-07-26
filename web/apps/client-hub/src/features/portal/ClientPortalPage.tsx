@@ -314,7 +314,7 @@ export default function ClientPortalPage() {
   }
 
   // ── Logged in: full admin nav for staff, simple header for clients ──
-  const isStaff = role === 'admin' || role === 'editor'
+  const isStaff = role === 'admin' || role === 'editor' || role === 'super_admin'
 
   return (
     <div className="flex flex-col h-screen">

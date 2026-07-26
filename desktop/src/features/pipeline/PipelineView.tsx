@@ -120,8 +120,11 @@ function RunSummarySection() {
       value: `${stats.cdnOrigUploaded} uploaded · ${stats.cdnOrigCached} cached · ${stats.cdnOrigUnchanged} unchanged`,
     });
   }
-  if (stats.copied || stats.skipped) {
-    rows.push({ label: 'Distribute', value: `${stats.copied} copied · ${stats.skipped} skipped` });
+  if (stats.packages || stats.copied || stats.skipped) {
+    rows.push({
+      label: 'Distribute',
+      value: `${stats.packages} packages · ${stats.copied} copied · ${stats.skipped} unchanged`,
+    });
   }
   if (stats.published || stats.pubFolders) {
     rows.push({ label: 'Publish', value: `${stats.published} files · ${stats.pubFolders} folders · ${stats.disconnected} disconnected` });

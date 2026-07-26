@@ -1,4 +1,4 @@
-export type Role = 'public' | 'member' | 'editor' | 'admin'
+export type Role = 'public' | 'member' | 'editor' | 'admin' | 'super_admin'
 
 export type AssetStatus = 'draft' | 'review' | 'approved' | 'published' | 'archived' | 'disconnected'
 export type AssetPerm = 'public' | 'client' | 'internal'

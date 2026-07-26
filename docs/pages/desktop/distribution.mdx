@@ -2,22 +2,14 @@
 
 ## Package distribution
 
-The collect/distribute stage finds folders beginning with `packagePrefix`. For each package it collects files from sibling **OUT** folders (OUT as a direct sibling of the package, or OUT nested under a sibling asset folder), keeps the **highest version only** per base+extension, translates filenames through the naming vocabulary, and copies them into the package.
+The collect/distribute stage finds package folders by `packagePrefix` only (e.g. `📦`). Migrated `Name __hash` asset folders are not anchors.
 
-The source package folder is a **hard mirror of that live OUT set**:
-
-- Anything in the package that is not a live highest-version OUT file is **deleted** (older versions, orphans, leftover coded names).
-- **Never** `🚫`-disconnect inside the source package — disconnect renaming is only for publish **targets**.
-- **Never** keep thumbnails in source packages (`*-thumb.webp` is removed on sync). Sidecars stay next to OUT sources for CDN/Obsidian.
-
-The unchanged test compares destination mtime with source mtime; if mtimes are unavailable it compares size. A destination at least as new is skipped. This is fast but not cryptographic: equal size is not proof of equal content.
-
-Stable-identity migration removes the package prefix and appends ` __<8 hex>`. Such a folder is no longer discovered by prefix-based package collection, a known design limitation.
+For each package it collects the **highest version only** from every `OUT` under the package’s parent tree (siblings and nested assets), then hard-mirrors those files into the package. Orphans and thumbnails are deleted from the package (never `🚫`-disconnected). Other package folders are not walked, so anchors don’t pull from each other.
 
 ## Local target publishing
 
-Publish always exports **highest version only**. With `includePackages`, each source package is refreshed from OUT first (same mirror rules as Distribute), then those files are copied into the target at nested source-relative paths.
+Publish always exports **highest version only**. With `includePackages`, packages are discovered the same way, refreshed/selected from OUT, then copied into the target at nested source-relative paths. Target package folders are then **hard-purged** to match live files only (no older versions or renamed-tag leftovers; no `🚫` inside packages).
 
-Previously published items missing from the current export are renamed on the **target** with a `🚫` prefix rather than deleted, making disconnection visible and reversible where live links may still exist.
+Outside packages, previously published items missing from the current export are renamed on the **target** with a `🚫` prefix rather than deleted.
 
 Use local publishing for a filesystem-synced SharePoint/OneDrive tree when folder structure is important. Use [cloud publishing](/cloud-storage/publishing) when flat per-file API delivery and share-link collection are preferred.

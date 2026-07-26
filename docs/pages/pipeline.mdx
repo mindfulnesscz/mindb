@@ -47,15 +47,15 @@ Stable-identity clients key uploads per **file** (`{client_id}/originals/{stable
 
 ### 2 — Distribute packages
 
-Finds folders matching the configured package prefix (e.g. `[📦]`), then for each one finds sibling **OUT** folders (OUT as a direct sibling of the package, or OUT nested under a sibling asset folder) and copies the **highest version only** into the package, translating filenames. Its log section is labeled "COLLECTING."
+Finds folders matching the configured package prefix (e.g. `📦` or `[00] 📦`). These are **pickup anchors**: Collect fills each one from **sibling and nested** `OUT` folders under the same parent (including migrated `Name __hash/OUT` assets). Other package folders are skipped so anchors don't harvest each other.
 
-The package folder is treated as a **hard mirror of live OUT**:
+Highest version only. Package folders become a **hard mirror of live OUT**:
 - Files no longer present in OUT (or superseded by a higher version) are **deleted** from the source package — not `🚫`-disconnected. Disconnect renaming is only for publish **targets**, where live links may still exist.
 - **Thumbnails are never kept** in source packages (`*-thumb.webp` is purged on sync).
 
-Copy decisions use an mtime check (`isUnchanged`): if the destination file already exists and is the same age or newer than the source, it's skipped; if it's missing or older, it's (re)copied. Re-running is always safe.
+Migrated `Name __hash` asset folders are **not** package anchors (even with `.dchub.json`); destination export still publishes their OUT via the normal folders walk.
 
-**Known limitation:** package discovery here is purely a folder-name-prefix match. A folder migrated to [folder-based stable identity](#supabase-sync) (renamed to `Name __hash`, prefix stripped) is no longer recognized as a package by this step, since the prefix is gone. Files inside it need one of the other export steps.
+Copy decisions use an mtime check (`isUnchanged`): if the destination file already exists and is the same age or newer than the source, it's skipped; if it's missing or older, it's (re)copied. Re-running is always safe.
 
 ### 3 — Export to destinations
 
@@ -65,7 +65,11 @@ Resolves the checked **local** destination’s machine path (or legacy `settings
 - **`flat`:** all publishable OUT files into the target root (no nesting).
 - **`includePackages` (with folders):** first **refreshes each source package from sibling OUT** (same mirror rules as Distribute), then copies those live files into the target at their **nested source-relative paths**. Package filenames are translated. Never dumps packages alone at target root.
 
-Orphan `🚫` flagging runs on the **target** for the folders layout (including leftover root package dumps from older publish modes). Flat mode only flags root-level entries. Source packages never use `🚫`.
+Orphan handling on the **target**:
+- Outside package folders: rename with a `🚫` prefix (visible, reversible where live links may still exist).
+- Inside `📦` package collections: **hard-delete** stale files (older versions, renamed tags, prior `🚫` marks). Pickup mirrors must stay exact.
+
+Source packages never use `🚫`.
 
 ### 4 — Cloud export
 

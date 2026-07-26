@@ -10,6 +10,7 @@ import {
   connectDropbox, checkDropboxConnection, refreshDropboxToken,
   startOneDriveDeviceCode, pollOneDriveToken, checkOneDriveConnection, refreshOneDriveToken,
   connectGDrive, checkGDriveConnection, refreshGDriveToken,
+  resolveSharePointDrive,
   type DeviceCodeInfo, delay,
 } from '../../services/cloudService';
 import {
@@ -189,6 +190,8 @@ function DestCredentialsForm({
   const [deviceInfo, setDeviceInfo] = useState<DeviceCodeInfo | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [driveResolving, setDriveResolving] = useState(false);
+  const [driveMsg, setDriveMsg] = useState('');
   const cancelRef = useRef({ cancelled: false });
 
   useEffect(() => {
@@ -371,6 +374,48 @@ function DestCredentialsForm({
                       onChange={e => patchConfig({ tenantId: e.target.value } as Partial<OneDriveDestConfig>)}
                       placeholder="common"
                     />
+                  </div>
+                )}
+                {cfg.type === 'onedrive' && (
+                  <div className={css.field}>
+                    <span className={css.fieldLabel}>SharePoint site URL (shared delivery)</span>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <input
+                        className={`${css.input} ${css.inputMono}`}
+                        style={{ flex: 1 }}
+                        value={(cfg as OneDriveDestConfig).siteUrl ?? ''}
+                        onChange={e => patchConfig({ siteUrl: e.target.value } as Partial<OneDriveDestConfig>)}
+                        placeholder="https://contoso.sharepoint.com/sites/Clients"
+                      />
+                      <button
+                        type="button"
+                        className={css.btnSave}
+                        disabled={driveResolving || !existingToken || !((cfg as OneDriveDestConfig).siteUrl ?? '').trim()}
+                        onClick={async () => {
+                          setDriveResolving(true); setDriveMsg('');
+                          try {
+                            const { driveId, driveName } = await resolveSharePointDrive(
+                              existingToken!.accessToken,
+                              (cfg as OneDriveDestConfig).siteUrl ?? '',
+                            );
+                            patchConfig({ driveId } as Partial<OneDriveDestConfig>);
+                            setDriveMsg(`Resolved: ${driveName}`);
+                          } catch (e) {
+                            setDriveMsg(e instanceof Error ? e.message : String(e));
+                          } finally {
+                            setDriveResolving(false);
+                          }
+                        }}
+                      >
+                        {driveResolving ? 'Resolving…' : 'Resolve drive'}
+                      </button>
+                    </div>
+                    <span className={css.fieldHint}>
+                      {(cfg as OneDriveDestConfig).driveId
+                        ? `Drive ID: ${(cfg as OneDriveDestConfig).driveId}`
+                        : 'Leave blank to upload to the signed-in user’s personal OneDrive. Connect first, then resolve.'}
+                      {driveMsg && ` — ${driveMsg}`}
+                    </span>
                   </div>
                 )}
                 {cfg.type === 'gdrive' && (

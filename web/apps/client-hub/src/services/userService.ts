@@ -11,6 +11,7 @@ export interface UserProfile {
   email: string
   createdAt: string
   memberClientIds?: string[]
+  canCreateClients: boolean
 }
 
 /** Normalize legacy DB role before it reaches permission helpers. */
@@ -42,6 +43,7 @@ export async function fetchAllUsers(): Promise<UserProfile[]> {
       email:      r.email,
       createdAt:  r.created_at,
       memberClientIds,
+      canCreateClients: r.can_create_clients ?? false,
     }
   }))
   return users
@@ -52,6 +54,7 @@ export interface UpdateUserAccessInput {
   role: string
   clientId?: string | null
   memberClientIds?: string[]
+  canCreateClients?: boolean
 }
 
 export async function updateUserAccess(input: UpdateUserAccessInput): Promise<void> {
@@ -62,6 +65,7 @@ export async function updateUserAccess(input: UpdateUserAccessInput): Promise<vo
     p_role:              input.role,
     p_client_id:         input.clientId ?? undefined,
     p_member_client_ids: input.memberClientIds?.length ? input.memberClientIds : undefined,
+    p_can_create_clients: input.canCreateClients ?? undefined,
   })
   if (error) throw new Error(error.message)
 }

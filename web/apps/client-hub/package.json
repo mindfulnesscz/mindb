@@ -1,13 +1,13 @@
 {
   "name": "@dc-hub/client-hub",
-  "version": "2.4.1",
+  "version": "2.4.2",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
-    "build:staging": "tsc -b && vite build --mode staging",
-    "build:production": "tsc -b && vite build --mode production",
+    "build": "tsc --noEmit && vite build",
+    "build:staging": "tsc --noEmit && vite build --mode staging",
+    "build:production": "tsc --noEmit && vite build --mode production",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "dev:staging": "vite --mode staging",
@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@dc-hub/asset-library": "*",
+    "@dc-hub/auth": "*",
     "@dc-hub/database": "*",
     "@supabase/supabase-js": "^2.110.0",
     "motion": "^12.42.2",

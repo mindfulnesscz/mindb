@@ -5,6 +5,11 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [2.4.2] — 2026-07-24
+
+- Describe this release.
+
+
 ## [2.4.1] — 2026-07-13
 
 Deployment plumbing and field fixes shaken out while standing up staging and running production against the new auth/storage model.

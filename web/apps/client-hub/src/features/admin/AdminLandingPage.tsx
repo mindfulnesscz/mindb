@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Client } from '@dc-hub/asset-library'
-import { canManageClients } from '@dc-hub/asset-library'
+import { canManageClients, canCreateClients, canManageAdmins } from '@dc-hub/asset-library'
 import { useAuth } from '../../context/AuthContext'
 import { useClients } from '../../hooks/useClients'
 import { createClient, updateClient } from '../../services/clientService'
@@ -693,17 +693,25 @@ function AdminSignIn() {
   )
 }
 
-const ROLE_OPTIONS = ['public', 'member', 'editor', 'admin'] as const
+const ROLE_OPTIONS = ['public', 'member', 'editor', 'admin', 'super_admin'] as const
 const ROLE_LABELS: Record<string, string> = {
-  public: 'Public', member: 'Member', editor: 'Editor', admin: 'Admin',
+  public: 'Public', member: 'Member', editor: 'Editor', admin: 'Admin', super_admin: 'Super Admin',
+}
+
+/** Admin-tier roles are assignable only by a super admin. */
+function assignableRoles(viewerCanManageAdmins: boolean): readonly string[] {
+  return viewerCanManageAdmins
+    ? ROLE_OPTIONS
+    : ROLE_OPTIONS.filter(r => r !== 'admin' && r !== 'super_admin')
 }
 
 // ── New user drawer ───────────────────────────────────────────
 
-function UserCreateDrawer({ clients, onClose, onCreated }: {
+function UserCreateDrawer({ clients, onClose, onCreated, canManageAdmins: viewerCanManageAdmins }: {
   clients: Client[]
   onClose: () => void
   onCreated: () => void
+  canManageAdmins: boolean
 }) {
   const [email, setEmail] = useState('')
   const [name, setName] = useState('')
@@ -793,7 +801,7 @@ function UserCreateDrawer({ clients, onClose, onCreated }: {
               onChange={e => setRole(e.target.value)}
               className={`${inputCls} cursor-pointer`}
             >
-              {ROLE_OPTIONS.map(r => (
+              {assignableRoles(viewerCanManageAdmins).map(r => (
                 <option key={r} value={r}>{ROLE_LABELS[r]}</option>
               ))}
             </select>
@@ -885,6 +893,7 @@ function UserCreateDrawer({ clients, onClose, onCreated }: {
 
 function UsersView({ isAdmin }: { isAdmin: boolean }) {
   const { profile: self } = useAuth()
+  const viewerCanManageAdmins = canManageAdmins(normalizeRole(self?.role ?? 'public'))
   const { clients } = useClients()
   const [users, setUsers] = useState<UserProfile[]>([])
   const [loading, setLoading] = useState(true)
@@ -921,8 +930,11 @@ function UsersView({ isAdmin }: { isAdmin: boolean }) {
       await updateUserAccess({
         userId: user.id,
         role,
-        clientId: role === 'member' ? (draftClient[user.id] ?? null) : null,
-        memberClientIds: role === 'editor' ? (draftMembers[user.id] ?? []) : undefined,
+        // Trust the values on the passed user object — the callers set them.
+        // Re-reading draft state here races the setState in the same tick.
+        clientId: role === 'member' ? (user.clientId ?? null) : null,
+        memberClientIds: role === 'editor' ? (user.memberClientIds ?? []) : undefined,
+        canCreateClients: role === 'admin' ? user.canCreateClients : undefined,
       })
       await load()
     } catch (e) {
@@ -936,6 +948,11 @@ function UsersView({ isAdmin }: { isAdmin: boolean }) {
     setUsers(u => u.map(p => p.id === userId ? { ...p, role } : p))
     const user = users.find(u => u.id === userId)
     if (!user) return
+    // member/editor can't be saved until a client is assigned — switching the
+    // role just reveals the client picker in the Access column; the save fires
+    // when a client is chosen there. Avoids the "requires client" DB error.
+    if (role === 'member' && !(draftClient[userId] ?? user.clientId)) { setError(''); return }
+    if (role === 'editor' && (draftMembers[userId] ?? user.memberClientIds ?? []).length === 0) { setError(''); return }
     await saveAccess({ ...user, role })
   }
 
@@ -1022,19 +1039,34 @@ function UsersView({ isAdmin }: { isAdmin: boolean }) {
                       )
                     })}
                   </div>
+                ) : viewerCanManageAdmins && u.id !== self?.id && u.role === 'admin' ? (
+                  <label className="flex items-center gap-1.5 text-[11px] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={u.canCreateClients}
+                      disabled={saving === u.id}
+                      onChange={() => {
+                        const next = !u.canCreateClients
+                        setUsers(list => list.map(p => p.id === u.id ? { ...p, canCreateClients: next } : p))
+                        void saveAccess({ ...u, canCreateClients: next })
+                      }}
+                    />
+                    Can create clients
+                  </label>
                 ) : (
                   <span>{u.clientName ?? (u.memberClientIds?.length ? `${u.memberClientIds.length} client(s)` : '—')}</span>
                 )}
               </td>
               <td className="px-4 py-3">
-                {isAdmin && u.id !== self?.id ? (
+                {isAdmin && u.id !== self?.id
+                  && (viewerCanManageAdmins || (u.role !== 'admin' && u.role !== 'super_admin')) ? (
                   <select
                     value={u.role}
                     disabled={saving === u.id}
                     onChange={e => handleRoleChange(u.id, e.target.value)}
                     className="text-sm font-sans border border-border rounded-sm px-2 py-1 bg-bg focus:outline-none focus:border-cosmos-black transition-colors disabled:opacity-50 cursor-pointer"
                   >
-                    {ROLE_OPTIONS.map(r => (
+                    {assignableRoles(viewerCanManageAdmins).map(r => (
                       <option key={r} value={r}>{ROLE_LABELS[r]}</option>
                     ))}
                   </select>
@@ -1053,6 +1085,7 @@ function UsersView({ isAdmin }: { isAdmin: boolean }) {
       {createOpen && (
         <UserCreateDrawer
           clients={clients}
+          canManageAdmins={viewerCanManageAdmins}
           onClose={() => setCreateOpen(false)}
           onCreated={() => { setCreateOpen(false); void load() }}
         />
@@ -1071,7 +1104,8 @@ function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [editingClient, setEditingClient] = useState<Client | null>(null)
   const role = normalizeRole(profile?.role ?? 'public')
-  const manageClients = canManageClients(role)
+  const manageClients = canManageClients(role)   // edit existing clients (admin+)
+  const createClients = canCreateClients(role, profile?.can_create_clients ?? false) // super_admin, or granted admin
 
   function openCreate() { setEditingClient(null); setDrawerOpen(true) }
   function openEdit(client: Client) { setEditingClient(client); setDrawerOpen(true) }
@@ -1113,7 +1147,7 @@ function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
           <>
             <div className="flex items-center justify-between mb-8">
               <h1 className="font-serif text-2xl font-medium text-cosmos-black">Clients</h1>
-              {!usingMock && manageClients && (
+              {!usingMock && createClients && (
                 <button
                   onClick={openCreate}
                   className="text-sm font-sans font-semibold border-2 border-cosmos-black px-4 py-2 rounded-sm bg-bg text-cosmos-black hover:bg-cosmos-black hover:text-clear-white transition-colors"
@@ -1136,7 +1170,7 @@ function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
               <div className="py-20 text-center">
                 <p className="font-serif text-lg font-medium text-cosmos-black mb-2">No clients yet</p>
                 <p className="font-sans text-sm text-text-muted mb-6">Create your first client to get started.</p>
-                {!usingMock && manageClients && (
+                {!usingMock && createClients && (
                   <button onClick={openCreate} className="text-sm font-sans font-semibold border-2 border-cosmos-black px-6 py-2.5 rounded-sm hover:bg-cosmos-black hover:text-clear-white transition-colors">
                     + New client
                   </button>
@@ -1225,7 +1259,7 @@ export default function AdminLandingPage() {
 
   if (!session) return <AdminSignIn />
 
-  if (profile && normalizeRole(profile.role) === 'admin') return <AdminDashboard isAdmin />
+  if (profile && (normalizeRole(profile.role) === 'admin' || normalizeRole(profile.role) === 'super_admin')) return <AdminDashboard isAdmin />
   if (profile && normalizeRole(profile.role) === 'editor') return <EditorRouter />
 
   if (profile) {

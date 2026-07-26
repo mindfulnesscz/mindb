@@ -16,12 +16,12 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const webRoot = resolve(__dirname, '..');
+const repoRoot = resolve(__dirname, '..');
 
 const branch = process.env.VERCEL_GIT_COMMIT_REF || process.env.GITHUB_REF_NAME || '';
 const mode = branch === 'main' ? 'production' : 'staging';
 const script = mode === 'production' ? 'build:production' : 'build:staging';
-const envFile = resolve(webRoot, `apps/client-hub/.env.${mode}`);
+const envFile = resolve(repoRoot, `web/apps/client-hub/.env.${mode}`);
 
 function loadViteEnv(path) {
   const out = {};
@@ -59,11 +59,11 @@ console.log(
 
 const result = spawnSync(
   'npm',
-  ['run', script, '--workspace=apps/client-hub'],
+  ['run', script, '--workspace=web/apps/client-hub'],
   {
     stdio: 'inherit',
     shell: process.platform === 'win32',
-    cwd: webRoot,
+    cwd: repoRoot,
     env: { ...process.env, ...fileEnv },
   },
 );

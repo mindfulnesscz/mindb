@@ -1,21 +1,27 @@
-# Connect OneDrive
+# Connect OneDrive / SharePoint
 
 ## Microsoft Entra setup
 
-1. Register an application in Microsoft Entra ID.
+1. Register an application in Microsoft Entra ID (this can be the **same** app used for portal OAuth login — see [Authentication](/auth) and the full [Microsoft & SharePoint setup](/cloud-storage/microsoft-setup)).
 2. Choose account type deliberately. For a single-tenant organization, copy its Directory (tenant) ID. For multi-tenant/personal access, `common` is supported.
-3. Under Authentication enable **Allow public client flows**; DC Hub uses device authorization and has no client secret.
-4. Add delegated Graph permissions `Files.ReadWrite`, `offline_access`, and `User.Read`; grant administrator consent if policy requires it.
-5. Enter Application client ID and tenant ID in DC Hub, set a remote folder, then Connect.
+3. Under Authentication enable **Allow public client flows**; the desktop connector uses device authorization and has no client secret.
+4. Add delegated Graph permissions `Files.ReadWrite`, `Sites.ReadWrite.All` (SharePoint libraries), `offline_access`, and `User.Read`; grant administrator consent if policy requires it.
+5. Enter Application client ID and tenant ID in DC Hub, then Connect.
+
+## SharePoint shared library (recommended)
+
+Uploading to a shared SharePoint document library — rather than the connecting user's personal OneDrive — keeps delivery links working across staff changes and uses shared storage. After connecting, paste the **SharePoint site URL** (e.g. `https://contoso.sharepoint.com/sites/Clients`) into the destination and click **Resolve drive**. DC Hub resolves the site's default Documents library to a `driveId` and uploads to `/drives/{driveId}/…`. Leave the site URL blank to fall back to the signed-in user's personal drive.
 
 ## Background flow
 
-The native Rust backend posts to `/<tenant>/oauth2/v2.0/devicecode`, because Microsoft’s endpoint does not allow the Tauri webview origin through CORS. DC Hub shows the returned code/verification URL and repeatedly invokes a single native token poll. `authorization_pending` and `slow_down` return no token; success stores access/refresh tokens and expiry. Refresh also runs natively.
+The native Rust backend posts to `/<tenant>/oauth2/v2.0/devicecode`, because Microsoft's endpoint does not allow the Tauri webview origin through CORS. DC Hub shows the returned code/verification URL and repeatedly invokes a single native token poll. Success stores access/refresh tokens and expiry; refresh also runs natively.
 
-For each export, TypeScript reads the whole local file into memory and PUTs it to `me/drive/root:/<encoded path>:/content`. That simple-upload endpoint replaces an existing path. Optional `createLink` asks for an anonymous view link; link failure currently returns no URL without failing the already-successful upload.
+For each export, files up to 4 MB are PUT to `…/root:/<encoded path>:/content` (simple upload, overwrite). **Larger files use a resumable upload session** (`createUploadSession`) sent in 10 MiB chunks, so large video/design assets no longer hit the simple-upload ceiling. When link generation is enabled, DC Hub requests an `anonymous` view link and **falls back to `organization` scope** when the tenant blocks anonymous sharing.
 
 ## Tradeoffs
 
-Device code works well across browsers and lets authorization happen on another device. Overwrite semantics avoid duplicate names. Weaknesses include tenant Conditional Access, dependence on the authorizing user’s `me/drive`, anonymous-link policy restrictions, whole-file memory usage, and the Graph simple-upload size/robustness limits. The code does not implement upload sessions/chunking.
+Device code works well across browsers and lets authorization happen on another device. Overwrite semantics avoid duplicate names. SharePoint targeting removes the dependence on one user's `me/drive`, and upload sessions remove the size limit. Remaining considerations: tenant Conditional Access, whole-file memory usage during chunking, and sharing policy — if a tenant blocks even organization links, enable sharing for that library in SharePoint admin.
 
 `AADSTS50059` normally means a single-tenant app was called through `common`; enter the tenant GUID. Error 53003 generally indicates Conditional Access/device compliance and requires an Entra administrator.
+
+> After upgrading, **reconnect** the OneDrive destination once so the token is re-issued with the new `Sites.ReadWrite.All` scope.
