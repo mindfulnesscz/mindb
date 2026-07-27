@@ -3,7 +3,7 @@
  * OAuth tokens stay on desktop only — never written from the web.
  */
 import { supabase } from '../lib/supabase'
-import type { Role } from '@dc-hub/asset-library'
+import { isStaff, type Role } from '@dc-hub/asset-library'
 
 export type DestType = 'local' | 'dropbox' | 'onedrive' | 'gdrive'
 /** Pipeline audience: internal tools vs client-facing share links. */
@@ -49,6 +49,7 @@ const ROLE_RANK: Record<Role, number> = {
   member: 1,
   editor: 2,
   admin: 3,
+  super_admin: 4,
 }
 
 export function roleAtLeast(user: Role, min: Role): boolean {
@@ -161,7 +162,14 @@ export function destinationsVisibleToRole(
   dests: PortalDestination[],
   role: Role,
 ): PortalDestination[] {
+  const staff = isStaff(role)
   return dests.filter(
-    d => d.enabled && d.showInPortal && roleAtLeast(role, d.minRole),
+    d =>
+      d.enabled &&
+      d.showInPortal &&
+      // Internal destinations are staff tooling — never shown to clients,
+      // regardless of minRole.
+      (d.role !== 'internal' || staff) &&
+      roleAtLeast(role, d.minRole),
   )
 }

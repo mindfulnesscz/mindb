@@ -130,7 +130,7 @@ export async function fetchAssets(opts: FetchAssetsOptions = {}): Promise<{ asse
   // Children (legacy parent_id) and variants (folder-based stable identity, Task 3) are
   // both only visible inside the primary's detail view, never as their own top-level card.
   query = query.is('parent_id', null).is('variant_of', null)
-  const isStaff = opts.role === 'admin' || opts.role === 'editor'
+  const isStaff = opts.role === 'admin' || opts.role === 'editor' || opts.role === 'super_admin'
   if (filters.status?.length) {
     // Explicit status selection — show exactly what was requested
     query = query.in('status', filters.status)

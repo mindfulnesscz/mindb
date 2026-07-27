@@ -357,7 +357,10 @@ async function main() {
       const children: Record<string, { child_id: string; sha256: string }> = {};
       for (const item of items) {
         const a = assignment.get(item.dbId)!;
-        if (item.isGalleryParent) { children['__gallery_parent__'] = { child_id: a.childId, sha256: '' }; continue; }
+        if (item.isGalleryParent) {
+          children[`__gallery__:${item.key}`] = { child_id: a.childId, sha256: '' };
+          continue;
+        }
         const found  = await findFileByStem(outDir, item.key);
         const sha256 = found ? createHash('sha256').update(await fsReadFile(found)).digest('hex') : '';
         children[found ? path.basename(found) : item.key] = { child_id: a.childId, sha256 };

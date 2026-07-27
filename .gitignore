@@ -18,5 +18,17 @@ supabase/.branches
 # edge function local secrets
 supabase/functions/.env
 
+# local OAuth provider credentials for `supabase start`
+supabase/.env.local
+
 # per-environment bootstrap configs (hold secrets)
 scripts/environments/*.env
+
+# stale compiled JS emitted next to TS sources.
+# The app builds from main.tsx; the workspace packages are `noEmit` and resolve
+# via ./src/index.ts, so committed .js in these trees are stray tsc output and
+# the source of "module does not provide an export named X" errors in Vite.
+web/apps/client-hub/src/**/*.js
+web/apps/client-hub/src/**/*.js.map
+packages/*/src/**/*.js
+packages/*/src/**/*.js.map

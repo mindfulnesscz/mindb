@@ -150,7 +150,7 @@ async function fetchDbClients(role: string): Promise<DbClientRow[]> {
     withTimeout(Promise.resolve(p), 12_000, label);
 
   async function query(select: string): Promise<DbClientRow[]> {
-    if (role === 'admin') {
+    if (role === 'admin' || role === 'super_admin') {
       const { data, error } = await timeout(
         auth!.from('clients').select(select).order('name'),
         'Client list',

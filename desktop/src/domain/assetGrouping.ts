@@ -9,6 +9,8 @@
    folder-based stable identity hash (see domain/stableId.ts) lives once assigned. Assets
    with no OUT ancestor at all (legacy/orphan layout) fall back to their direct parent. */
 
+import { stripWorkflowPrefix } from './naming';
+
 export interface GalleryGroup {
   name:       string    // folder path under OUT — parsed for metadata (entity/format/angle/tags)
   childStems: string[]  // unique file stems inside the folder (path-qualified when needed)
@@ -30,6 +32,12 @@ function childStemKey(relativeDir: string, fileStem: string): string {
   return relativeDir ? `${relativeDir}/${fileStem}` : fileStem;
 }
 
+function isOutSegment(name: string, outFolderName: string): boolean {
+  const want = stripWorkflowPrefix(outFolderName || 'OUT').toLowerCase();
+  const got  = stripWorkflowPrefix(name).toLowerCase();
+  return got === want || got === 'out';
+}
+
 export function groupAssets(
   paths: string[],
   outFolderName: string,
@@ -45,7 +53,7 @@ export function groupAssets(
     // Find the OUT folder segment (last match in case of nested project structures)
     let outIdx = -1;
     for (let i = parts.length - 1; i >= 0; i--) {
-      if (parts[i].toLowerCase() === outFolderName.toLowerCase()) { outIdx = i; break; }
+      if (isOutSegment(parts[i], outFolderName)) { outIdx = i; break; }
     }
     const relative   = outIdx >= 0 ? parts.slice(outIdx + 1) : [parts[parts.length - 1]];
     const fileName   = relative[relative.length - 1];

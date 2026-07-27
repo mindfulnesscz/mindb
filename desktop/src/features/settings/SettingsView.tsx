@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useEnvironmentStore } from '../../store/environmentStore';
 import { useClientStore } from '../../store/clientStore';
+import { useAuthStore } from '../../store/authStore';
 import { saveEnvironments, makeEnvironment, validateAnonKey } from '../../services/environmentService';
 import { checkSupabaseConnection } from '../../services/supabaseService';
 import { CloudDestinations } from '../cloud/CloudDestinations';
@@ -124,6 +125,7 @@ type CheckStatus = 'idle' | 'checking' | 'ok' | 'error';
 
 function EnvironmentSettings() {
   const { environments, activeEnvId, setEnvironments, setActiveEnvId } = useEnvironmentStore();
+  const isSuperAdmin = useAuthStore(s => s.profile?.role === 'super_admin');
   const activeEnv = environments.find(e => e.id === activeEnvId) ?? null;
 
   async function activate(envId: string) {
@@ -188,6 +190,27 @@ function EnvironmentSettings() {
                  : status === 'error'    ? 'var(--signal-error)'
                  : status === 'checking' ? '#facc15'
                  : 'var(--gray-300)';
+
+  // Only super admins manage environments. Everyone else operates in the
+  // active (Production) environment and sees it read-only.
+  if (!isSuperAdmin) {
+    return (
+      <>
+        <div className={css.cardTitle}>Environment</div>
+        <p style={{ fontSize: 'var(--text-sm)', margin: '0 0 6px' }}>
+          <strong>{activeEnv?.name || 'Production'}</strong>
+          {activeEnv?.supabaseUrl && (
+            <span style={{ color: 'var(--gray-500)', fontFamily: 'monospace', fontSize: '0.75rem', marginLeft: 8 }}>
+              {activeEnv.supabaseUrl}
+            </span>
+          )}
+        </p>
+        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-subtle)', margin: 0 }}>
+          Environment management is restricted to super admins.
+        </p>
+      </>
+    );
+  }
 
   return (
     <>

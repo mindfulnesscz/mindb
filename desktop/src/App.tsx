@@ -16,6 +16,7 @@ import { loadClientsForEnvironment, saveLocalClient, pullCloudDestinations } fro
 import { loadEnvironments } from './services/environmentService';
 import { useEnvironmentStore } from './store/environmentStore';
 import { switchAuthClient, getSession, loadProfile, DESKTOP_ROLES } from './services/authService';
+import { reportError } from './services/reportError';
 import './styles/tokens.css';
 import './styles/global.css';
 import css from './App.module.css';
@@ -83,7 +84,7 @@ export default function App() {
         setAuthStatus('signedIn');
       } catch (e) {
         if (authRunId.current !== runId) return;
-        console.error('Auth failed for environment:', e);
+        reportError('App.authForEnvironment', e);
         setAuthStatus('signedOut');
       }
     })();
@@ -106,7 +107,7 @@ export default function App() {
         setActiveClientId(activeClientId);
       })
       .catch(e => {
-        console.error(e);
+        reportError('App.loadClientsForEnvironment', e);
         useClientStore.getState().setLoadError(String(e instanceof Error ? e.message : e));
       });
   }, [authStatus, activeEnvId, activeEnv?.supabaseUrl, activeEnv?.anonKey]);

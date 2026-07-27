@@ -406,6 +406,77 @@ async function resolveChildId(
   return { childId: nextChildId(used), sha256: sha, dirty: true };
 }
 
+const GALLERY_SLOT_PREFIX = '__gallery__:';
+const GALLERY_SLOT_LEGACY = '__gallery_parent__';
+
+/**
+ * Gallery parents are keyed by folder path (`__gallery__:Selected`). A rename
+ * would otherwise mint a new child_id and leave the old parent holding the
+ * pictures. Reuse an orphaned slot in the same package (or the legacy
+ * migrate-identity key) before allocating a fresh id.
+ */
+function resolveGalleryParentChildId(
+  state: { manifest: DchubManifest; used: Set<string>; dirty: boolean },
+  galleryPath: string,
+  currentPathsInPackage: Set<string>,
+): string {
+  const parentSlot = `${GALLERY_SLOT_PREFIX}${galleryPath}`;
+  const currentSlots = new Set(
+    [...currentPathsInPackage].map(p => `${GALLERY_SLOT_PREFIX}${p}`),
+  );
+  const orphans = Object.entries(state.manifest.children).filter(
+    ([k]) => k.startsWith(GALLERY_SLOT_PREFIX) && !currentSlots.has(k),
+  );
+
+  // One live gallery + one orphaned path slot ⇒ folder rename (also heals a prior
+  // bad run that minted an empty parent under the new path while children stayed
+  // on the old parent id).
+  if (currentPathsInPackage.size === 1 && orphans.length === 1) {
+    const [oldKey, entry] = orphans[0];
+    const exact = state.manifest.children[parentSlot]?.child_id;
+    if (exact && exact !== entry.child_id) delete state.manifest.children[parentSlot];
+    state.manifest.children[parentSlot] = { child_id: entry.child_id, sha256: '' };
+    delete state.manifest.children[oldKey];
+    state.dirty = true;
+    state.used.add(entry.child_id);
+    return entry.child_id;
+  }
+
+  const exact = state.manifest.children[parentSlot]?.child_id;
+  if (exact) {
+    state.used.add(exact);
+    return exact;
+  }
+
+  // Legacy migrate-identity wrote a single shared key — promote it once.
+  const legacy = state.manifest.children[GALLERY_SLOT_LEGACY]?.child_id;
+  if (legacy && currentPathsInPackage.size === 1) {
+    state.manifest.children[parentSlot] = { child_id: legacy, sha256: '' };
+    delete state.manifest.children[GALLERY_SLOT_LEGACY];
+    state.dirty = true;
+    state.used.add(legacy);
+    return legacy;
+  }
+
+  // Multi-gallery package: one renamed folder among several.
+  const unresolved = [...currentPathsInPackage].filter(
+    p => !state.manifest.children[`${GALLERY_SLOT_PREFIX}${p}`],
+  );
+  if (orphans.length === 1 && unresolved.length === 1 && unresolved[0] === galleryPath) {
+    const [oldKey, entry] = orphans[0];
+    state.manifest.children[parentSlot] = { child_id: entry.child_id, sha256: '' };
+    delete state.manifest.children[oldKey];
+    state.dirty = true;
+    state.used.add(entry.child_id);
+    return entry.child_id;
+  }
+
+  const parentChildId = nextChildId(state.used);
+  state.manifest.children[parentSlot] = { child_id: parentChildId, sha256: '' };
+  state.dirty = true;
+  return parentChildId;
+}
+
 export interface IdentityContext {
   migrated:    boolean;               // client.identityMigrated — gates stable_id matching entirely
   packageDirs: Map<string, string>;   // single stem, or gallery folder name → its package dir (OUT's parent)
@@ -451,7 +522,9 @@ export async function resolveCdnIdentity(
     const parts = absPath.replace(/\\/g, '/').split('/');
     let outIdx = -1;
     for (let i = parts.length - 1; i >= 0; i--) {
-      if (parts[i].toLowerCase() === outFolderName.toLowerCase()) { outIdx = i; break; }
+      const want = outFolderName.replace(/^\[\d+\]\s*/, '').trim().toLowerCase();
+      const got  = parts[i].replace(/^\[\d+\]\s*/, '').trim().toLowerCase();
+      if (got === want || got === 'out') { outIdx = i; break; }
     }
     if (outIdx < 0) continue; // orphan layout — no package dir to carry a hash
     const packageDir = parts.slice(0, outIdx).join('/');
@@ -958,19 +1031,19 @@ export async function exportAssetsToSupabase(
       }
     }
 
-    for (const { group, packageDir, stableId } of stableGalleries) {
+    // Group by package so gallery-folder renames can reuse orphaned parent slots.
+    const galleriesByPackage = new Map<string, typeof stableGalleries>();
+    for (const entry of stableGalleries) {
+      const list = galleriesByPackage.get(entry.packageDir) ?? [];
+      list.push(entry);
+      galleriesByPackage.set(entry.packageDir, list);
+    }
+
+    for (const [, packageGalleries] of galleriesByPackage) {
+      const pathsInPackage = new Set(packageGalleries.map(g => g.group.name));
+      for (const { group, packageDir, stableId } of packageGalleries) {
       const state = await manifestState(packageDir, stableId);
-      // One parent slot per gallery folder path — two galleries in the same package
-      // (e.g. Selected vs All) must not collapse onto a shared __gallery_parent__.
-      const parentSlot = `__gallery__:${group.name}`;
-      let parentChildId = state.manifest.children[parentSlot]?.child_id;
-      if (!parentChildId) {
-        parentChildId = nextChildId(state.used);
-        state.manifest.children[parentSlot] = { child_id: parentChildId, sha256: '' };
-        state.dirty = true;
-      } else {
-        state.used.add(parentChildId);
-      }
+      const parentChildId = resolveGalleryParentChildId(state, group.name, pathsInPackage);
 
       const firstStableChild       = group.childStems.length > 0 ? group.childStems[0] : null;
       const firstChildThumb        = firstStableChild ? (cdnUrls?.get(firstStableChild) ?? null) : null;
@@ -1035,6 +1108,7 @@ export async function exportAssetsToSupabase(
             download_urls: cloudUrls?.get(childStem) ?? cloudUrls?.get(fileStem) ?? [],
           },
         });
+      }
       }
     }
 

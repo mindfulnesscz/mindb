@@ -288,36 +288,126 @@ export async function uploadDropboxFile(
 
 /* ── OneDrive file upload ────────────────────────────────────────────────── */
 
+// Graph simple PUT is only reliable for small files; larger ones need an
+// upload session. 4 MB is Microsoft's documented simple-upload ceiling.
+const ONEDRIVE_SIMPLE_MAX = 4 * 1024 * 1024;
+// Upload-session chunks must be a multiple of 320 KiB; 10 MiB is a safe size.
+const ONEDRIVE_CHUNK = 10 * 1024 * 1024;
+
+/** Graph item base for a drive: a SharePoint/OneDrive-for-Business drive, or the
+ *  signed-in user's own drive when no driveId is configured. */
+function graphDriveBase(driveId?: string): string {
+  return driveId && driveId.trim()
+    ? `https://graph.microsoft.com/v1.0/drives/${encodeURIComponent(driveId.trim())}`
+    : 'https://graph.microsoft.com/v1.0/me/drive';
+}
+
+/** Resolve a SharePoint site URL to its default document-library drive ID.
+ *  Accepts e.g. https://contoso.sharepoint.com/sites/Clients */
+export async function resolveSharePointDrive(
+  accessToken: string,
+  siteUrl:     string,
+): Promise<{ driveId: string; driveName: string }> {
+  const u = new URL(siteUrl.trim());
+  const hostname = u.hostname;
+  const sitePath = u.pathname.replace(/^\/+|\/+$/g, ''); // e.g. "sites/Clients"
+  const siteRes = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${hostname}:/${sitePath}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (!siteRes.ok) throw new Error(`Could not find SharePoint site (${siteRes.status}): ${await siteRes.text()}`);
+  const site = await siteRes.json() as { id?: string };
+  if (!site.id) throw new Error('SharePoint site lookup returned no id.');
+
+  const drivesRes = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${site.id}/drives`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (!drivesRes.ok) throw new Error(`Could not list document libraries (${drivesRes.status}).`);
+  const drives = (await drivesRes.json() as { value?: { id: string; name: string }[] }).value ?? [];
+  if (drives.length === 0) throw new Error('No document libraries found on that site.');
+  // Prefer the default "Documents" library; fall back to the first.
+  const doc = drives.find(d => d.name === 'Documents') ?? drives[0];
+  return { driveId: doc.id, driveName: doc.name };
+}
+
+async function onedriveCreateLink(
+  driveBase:   string,
+  encodedPath: string,
+  accessToken: string,
+): Promise<string | null> {
+  // Corporate tenants usually block anonymous links; fall back to organization.
+  for (const scope of ['anonymous', 'organization'] as const) {
+    const res = await fetch(
+      `${driveBase}/root:/${encodedPath}:/createLink`,
+      {
+        method:  'POST',
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ type: 'view', scope }),
+      },
+    );
+    if (res.ok) {
+      const data = await res.json() as { link?: { webUrl?: string } };
+      if (data.link?.webUrl) return data.link.webUrl;
+    }
+  }
+  return null;
+}
+
 export async function uploadOneDriveFile(
   accessToken: string,
   bytes:        Uint8Array,
   remotePath:   string,   // e.g. "DC Hub/ESS/file.pdf"
   getLink:      boolean,
+  driveId?:     string,   // SharePoint/OneDrive-for-Business drive; empty → /me/drive
 ): Promise<string | null> {
   const encodedPath = remotePath.split('/').map(encodeURIComponent).join('/');
-  const uploadRes = await fetch(
-    `https://graph.microsoft.com/v1.0/me/drive/root:/${encodedPath}:/content`,
-    {
-      method:  'PUT',
-      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/octet-stream' },
-      body:    bytes,
-    },
-  );
-  if (!uploadRes.ok) throw new Error(`OneDrive upload failed (${uploadRes.status}): ${await uploadRes.text()}`);
+  const driveBase   = graphDriveBase(driveId);
+
+  if (bytes.byteLength <= ONEDRIVE_SIMPLE_MAX) {
+    const uploadRes = await fetch(
+      `${driveBase}/root:/${encodedPath}:/content`,
+      {
+        method:  'PUT',
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/octet-stream' },
+        body:    bytes,
+      },
+    );
+    if (!uploadRes.ok) throw new Error(`OneDrive upload failed (${uploadRes.status}): ${await uploadRes.text()}`);
+  } else {
+    // Large file → resumable upload session (chunked).
+    const sessionRes = await fetch(
+      `${driveBase}/root:/${encodedPath}:/createUploadSession`,
+      {
+        method:  'POST',
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ item: { '@microsoft.graph.conflictBehavior': 'replace' } }),
+      },
+    );
+    if (!sessionRes.ok) throw new Error(`OneDrive upload session failed (${sessionRes.status}): ${await sessionRes.text()}`);
+    const { uploadUrl } = await sessionRes.json() as { uploadUrl: string };
+
+    const total = bytes.byteLength;
+    for (let start = 0; start < total; start += ONEDRIVE_CHUNK) {
+      const end   = Math.min(start + ONEDRIVE_CHUNK, total);
+      const chunk = bytes.subarray(start, end);
+      const putRes = await fetch(uploadUrl, {
+        method:  'PUT',
+        headers: {
+          'Content-Length': String(chunk.byteLength),
+          'Content-Range':  `bytes ${start}-${end - 1}/${total}`,
+        },
+        body: chunk,
+      });
+      // 202 = chunk accepted; 200/201 = final chunk, upload complete.
+      if (putRes.status !== 202 && putRes.status !== 200 && putRes.status !== 201) {
+        throw new Error(`OneDrive chunk upload failed (${putRes.status}): ${await putRes.text()}`);
+      }
+    }
+  }
 
   if (!getLink) return null;
-
-  const linkRes = await fetch(
-    `https://graph.microsoft.com/v1.0/me/drive/root:/${encodedPath}:/createLink`,
-    {
-      method:  'POST',
-      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ type: 'view', scope: 'anonymous' }),
-    },
-  );
-  if (!linkRes.ok) return null;
-  const data = await linkRes.json() as { link?: { webUrl?: string } };
-  return data.link?.webUrl ?? null;
+  return onedriveCreateLink(driveBase, encodedPath, accessToken);
 }
 
 /* ── Google Drive file upload ────────────────────────────────────────────── */
@@ -432,6 +522,48 @@ async function ensureGDriveShareLink(
  * - Same-name file + different size → media update in place
  * - Missing → multipart create
  */
+// Multipart create holds the whole body in memory and is capped for large
+// files; above this, use a resumable session instead.
+const GDRIVE_SIMPLE_MAX = 5 * 1024 * 1024;
+
+/** Resumable upload/update — supports files far beyond the multipart limit.
+ *  Pass fileId to update existing content; omit it (with parents) to create. */
+async function gdriveResumableUpload(
+  accessToken: string,
+  opts:        { fileId?: string; name: string; parents?: string[] },
+  bytes:       Uint8Array,
+  mimeType:    string,
+): Promise<{ id?: string; webViewLink?: string }> {
+  const isUpdate = !!opts.fileId;
+  const initUrl = isUpdate
+    ? `https://www.googleapis.com/upload/drive/v3/files/${opts.fileId}?uploadType=resumable&fields=id,webViewLink&supportsAllDrives=true`
+    : `https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,webViewLink&supportsAllDrives=true`;
+  // parents may only be set on create; changing them on update needs addParents.
+  const meta = isUpdate ? { name: opts.name } : { name: opts.name, parents: opts.parents };
+
+  const initRes = await fetch(initUrl, {
+    method:  isUpdate ? 'PATCH' : 'POST',
+    headers: {
+      Authorization:            `Bearer ${accessToken}`,
+      'Content-Type':           'application/json; charset=UTF-8',
+      'X-Upload-Content-Type':  mimeType,
+      'X-Upload-Content-Length': String(bytes.byteLength),
+    },
+    body: JSON.stringify(meta),
+  });
+  if (!initRes.ok) throw new Error(`GDrive resumable init failed (${initRes.status}): ${await initRes.text()}`);
+  const sessionUrl = initRes.headers.get('Location');
+  if (!sessionUrl) throw new Error('GDrive resumable session URL missing from response.');
+
+  const putRes = await fetch(sessionUrl, {
+    method:  'PUT',
+    headers: { 'Content-Type': mimeType, 'Content-Length': String(bytes.byteLength) },
+    body:    bytes,
+  });
+  if (!putRes.ok) throw new Error(`GDrive resumable upload failed (${putRes.status}): ${await putRes.text()}`);
+  return await putRes.json() as { id?: string; webViewLink?: string };
+}
+
 export async function uploadGDriveFile(
   accessToken:   string,
   localSize:     number,
@@ -457,21 +589,33 @@ export async function uploadGDriveFile(
 
   if (existing) {
     // Content changed — update in place (no second same-name file).
-    const updateRes = await fetch(
-      `https://www.googleapis.com/upload/drive/v3/files/${existing.id}?uploadType=media&fields=id,webViewLink&supportsAllDrives=true`,
-      {
-        method:  'PATCH',
-        headers: {
-          Authorization:  `Bearer ${accessToken}`,
-          'Content-Type': mimeType,
-        },
-        body: bytes,
-      },
-    );
-    if (!updateRes.ok) throw new Error(`GDrive update failed (${updateRes.status}): ${await updateRes.text()}`);
-    const updated = await updateRes.json() as { id?: string; webViewLink?: string };
+    const updated = bytes.byteLength > GDRIVE_SIMPLE_MAX
+      ? await gdriveResumableUpload(accessToken, { fileId: existing.id, name: fileName }, bytes, mimeType)
+      : await (async () => {
+          const updateRes = await fetch(
+            `https://www.googleapis.com/upload/drive/v3/files/${existing.id}?uploadType=media&fields=id,webViewLink&supportsAllDrives=true`,
+            {
+              method:  'PATCH',
+              headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': mimeType },
+              body:    bytes,
+            },
+          );
+          if (!updateRes.ok) throw new Error(`GDrive update failed (${updateRes.status}): ${await updateRes.text()}`);
+          return await updateRes.json() as { id?: string; webViewLink?: string };
+        })();
     const url = getLink && updated.id
       ? await ensureGDriveShareLink(accessToken, updated.id, updated.webViewLink)
+      : null;
+    return { url, skipped: false };
+  }
+
+  // Large new file → resumable session (multipart create is memory-bound / capped).
+  if (bytes.byteLength > GDRIVE_SIMPLE_MAX) {
+    const fileData = await gdriveResumableUpload(
+      accessToken, { name: fileName, parents: [folderId] }, bytes, mimeType,
+    );
+    const url = getLink && fileData.id
+      ? await ensureGDriveShareLink(accessToken, fileData.id, fileData.webViewLink)
       : null;
     return { url, skipped: false };
   }

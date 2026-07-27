@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react'
 import { useRole } from '../../context/RoleContext'
-import { getDefaultFilters, canDownload, type FilterState, type Asset } from '@dc-hub/asset-library'
+import { getDefaultFilters, canDownload, canSeeStats, canReadComments, type FilterState, type Asset, type Role } from '@dc-hub/asset-library'
 import { useAssets } from '../../hooks/useAssets'
 import { useTags, type TagsByDimension, type TagGroup } from '../../hooks/useTags'
 import { deleteDisconnectedAssets, fetchAsset, assetFacetLabels } from '../../services/assetService'
@@ -32,7 +32,7 @@ function AssetCard({
 }: {
   asset: Asset
   onOpen: (focusId?: string, opts?: { lightbox?: boolean }) => void
-  role: string
+  role: Role
   accent: string
 }) {
   const isMulti = (asset.childCount ?? 0) > 0
@@ -118,7 +118,7 @@ function AssetCard({
             awaiting you
           </div>
         )}
-        {!isMulti && canDownload(role as 'public' | 'member' | 'editor' | 'admin', asset) && asset.downloadUrl && (
+        {!isMulti && canDownload(role, asset) && asset.downloadUrl && (
           <span
             role="button"
             tabIndex={0}
@@ -159,10 +159,10 @@ function AssetCard({
           ) : null}
         </div>
         <div className="flex items-center gap-3 text-text-muted text-xs font-sans">
-          {role !== 'public' && (
+          {canSeeStats(role) && (
             <span>★ {asset.avg.toFixed(1)} ({asset.count})</span>
           )}
-          {role !== 'public' && <span>💬 {asset.comments}</span>}
+          {canReadComments(role) && <span>💬 {asset.comments}</span>}
         </div>
       </div>
     </button>
@@ -576,7 +576,7 @@ export default function GalleryView() {
   const [resolvedDetail, setResolvedDetail] = useState<Asset | null>(null)
   const [railVisible, setRailVisible] = useState(true)
 
-  const isStaff = role === 'admin' || role === 'editor'
+  const isStaff = role === 'admin' || role === 'editor' || role === 'super_admin'
   const statusKeys = isStaff ? STATUS_KEYS_STAFF : STATUS_KEYS_CLIENT
   const accent = activeClient?.accent ?? '#161616'
 

@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // No rootDir: this package imports @dc-hub/database source (a sibling dir),
+    // and rootDir would reject files outside ./src. noEmit makes it moot anyway.
+    "noEmit": true,
+    "paths": {
+      "@dc-hub/database": ["../database/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}
