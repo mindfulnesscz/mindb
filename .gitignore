@@ -18,6 +18,9 @@ supabase/.branches
 # edge function local secrets
 supabase/functions/.env
 
+# local OAuth provider credentials for `supabase start`
+supabase/.env.local
+
 # per-environment bootstrap configs (hold secrets)
 scripts/environments/*.env
 

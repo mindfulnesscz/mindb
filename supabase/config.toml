@@ -158,7 +158,9 @@ enabled = true
 # in emails.
 site_url = "http://localhost:5173"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
-# external_url = ""
+# Pinned to localhost (not the default 127.0.0.1) so OAuth callbacks match Entra/Azure,
+# which rejects raw IPs. This is what GoTrue uses to build the provider redirect_uri.
+external_url = "http://localhost:54321/auth/v1"
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
 additional_redirect_urls = ["http://localhost:5173", "http://localhost:5173/**", "http://127.0.0.1:5173", "http://127.0.0.1:5173/**", "http://localhost:7623/auth-callback"]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).

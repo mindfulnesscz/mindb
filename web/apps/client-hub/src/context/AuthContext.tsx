@@ -22,8 +22,11 @@ interface AuthContextValue {
   checkEmail: (email: string) => Promise<EmailAuthType>
   sendMagicLink: (email: string, userData?: Record<string, string>, redirectTo?: string, clientId?: string) => Promise<string | null>
   signInWithProvider: (provider: OAuthProvider, redirectTo?: string) => Promise<string | null>
+  completeProfile: (fields: { name: string; company: string; country: string; industry: string }) => Promise<string | null>
   signOut: () => Promise<void>
 }
+
+export interface ProfileFields { name: string; company: string; country: string; industry: string }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
@@ -107,12 +110,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  /**
+   * Fill in an authenticated guest's profile (name/company/country/industry).
+   * Used by the portal to collect details from OAuth users who signed in without
+   * the magic-link profile form. Keeps their role as-is (guest stays `public`);
+   * an admin promotes them if they need client access.
+   */
+  async function completeProfile(fields: ProfileFields): Promise<string | null> {
+    if (!supabase || !session) return 'Not signed in'
+    const { error } = await supabase
+      .from('profiles')
+      .update({
+        name:     fields.name,
+        company:  fields.company,
+        country:  fields.country,
+        industry: fields.industry,
+        initials: fields.name.replace(/[^A-Za-z ]/g, '').trim().slice(0, 2).toUpperCase(),
+      })
+      .eq('id', session.user.id)
+    if (error) return error.message
+    await fetchProfile(session.user.id)
+    return null
+  }
+
   async function signOut() {
     if (supabase) await signOutCore(supabase)
   }
 
   return (
-    <AuthContext.Provider value={{ session, profile, loading, checkEmail, sendMagicLink, signInWithProvider, signOut }}>
+    <AuthContext.Provider value={{ session, profile, loading, checkEmail, sendMagicLink, signInWithProvider, completeProfile, signOut }}>
       {children}
     </AuthContext.Provider>
   )
