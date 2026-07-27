@@ -7,8 +7,8 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [2.4.2] — 2026-07-24
 
-- Describe this release.
-
+- Packages fixed: wiping target packages in export locations, and source folder instead of disconnecting (the reason is that these packages are deplatable).
+- Auth with Github, Google and Microsoft. Currently only on web
 
 ## [2.4.1] — 2026-07-13
 
@@ -36,7 +36,6 @@ Deployment plumbing and field fixes shaken out while standing up staging and run
 
 - Pipeline, distribution, CDN, settings, and environments docs updated for package OUT mirror and CDN cache-busting; tag label-rename notes in taxonomy / tags-and-destinations.
 
-
 ## [2.4.0] — 2026-07-12
 
 Authentication, environments, a credential-free desktop, and the production deployment pipeline. The desktop is gated behind staff sign-in, clients are database-first, no permanent secret exists on any workstation, and the portal ships continuously.
@@ -44,6 +43,7 @@ Authentication, environments, a credential-free desktop, and the production depl
 ### Added
 
 **Desktop authentication** (authentication-plan Phases 1–3)
+
 - Staff-only login gate: magic link with PKCE via the system browser and the `:7623` loopback callback; sessions persist and auto-refresh; sign-out in the nav rail
 - `client_members` assignment table + `clients.identity_migrated` — the identity flag lives in the database, closing the config-drift path to legacy hard-deletes
 - **Every Supabase operation runs as the signed-in user under RLS** — the service-role key no longer exists in the desktop; privileged sync fails closed when signed out
@@ -51,14 +51,17 @@ Authentication, environments, a credential-free desktop, and the production depl
 - Secret-free client exports (`_version: 2.0`); importing an old bundle strips credentials and warns to rotate; anon-key fields reject `sb_secret_*`/service-role keys outright
 
 **Environments & DB-first clients**
+
 - Environments (Local / Staging / Production) as first-class connection configs with switchers on the login screen, in Settings, and in the client picker — switching re-authenticates, making cross-tier mixups structurally impossible
 - Clients are fetched from the database per environment (membership-filtered; admins see all) and managed by admins in the picker form (name, colour, storage); machine-local config (folders, OAuth tokens, logo) attaches per `(environment, client)`; legacy `clients.json` migrates automatically including vocab-file re-keying
 
 **Local development stack & database workflow**
+
 - Supabase CLI workflow: consolidated baseline migration verified against production, replayable from zero with seed (demo client, seeded admin `admin@acme.test`, taxonomy, sample assets); `db:start/reset/types` scripts; Docker setup guide
 - Migrations CI: PR replay validation; `staging` branch deploys the staging project; `main` deploys production behind approval; edge functions deploy alongside
 
 **Deployment**
+
 - Portal on Vercel (`web/vercel.json`): SPA rewrites, workspace build; production at `hub.disruptcollective.com`, `staging.` branch domain, previews per push; backend switching for local dev via committed Vite mode files (`dev:web:prod`, `dev:web:staging`)
 - Desktop releases: version tags build the Tauri `.dmg` on macOS CI into a draft GitHub Release (unsigned pending an Apple Developer ID)
 - Three-branch model: `dev` (checks) → `staging` (hosted rehearsal) → `main` (production)
@@ -96,17 +99,20 @@ Folder-based stable identity, CDN originals, and a major R2 sync correctness/per
 ### Added
 
 **Folder-based stable identity** (gated per client via `identityMigrated`; live on ESS since 2026-07-09)
-- ` __hash` package-folder suffix as a rename-proof asset anchor; per-folder `.dchub.json` manifest maps filenames → stable `child_id`s with SHA-256 content-hash fallback for renamed files
+
+- `__hash` package-folder suffix as a rename-proof asset anchor; per-folder `.dchub.json` manifest maps filenames → stable `child_id`s with SHA-256 content-hash fallback for renamed files
 - `stableId.ts`, `assetGrouping.ts` domain modules; `scripts/migrate-identity.ts` scaffolds existing folders and maps legacy DB rows
 - Two relationship kinds: `parent_id` (gallery grid) vs `variant_of` (rendition picker); variant groups roll shared tags up onto a generically-named primary
 - Stale stable-identity rows are soft-marked `disconnected` instead of hard-deleted — ratings/comments/history survive disk churn
 - Per-package `readme.md` snapshot (`readmeService.ts`) with taxonomy and feedback stats
 
 **CDN originals**
+
 - `runOriginalUpload` pipeline step — uploads original files to R2 under version-stable keys (`originals/{stableId}/{childId}.ext`, legacy fallback `originals/{shortcode}.ext`), synced to `assets.download_url` for the portal's download button
 - Local R2 upload cache (mtime+size+sha256) — unchanged files skip with zero network calls
 
 **Misc**
+
 - `notifyService.ts` — run-completion notifications
 - `CLOUD_DESTINATIONS.md` — destination model documentation
 
@@ -128,13 +134,14 @@ Folder-based stable identity, CDN originals, and a major R2 sync correctness/per
 
 ---
 
-## [2.1.0] — 2026-07-02  `feature/cloud-integration`
+## [2.1.0] — 2026-07-02 `feature/cloud-integration`
 
 Major feature release: Supabase DAM backend, Cloudflare R2 CDN, multi-client system, cloud destinations, and repo reorganisation.
 
 ### Added
 
 **Supabase DAM integration**
+
 - `supabase_request` Rust command — proxies all Supabase HTTP calls via native `reqwest`, bypassing Supabase's browser-key restriction (service_role key would 401 from a WebView context)
 - `supabaseService.ts` — full pipeline sync replacing Airtable: upsert assets, sync version history, archive stale records
 - `resolveClientId` — auto-bootstraps the client row in Supabase on first run; no manual DB setup needed
@@ -143,11 +150,13 @@ Major feature release: Supabase DAM backend, Cloudflare R2 CDN, multi-client sys
 - `checkSupabaseConnection` — connection ping used by Settings UI
 
 **Cloudflare R2 CDN**
+
 - `r2.rs` Rust module: `upload_to_r2`, `check_r2_connection`, `list_r2_keys`, `delete_r2_object`
 - Per-client R2 config: endpoint, access key, secret key, bucket, public domain
 - CDN URLs written into `assets.download_urls` in Supabase after upload
 
 **Cloud destinations**
+
 - `CloudDestination` model — multiple destinations per client (local, Dropbox, OneDrive, GDrive)
 - `internal` vs `client` destination roles; flat export and generate-link flags
 - `upload_to_dropbox` Rust command + OAuth flow via `wait_for_oauth_redirect` (localhost:7623)
@@ -155,6 +164,7 @@ Major feature release: Supabase DAM backend, Cloudflare R2 CDN, multi-client sys
 - `CloudDestinations.tsx` — destinations panel in Settings
 
 **Client management**
+
 - `client.ts` domain — replaces the old per-settings Airtable fields with a full Client model
 - `clientStore.ts` — Zustand store for multi-client state
 - `clientService.ts` — persist and load client configs from tauri-plugin-store
@@ -231,7 +241,7 @@ First versioned release of the Python pipeline.
 
 ---
 
-## [0.1.0] — 2026-06-18  *(initial commit)*
+## [0.1.0] — 2026-06-18 _(initial commit)_
 
 - `app.py` — Python pipeline script (distribute + publish)
 - `vocab-manager.py` — vocabulary editor

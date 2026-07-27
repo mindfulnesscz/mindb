@@ -94,6 +94,15 @@ export async function sendMagicLink(
   if (error) throw new Error(error.message)
 }
 
+/** Scopes that guarantee a verified email back from each provider. Azure/Entra
+ *  only returns an email when `email` is explicitly requested (its default is
+ *  just `openid`); GitHub/Google include it by default but asking is harmless. */
+const PROVIDER_SCOPES: Record<OAuthProvider, string> = {
+  azure:  'openid email profile',
+  google: 'openid email profile',
+  github: 'read:user user:email',
+}
+
 /** Begin an OAuth sign-in. Throws on error. On success the browser navigates
  *  to the provider, so control does not return to the caller. */
 export async function signInWithProvider(
@@ -103,7 +112,7 @@ export async function signInWithProvider(
 ): Promise<void> {
   const { error } = await client.auth.signInWithOAuth({
     provider,
-    options: { redirectTo },
+    options: { redirectTo, scopes: PROVIDER_SCOPES[provider] },
   })
   if (error) throw new Error(error.message)
 }

@@ -2,7 +2,8 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Client } from '@dc-hub/asset-library'
 import { canManageClients, canCreateClients, canManageAdmins } from '@dc-hub/asset-library'
-import { useAuth } from '../../context/AuthContext'
+import { useAuth, type OAuthProvider } from '../../context/AuthContext'
+import { OAUTH_PROVIDERS } from '../auth/SignInModal'
 import { useClients } from '../../hooks/useClients'
 import { createClient, updateClient } from '../../services/clientService'
 import { uploadClientLogo } from '../../services/brandingService'
@@ -601,11 +602,18 @@ function AdminClientCard({ client, onNavigate, onEdit, canEdit }: {
 type SignInStep = 'email' | 'checking' | 'error' | 'sending' | 'sent'
 
 function AdminSignIn() {
-  const { checkEmail, sendMagicLink } = useAuth()
+  const { checkEmail, sendMagicLink, signInWithProvider } = useAuth()
   const [step, setStep] = useState<SignInStep>('email')
   const [email, setEmail] = useState('')
   const [error, setError] = useState('')
+  const [oauthBusy, setOauthBusy] = useState<OAuthProvider | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  async function handleOAuth(provider: OAuthProvider) {
+    setError(''); setOauthBusy(provider)
+    const err = await signInWithProvider(provider, window.location.origin)
+    if (err) { setError(err); setOauthBusy(null) }  // success redirects away
+  }
 
   useEffect(() => { inputRef.current?.focus() }, [])
 
@@ -666,27 +674,48 @@ function AdminSignIn() {
             </button>
           </div>
         ) : (
-          <form onSubmit={handleSubmit} className="space-y-3">
-            <input
-              ref={inputRef}
-              type="email"
-              value={email}
-              onChange={e => { setEmail(e.target.value); if (step === 'error') { setStep('email'); setError('') } }}
-              placeholder="admin@disruptcollective.com"
-              required
-              disabled={busy}
-              className="w-full text-sm font-sans border border-cosmos-black rounded-sm px-4 py-3 bg-bg placeholder:text-text-subtle focus:outline-none transition-colors"
-            />
-            {error && <p className="text-[11px] font-sans text-signal-error">{error}</p>}
-            <button
-              type="submit"
-              disabled={busy || !email.trim()}
-              className="w-full py-3 text-sm font-sans font-semibold bg-cosmos-black text-clear-white rounded-sm disabled:opacity-50 hover:bg-ink-800 transition-colors"
-              style={{ boxShadow: '4px 4px 0 #161616' }}
-            >
-              {busy ? 'Checking…' : 'Continue'}
-            </button>
-          </form>
+          <div className="space-y-3">
+            <div className="space-y-2">
+              {OAUTH_PROVIDERS.map(p => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => handleOAuth(p.id)}
+                  disabled={oauthBusy !== null || busy}
+                  className="w-full flex items-center justify-center gap-2.5 py-3 text-sm font-sans font-semibold border border-cosmos-black rounded-sm bg-bg text-cosmos-black hover:bg-surface-sunken transition-colors disabled:opacity-50"
+                >
+                  {p.icon}
+                  {oauthBusy === p.id ? 'Redirecting…' : `Continue with ${p.label}`}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="h-px flex-1 bg-border" />
+              <span className="text-[10px] font-sans uppercase tracking-label text-text-muted">or</span>
+              <span className="h-px flex-1 bg-border" />
+            </div>
+            <form onSubmit={handleSubmit} className="space-y-3">
+              <input
+                ref={inputRef}
+                type="email"
+                value={email}
+                onChange={e => { setEmail(e.target.value); if (step === 'error') { setStep('email'); setError('') } }}
+                placeholder="admin@disruptcollective.com"
+                required
+                disabled={busy}
+                className="w-full text-sm font-sans border border-cosmos-black rounded-sm px-4 py-3 bg-bg placeholder:text-text-subtle focus:outline-none transition-colors"
+              />
+              {error && <p className="text-[11px] font-sans text-signal-error">{error}</p>}
+              <button
+                type="submit"
+                disabled={busy || !email.trim()}
+                className="w-full py-3 text-sm font-sans font-semibold bg-cosmos-black text-clear-white rounded-sm disabled:opacity-50 hover:bg-ink-800 transition-colors"
+                style={{ boxShadow: '4px 4px 0 #161616' }}
+              >
+                {busy ? 'Checking…' : 'Continue with email'}
+              </button>
+            </form>
+          </div>
         )}
       </div>
     </div>
@@ -1267,14 +1296,18 @@ export default function AdminLandingPage() {
       <div className="min-h-screen flex flex-col items-center justify-center bg-bg px-4 text-center">
         <DCMark size="lg" />
         <h1 className="font-serif text-2xl font-medium text-cosmos-black mt-6 mb-2">Staff access only</h1>
-        <p className="font-sans text-sm text-text-muted mb-6 max-w-xs">
-          Your account doesn't have staff privileges. Use your client portal link to access your workspace.
+        <p className="font-sans text-sm text-text-muted mb-1 max-w-sm">
+          You're signed in{session?.user?.email ? <> as <span className="font-mono text-cosmos-black">{session.user.email}</span></> : ''}, but this account doesn't have staff access to the DC Hub admin area.
+        </p>
+        <p className="font-sans text-sm text-text-muted mb-6 max-w-sm">
+          If you're a client, open your portal link (<span className="font-mono">hub.disruptcollective.com/your-brand</span>) to reach your workspace. Otherwise ask an admin to grant you access.
         </p>
         <button
           onClick={signOut}
           className="px-6 py-2.5 text-sm font-sans font-semibold border-2 border-cosmos-black rounded-sm hover:bg-cosmos-black hover:text-clear-white transition-colors"
+          style={{ boxShadow: '4px 4px 0 #161616' }}
         >
-          Sign out
+          Sign out & use a different account
         </button>
       </div>
     )

@@ -3,7 +3,7 @@ import { useAuth, type EmailAuthType, type OAuthProvider } from '../../context/A
 
 type Step = 'email' | 'checking' | 'extra' | 'sending' | 'sent'
 
-const OAUTH_PROVIDERS: { id: OAuthProvider; label: string; icon: React.ReactNode }[] = [
+export const OAUTH_PROVIDERS: { id: OAuthProvider; label: string; icon: React.ReactNode }[] = [
   {
     id: 'azure',
     label: 'Microsoft',
@@ -39,7 +39,7 @@ const OAUTH_PROVIDERS: { id: OAuthProvider; label: string; icon: React.ReactNode
   },
 ]
 
-const INDUSTRY_OPTIONS = [
+export const INDUSTRY_OPTIONS = [
   'Advertising & Marketing',
   'Architecture & Design',
   'Consumer Goods',
