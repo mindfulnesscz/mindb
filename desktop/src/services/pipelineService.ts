@@ -14,12 +14,13 @@ import type { LogType } from '../store/pipelineStore';
 import type { RunStats } from '../store/pipelineStore';
 import type { VocabularyData } from '../domain/vocabulary';
 import { filterHighestVersions } from '../domain/version';
-import { buildVocabContext, translateExportName, parseFilename } from '../domain/filenameTranslator';
+import { buildVocabMap, translateExportName, parseFilename } from '../domain/filenameTranslator';
 import { runObsidian } from './damService';
 import { uploadDropboxFile, uploadOneDriveFile, uploadGDriveFile } from './cloudService';
 import type { CloudDestination, DestExportLayout } from '../domain/client';
 import { resolveExportShape } from '../domain/client';
-import { stripStableId } from '../domain/stableId';
+import { stripStableId, extractStableId } from '../domain/stableId';
+import { isOutFolder as namingIsOutFolder, isPackageFolder as namingIsPackageFolder, stripWorkflowPrefix } from '../domain/naming';
 import { resolveCdnIdentity } from './supabaseService';
 import { storageKey } from './pipeline/storageKey';
 
@@ -57,7 +58,6 @@ export interface RunContext {
   /** Local publish shape from the checked local destination. */
   localExportLayout?: DestExportLayout;
   localIncludePackages?: boolean;
-  identityMigrated?: boolean;
   cdnIdentity?:      Map<string, { stableId: string; childId: string }>;
   storageKeyPrefix?: string;  // mirrors r2.keyPrefix when CDN enabled
 }
@@ -71,12 +71,25 @@ function shouldSkip(name: string, s: AppSettings): boolean {
   return s.excludeMark ? name.includes(s.excludeMark) : false;
 }
 
+/** Prefix packages — skipped during OUT-tree walks / collected for nested export. */
 function isPackageFolder(name: string, s: AppSettings): boolean {
-  return s.packagePrefix ? name.startsWith(s.packagePrefix) : false;
+  return namingIsPackageFolder(name, {
+    packagePrefix: s.packagePrefix,
+    outFolder:     s.outFolder,
+    excludeMark:   s.excludeMark,
+    includeMark:   s.includeMark,
+    filterMode:    s.filterMode,
+  });
 }
 
 function isOutFolder(name: string, s: AppSettings): boolean {
-  return s.outFolder ? name.toLowerCase() === s.outFolder.toLowerCase() : false;
+  return namingIsOutFolder(name, {
+    packagePrefix: s.packagePrefix,
+    outFolder:     s.outFolder,
+    excludeMark:   s.excludeMark,
+    includeMark:   s.includeMark,
+    filterMode:    s.filterMode,
+  });
 }
 
 function isPublishableFile(name: string): boolean {
@@ -109,6 +122,12 @@ async function listDirLogged(
 
 /* ── Package folder discovery ───────────────────────────────────────────── */
 
+/**
+ * Only folders matching the configured package prefix (e.g. `📦` / `[00] 📦`).
+ * Migrated `Name __hash` asset folders and `.dchub.json` are NOT packages —
+ * treating them as such made Collect a no-op on prod and skipped their OUT
+ * when filling real 📦 anchors.
+ */
 async function findPackageFolders(root: string, s: AppSettings): Promise<string[]> {
   const results: string[] = [];
   async function walk(dir: string) {
@@ -129,36 +148,39 @@ async function findPackageFolders(root: string, s: AppSettings): Promise<string[
 }
 
 /**
- * Files to put in a package export: sibling OUT next to the package folder
- * (same layout Distribute uses). Do NOT read the package folder — it often
- * still holds an older translated copy.
+ * Gather OUT deliverables for a 📦 anchor: every OUT under the package's parent
+ * tree (siblings + nested assets), skipping other package folders. Walks into
+ * migrated `Name __hash` assets so their OUT is included.
  */
-async function collectSiblingOutSources(
+async function collectOutUnderParent(
+  parentDir: string,
+  s: AppSettings,
+): Promise<string[]> {
+  const results: string[] = [];
+  async function walk(dir: string) {
+    const entries = await listDir(dir);
+    for (const e of entries) {
+      if (!e.isDirectory || shouldSkip(e.name, s)) continue;
+      // Never harvest from (or through) another 📦 anchor.
+      if (isPackageFolder(e.name, s)) continue;
+      const childPath = await join(dir, e.name);
+      if (isOutFolder(e.name, s)) {
+        results.push(...await collectFiles(childPath, s, false));
+      } else {
+        await walk(childPath);
+      }
+    }
+  }
+  await walk(parentDir);
+  return results;
+}
+
+async function collectPackageOutSources(
   packageDir: string,
   s: AppSettings,
 ): Promise<string[]> {
   const parent = await dirname(packageDir);
-  const parentEntries = await listDir(parent);
-  const allFiles: string[] = [];
-
-  for (const e of parentEntries) {
-    if (!e.isDirectory || isPackageFolder(e.name, s) || shouldSkip(e.name, s)) continue;
-    const sibPath = await join(parent, e.name);
-
-    // OUT is often a direct sibling of the package folder.
-    if (isOutFolder(e.name, s)) {
-      allFiles.push(...await collectFiles(sibPath, s, false));
-      continue;
-    }
-
-    // Or: sibling asset folder that contains an OUT child.
-    const sibEntries = await listDir(sibPath);
-    for (const se of sibEntries) {
-      if (!se.isDirectory || !isOutFolder(se.name, s)) continue;
-      allFiles.push(...await collectFiles(await join(sibPath, se.name), s, false));
-    }
-  }
-  return allFiles;
+  return collectOutUnderParent(parent, s);
 }
 
 /** Always keep highest version for export — one file per base+ext. */
@@ -174,43 +196,18 @@ function keepOnlyHighestVersions(paths: string[]): { kept: string[]; dropped: st
 }
 
 /**
- * Refresh a package folder from sibling OUT: copy highest versions (translated),
- * then hard-delete anything else in the package (no 🚫 — that is target-only).
- * Returns kept OUT source paths for further export.
+ * Hard-mirror purge for a package folder (source or target): delete anything that
+ * isn't in liveNames — older versions, renamed taxonomy files, thumbs, prior 🚫 marks.
+ * Package collections are pickup mirrors; they must not accumulate stale files.
  */
-async function syncPackageFromOut(
-  pkg: string,
+async function purgePackageMirror(
+  pkgDir: string,
+  liveNames: Set<string>,
   s: AppSettings,
-  vocabMap: ReturnType<typeof buildVocabContext>,
   dryRun: boolean,
   appendLog: (t: LogType, m: string) => void,
-  onError?: (file: string, reason: string) => void,
-): Promise<{ sources: string[]; copied: number; skipped: number; removed: number; errors: number }> {
-  const result = { sources: [] as string[], copied: 0, skipped: 0, removed: 0, errors: 0 };
-
-  const fromOut = await collectSiblingOutSources(pkg, s);
-  if (!fromOut.length) {
-    appendLog('warn', '  └─ no sibling OUT files found');
-    return result;
-  }
-
-  const { kept, dropped } = keepOnlyHighestVersions(fromOut);
-  if (dropped.length) {
-    appendLog('skip', `  ⊘  OUT older versions not packaged: ${dropped.map(p => p.split('/').pop()).join(', ')}`);
-  }
-  result.sources = kept.filter(p => !p.split('/').pop()!.includes('-thumb'));
-
-  const liveNames = new Set<string>();
-  for (const srcFile of kept) {
-    const rawName = srcFile.split('/').pop()!;
-    if (rawName.includes('-thumb')) continue; // never package thumbnails
-    const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
-    const stem = ext ? rawName.slice(0, -ext.length) : rawName;
-    liveNames.add(translateExportName(stem, ext, vocabMap));
-  }
-
-  // Package folder = exact mirror of live OUT assets (no thumbs). Delete orphans /
-  // older copies / any -thumb.webp outright (🚫 disconnect is target-only).
+  logPrefix = 'package',
+): Promise<number> {
   const purgeRels = new Set<string>();
   async function collectPurge(dir: string, rel: string) {
     const entries = await listDir(dir);
@@ -223,8 +220,7 @@ async function syncPackageFromOut(
         continue;
       }
       if (!e.isFile) continue;
-      // Never keep thumbnails in source packages.
-      if (e.name.includes('-thumb')) {
+      if (e.name.includes('-thumb') || e.name.startsWith('🚫')) {
         purgeRels.add(childRel);
         continue;
       }
@@ -232,27 +228,69 @@ async function syncPackageFromOut(
       if (isPublishableFile(e.name)) purgeRels.add(childRel);
     }
   }
-  await collectPurge(pkg, '');
+  await collectPurge(pkgDir, '');
 
+  let removed = 0;
   for (const rel of purgeRels) {
-    const abs = await join(pkg, rel);
+    const abs = await join(pkgDir, rel);
     if (dryRun) {
-      appendLog('dim', `  🗑  [DRY] would remove from package: ${rel}`);
-      result.removed += 1;
+      appendLog('dim', `  🗑  [DRY] would remove from ${logPrefix}: ${rel}`);
+      removed += 1;
       continue;
     }
     try {
       if (await exists(abs)) {
         await remove(abs);
-        appendLog('dim', `  🗑  removed from package: ${rel}`);
-        result.removed += 1;
+        appendLog('dim', `  🗑  removed from ${logPrefix}: ${rel}`);
+        removed += 1;
       }
     } catch (err) {
       appendLog('warn', `  ⚠  could not remove ${rel}: ${err}`);
     }
   }
+  return removed;
+}
 
-  for (const srcFile of kept) {
+/**
+ * Refresh a package folder from sibling OUT: copy highest versions (translated),
+ * then hard-delete anything else in the package (no 🚫).
+ * Returns kept OUT source paths for further export.
+ */
+async function syncPackageFromOut(
+  pkg: string,
+  s: AppSettings,
+  vocabMap: ReturnType<typeof buildVocabMap>,
+  dryRun: boolean,
+  appendLog: (t: LogType, m: string) => void,
+  onError?: (file: string, reason: string) => void,
+): Promise<{ sources: string[]; copied: number; skipped: number; removed: number; errors: number }> {
+  const result = { sources: [] as string[], copied: 0, skipped: 0, removed: 0, errors: 0 };
+
+  const fromOut = await collectPackageOutSources(pkg, s);
+  if (!fromOut.length) {
+    appendLog('warn', '  └─ no OUT files found under parent (siblings + nested)');
+    return result;
+  }
+
+  const { kept, dropped } = keepOnlyHighestVersions(fromOut);
+  if (dropped.length) {
+    appendLog('skip', `  ⊘  OUT older versions not packaged: ${dropped.map(p => p.split('/').pop()).join(', ')}`);
+  }
+  result.sources = kept.filter(p => !p.split('/').pop()!.includes('-thumb'));
+  appendLog('dim', `  └─ ${result.sources.length} OUT file(s) from siblings/nested → package`);
+
+  const liveNames = new Set<string>();
+  for (const srcFile of result.sources) {
+    const rawName = srcFile.split('/').pop()!;
+    if (rawName.includes('-thumb')) continue;
+    const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
+    const stem = ext ? rawName.slice(0, -ext.length) : rawName;
+    liveNames.add(translateExportName(stem, ext, vocabMap));
+  }
+
+  result.removed = await purgePackageMirror(pkg, liveNames, s, dryRun, appendLog, 'package');
+
+  for (const srcFile of result.sources) {
     const rawName = srcFile.split('/').pop()!;
     if (rawName.includes('-thumb')) continue;
     const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
@@ -329,17 +367,22 @@ async function runDistribute(ctx: RunContext, stats: RunStats): Promise<void> {
 
   appendLog('section', `━━━ ${dryRun ? 'DRY RUN' : 'COLLECTING'} ━━━`);
   appendLog('dim', `  Source: ${source}`);
-  appendLog('dim', '  Always highest version only → package folders');
+  appendLog('dim',
+    `  Fill "${settings.packagePrefix}" anchors from sibling + nested OUT (highest version only)`,
+  );
 
   const packages = await findPackageFolders(source, settings);
   if (!packages.length) {
-    appendLog('skip', `  No folders matching "${settings.packagePrefix}" found.`);
+    appendLog('skip',
+      `  No package folders found matching prefix "${settings.packagePrefix}". `
+      + 'Name __hash asset folders are not package anchors.',
+    );
     return;
   }
 
   appendLog('info', `  Found ${packages.length} package folder(s)`);
   const total = packages.length;
-  const vocabMap = buildVocabContext(ctx.vocab);
+  const vocabMap = buildVocabMap(ctx.vocab);
 
   for (let idx = 0; idx < packages.length; idx++) {
     const pkg = packages[idx];
@@ -376,7 +419,8 @@ async function runDistribute(ctx: RunContext, stats: RunStats): Promise<void> {
   }
 
   appendLog('section',
-    `━━━ COLLECT DONE — ${stats.copied} copied · ${stats.skipped} skipped · ${stats.errors} errors ━━━`
+    `━━━ COLLECT DONE — ${stats.packages} package(s) · `
+    + `${stats.copied} copied · ${stats.skipped} unchanged · ${stats.errors} errors ━━━`,
   );
 }
 
@@ -388,11 +432,10 @@ async function flagDisconnected(
   stats:     RunStats,
   appendLog: (t: LogType, m: string) => void,
   addIssue:  (i: { category: 'skipped'|'disconnected'|'version-conflict'|'error'; file: string; reason: string }) => void,
-  opts: { layout: DestExportLayout },
+  opts: { layout: DestExportLayout; settings: AppSettings },
 ): Promise<void> {
-  /* Rename target entries not in livePub.
-     Folders layout manages the whole tree (including leftover package folders
-     from older root-dump runs). Flat only manages root-level entries. */
+  /* Orphans: 🚫-rename outside package folders; hard-delete inside 📦 mirrors
+     (pickup collections must not keep older versions / renamed tags). */
   async function collectAll(dir: string, acc: { path: string; isDir: boolean }[]) {
     const entries = await listDir(dir);
     for (const e of entries) {
@@ -414,6 +457,14 @@ async function flagDisconnected(
       return rel.length > 0 && !rel.includes('/');
     }
     return true;
+  }
+
+  function insidePackageCollection(abs: string): boolean {
+    const absN = abs.replace(/\\/g, '/');
+    const rel = absN.startsWith(targetNorm + '/')
+      ? absN.slice(targetNorm.length + 1)
+      : absN;
+    return rel.split('/').some(seg => isPackageFolder(seg, opts.settings));
   }
 
   const scoped = all.filter(x => inLayoutScope(x.path));
@@ -438,11 +489,25 @@ async function flagDisconnected(
     if (isDir  && (liveNorm.has(existingNorm) || liveFolderAncestors.has(existingNorm))) continue;
 
     const name = existingPath.split('/').pop()!;
+    const rel = existingPath.replace(targetDir, '').replace(/^\//, '');
+    const inPackage = insidePackageCollection(existingPath);
+
+    // Package mirrors: wipe stale entries (and prior 🚫 marks) instead of disconnect-rename.
+    if (inPackage) {
+      try {
+        await remove(existingPath, { recursive: true });
+        appendLog('dim', `  🗑  removed stale from package: ${rel}`);
+        stats.disconnected += 1;
+      } catch {
+        /* already removed with parent */
+      }
+      continue;
+    }
+
     if (name.startsWith('🚫')) continue;
     const flagged = await join(existingPath.substring(0, existingPath.lastIndexOf('/')), `🚫 ${name}`);
     try {
       await rename(existingPath, flagged);
-      const rel = existingPath.replace(targetDir, '').replace(/^\//, '');
       appendLog('disconnected', `  🚫 DISCONNECTED: ${rel}`);
       addIssue({ category: 'disconnected', file: rel, reason: 'No longer in source for this export layout' });
       stats.disconnected += 1;
@@ -468,7 +533,7 @@ function nestedPublishRel(sourceRoot: string, absPath: string): string {
   }
   const parts = rel.split('/').filter(Boolean);
   return parts
-    .map((seg, i) => (i < parts.length - 1 ? stripStableId(seg) : seg))
+    .map(seg => stripStableId(seg))
     .join('/');
 }
 
@@ -491,7 +556,7 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
   appendLog('dim', `  Layout: ${layout}${includePackages ? ' + nested packages' : ''} · always highest version only`);
 
   const livePub = new Set<string>();
-  const vocabMap = buildVocabContext(vocab);
+  const vocabMap = buildVocabMap(vocab);
 
   async function copyOne(srcPath: string, fileDest: string, logName: string) {
     if (livePub.has(fileDest)) { stats.skipped += 1; return; }
@@ -524,7 +589,10 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
   async function publishNestedPackages() {
     const packages = await findPackageFolders(sourceFolder, settings);
     if (!packages.length) {
-      appendLog('warn', `  No folders matching "${settings.packagePrefix}".`);
+      appendLog('warn',
+        `  No package folders found (prefix "${settings.packagePrefix}").`
+        + ` OUT setting="${settings.outFolder}".`,
+      );
       return;
     }
     appendLog('info', `  Nested packages: ${packages.length} folder(s)`);
@@ -543,8 +611,12 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
         appendLog,
         (file, reason) => addIssue({ category: 'error', file, reason }),
       );
-      if (!sync.sources.length) continue;
+      if (!sync.sources.length) {
+        appendLog('warn', `  └─ package had no OUT files (looked for "${settings.outFolder}" / OUT)`);
+        continue;
+      }
 
+      const liveNames = new Set<string>();
       appendLog('info', `  ✓  export ${sync.sources.map(p => p.split('/').pop()).join(', ')}`);
 
       for (const srcPath of sync.sources) {
@@ -552,8 +624,15 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
         const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
         const stem = ext ? rawName.slice(0, -ext.length) : rawName;
         const translated = translateExportName(stem, ext, vocabMap);
+        liveNames.add(translated);
         await copyOne(srcPath, await join(destPkg, translated), `${rel}/${translated}`);
       }
+
+      // Target 📦 = exact live mirror — wipe older versions / renamed tags (no 🚫).
+      const wiped = await purgePackageMirror(
+        destPkg, liveNames, settings, dryRun, appendLog, 'target package',
+      );
+      if (wiped) stats.disconnected += wiped;
     }
   }
 
@@ -640,6 +719,7 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
   if (!dryRun) {
     await flagDisconnected(targetFolder, livePub, stats, appendLog, addIssue, {
       layout,
+      settings,
     });
   }
 
@@ -795,6 +875,8 @@ export interface VersionEntry {
 }
 
 export interface AssetVersions {
+  /** Display shortcode (version-stripped stem) — the map is keyed by identity, not by this. */
+  shortcode: string;
   current: VersionEntry | null;
   history: VersionEntry[];
 }
@@ -804,18 +886,33 @@ export async function scanVersionMap(
   vocab:    VocabularyData,
   settings: AppSettings,
 ): Promise<Map<string, AssetVersions>> {
+  // Keyed `${stableId}:${shortcode}`, not by shortcode alone: display text repeats freely
+  // across packages (and shortcode carries no identity), so a bare-shortcode key silently
+  // merged two unrelated assets' version histories into whichever one was scanned last.
   const vmap     = new Map<string, AssetVersions>();
-  const vocabCtx = buildVocabContext(vocab);
+  const vocabCtx = buildVocabMap(vocab);
+
+  /** stable_id of the package folder (OUT's parent) this file sits under, if any. */
+  function stableIdFor(file: string): string | null {
+    const parts = file.replace(/\\/g, '/').split('/');
+    for (let i = parts.length - 1; i >= 0; i--) {
+      if (isOutFolder(parts[i], settings)) return extractStableId(parts[i - 1] ?? '');
+    }
+    return null;
+  }
 
   function addEntry(file: string, name: string, isHistory: boolean) {
     if (!isPublishableFile(name) || name.includes('-thumb')) return;
+    const stableId = stableIdFor(file);
+    if (!stableId) return; // no folder identity — nothing in the DB to attach history to
     const dot       = name.lastIndexOf('.');
     const stem      = dot > 0 ? name.slice(0, dot) : name;
     const parsed    = parseFilename(stem, vocabCtx);
     const version   = parsed.version ?? '';
     const shortcode = stripVersionSuffix(stem);
+    const key       = `${stableId}:${shortcode}`;
     const entry: VersionEntry = { file, stem, version, shortcode };
-    const av = vmap.get(shortcode) ?? { current: null, history: [] };
+    const av = vmap.get(key) ?? { shortcode, current: null, history: [] };
     if (isHistory) {
       av.history.push(entry);
     } else {
@@ -828,7 +925,7 @@ export async function scanVersionMap(
         av.history.push(entry);
       }
     }
-    vmap.set(shortcode, av);
+    vmap.set(key, av);
   }
 
   async function walkForVH(dir: string) {
@@ -1034,12 +1131,6 @@ async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<void> {
     return;
   }
 
-  appendLog('dim', `  inventory map: ${ctx.cdnUrls?.size ?? 0} entries`);
-  if (ctx.cdnUrls && ctx.cdnUrls.size > 0) {
-    const sample = [...ctx.cdnUrls.keys()].slice(0, 2);
-    appendLog('dim', `  sample stems: ${sample.map(s => `"${s}"`).join(', ')}`);
-  }
-
   let uploaded = 0;
   let skipped  = 0; // no local thumb file, or already known uploaded per DB inventory
   let cached   = 0; // local mtime+size match last upload — skipped without hashing or a network call
@@ -1063,13 +1154,16 @@ async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<void> {
       }
       const fileName = thumbPath.split('/').pop()!;
       const identity = ctx.cdnIdentity?.get(stem);
-      // Stable-identity key when resolved (rename-proof) — else today's filename-based key.
-      const objectKey = storageKey(
-        r2.keyPrefix,
-        identity
-          ? `thumbnails/${identity.stableId}/${identity.childId}.webp`
-          : `thumbnails/${fileName}`,
-      );
+      if (!identity) {
+        // No folder identity means no rename-proof key to store this under. Uploading it
+        // under its filename would strand the object the moment the file is renamed, so
+        // the asset is reported instead.
+        appendLog('error', `  ✕  ${fileName} — no folder identity (missing " __<hash>" package folder). Skipped.`);
+        errors += 1;
+        stats.errors += 1;
+        return;
+      }
+      const objectKey = storageKey(r2.keyPrefix, `thumbnails/${identity.stableId}/${identity.childId}.webp`);
 
       // Cheap local check (mtime+size, no file read/hash/network) before the real thing.
       // A manifest that says the key is gone from R2 overrides the cache — re-upload.
@@ -1135,15 +1229,12 @@ async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<void> {
 }
 
 /* ── Original-file CDN upload — content-hash deduped, version/rename-stable key ──
-   Keyed by stable identity (stableId/childId) when resolved — rename-proof, since
-   that identity survives file/folder renames (see resolveCdnIdentity). Falls back to
-   shortcode (version stripped) for legacy/unmigrated assets — not rename-proof, but
-   still version-stable, so a new version's upload overwrites the last one's key rather
-   than accumulating. Either way, upload_to_r2 only actually re-uploads when the file's
+   Keyed by stable identity (stableId/childId), which survives file and folder renames
+   (see resolveCdnIdentity), so a new version's upload overwrites the last one's key
+   rather than accumulating. upload_to_r2 only actually re-uploads when the file's
    content hash differs from what's already stored — unchanged re-runs are skipped. A
-   small per-asset cleanup below handles the rare case where a version bump (or, for
-   stable identity, an actual content-hash mismatch under the same key) changes the
-   file extension. */
+   small per-asset cleanup below handles the rare case where a content-hash mismatch
+   under the same key changes the file extension. */
 async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promise<void> {
   const { r2, appendLog, collectedAssets } = ctx;
   if (!r2?.endpoint || !r2.accessKeyId || !r2.secretKey || !r2.bucket || !r2.publicDomain) {
@@ -1160,8 +1251,7 @@ async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promise<void
     const dotIdx    = fileName.lastIndexOf('.');
     const ext       = dotIdx > 0 ? fileName.slice(dotIdx) : '';
     const stem      = dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName;
-    const shortcode = stem.replace(/\s+[vV]\d+(?:[-._]\d+)*\s*$/, '').trim();
-    return { srcPath, stem, ext, shortcode };
+    return { srcPath, stem, ext };
   });
 
   if (!files.length) {
@@ -1178,14 +1268,18 @@ async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promise<void
   let r2CacheDirty = false;
   const remoteKeys = await fetchR2KeyManifest(r2, storageKey(r2.keyPrefix, 'originals/'), appendLog);
 
-  // Identity by full filename first — extension-only variants (foo.pdf + foo.webp)
-  // share a stem but carry distinct child ids in the manifest. Falling back to the
-  // stem covers files scanned before per-file resolution existed.
-  const withKeys = files.map(f => {
-    const identity  = ctx.cdnIdentity?.get(`${f.stem}${f.ext}`) ?? ctx.cdnIdentity?.get(f.stem);
-    const rel = identity ? `originals/${identity.stableId}/${identity.childId}` : `originals/${f.shortcode}`;
-    const keyPrefix = storageKey(r2.keyPrefix, rel);
-    return { ...f, keyPrefix, objectKey: `${keyPrefix}${f.ext}` };
+  // Identity by full filename first — extension-only variants (foo.pdf + foo.webp) share a
+  // stem but carry distinct child ids in the manifest.
+  const withKeys = files.flatMap(f => {
+    const identity = ctx.cdnIdentity?.get(`${f.stem}${f.ext}`) ?? ctx.cdnIdentity?.get(f.stem);
+    if (!identity) {
+      appendLog('error', `  ✕  ${f.stem}${f.ext} — no folder identity (missing " __<hash>" package folder). Skipped.`);
+      errors += 1;
+      stats.errors += 1;
+      return [];
+    }
+    const keyPrefix = storageKey(r2.keyPrefix, `originals/${identity.stableId}/${identity.childId}`);
+    return [{ ...f, keyPrefix, objectKey: `${keyPrefix}${f.ext}` }];
   });
   // Keys claimed by any file this run — the stale-sibling cleanup must never delete
   // these, or two files sharing a key prefix would destroy each other's upload.
@@ -1290,30 +1384,30 @@ async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promise<void
 
 /* ── CDN cleanup — remove stale thumbnails from R2 ─────────────────────── */
 
-/** Full R2 reconcile — lists all objects and deletes stale ones. Use manually when DB is out of sync.
- * Not currently wired to any UI action. If `ctx.cdnIdentity` isn't already populated (e.g. by a
- * prior `resolveCdnIdentity` call on this same ctx), expected keys fall back to filename-based —
- * call `resolveCdnIdentity` first for accurate results on stable-identity clients. */
+/** Full R2 reconcile — lists all objects and deletes stale ones. Use manually when DB is out of
+ * sync. Not currently wired to any UI action. Requires `ctx.cdnIdentity` to be populated by a
+ * prior `resolveCdnIdentity` call on the same ctx — without it nothing is considered expected,
+ * and every object would look stale. */
 export async function reconcileCdn(ctx: RunContext, stats: RunStats): Promise<void> {
   const { r2, appendLog, collectedAssets } = ctx;
   if (!r2) return;
 
   appendLog('section', '━━━ CDN CLEANUP ━━━');
 
-  // Keys that should exist — one per collected asset. Mirrors runCdnUpload's key logic
-  // exactly (stable-identity when resolved, filename-based fallback otherwise) so this
-  // never mistakes a current object under the new scheme for a stale one.
+  // Keys that should exist — one per collected asset, mirroring runCdnUpload's key logic
+  // exactly so this never mistakes a current object for a stale one.
+  if (!ctx.cdnIdentity?.size) {
+    appendLog('error', '  ✕  No CDN identity resolved — refusing to reconcile (every object would look stale).');
+    return;
+  }
   const expectedKeys = new Set(
-    (collectedAssets ?? []).map(srcPath => {
+    (collectedAssets ?? []).flatMap(srcPath => {
       const fileName = srcPath.split('/').pop()!;
       const stem     = fileName.substring(0, fileName.lastIndexOf('.'));
       const identity = ctx.cdnIdentity?.get(stem);
-      return storageKey(
-        r2.keyPrefix,
-        identity
-          ? `thumbnails/${identity.stableId}/${identity.childId}.webp`
-          : `thumbnails/${stem}-thumb.webp`,
-      );
+      return identity
+        ? [storageKey(r2.keyPrefix, `thumbnails/${identity.stableId}/${identity.childId}.webp`)]
+        : [];
     }),
   );
 
@@ -1425,7 +1519,9 @@ function relativeUnderOut(srcPath: string, outFolderName: string): { dir: string
   const parts = srcPath.replace(/\\/g, '/').split('/');
   let outIdx = -1;
   for (let i = parts.length - 1; i >= 0; i--) {
-    if (parts[i].toLowerCase() === outFolderName.toLowerCase()) { outIdx = i; break; }
+    const want = stripWorkflowPrefix(outFolderName || 'OUT').toLowerCase();
+    const got  = stripWorkflowPrefix(parts[i]).toLowerCase();
+    if (got === want || got === 'out') { outIdx = i; break; }
   }
   const fileName = parts[parts.length - 1] ?? '';
   if (outIdx < 0) return { dir: '', fileName };
@@ -1456,7 +1552,7 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
   }
 
   const outFolder = settings.outFolder || 'OUT';
-  const vocabMap = buildVocabContext(vocab);
+  const vocabMap = buildVocabMap(vocab);
   const cloudCache = await loadCloudCache();
   let cloudCacheDirty = false;
 
@@ -1640,7 +1736,7 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
             const bytes = await readFile(srcPath);
             const base   = cfg.remotePath.replace(/^\//, '').replace(/\/$/, '');
             const remote = base ? `${base}/${nestedName}` : nestedName;
-            url = await uploadOneDriveFile(cfg.token!.accessToken, bytes, remote, dest.generateLink);
+            url = await uploadOneDriveFile(cfg.token!.accessToken, bytes, remote, dest.generateLink, cfg.driveId);
             if (uploadLogged < 3) {
               appendLog('success', `  ✓  ${nestedName}`);
               uploadLogged += 1;
@@ -1731,15 +1827,15 @@ export async function runPipeline(ctx: RunContext): Promise<RunStats> {
       ctx.collectedAssets?.push(...scanned);
     }
 
-    // Resolve rename-proof CDN identity before any CDN step runs, so those steps can key
-    // by it instead of the current filename. Gated the same as the CDN steps themselves
-    // (r2 configured, and thumbnails/originals actually enabled) so this cost is only ever
-    // paid when its result will actually be used.
-    if (ctx.identityMigrated && ctx.r2 && (settings.doThumbnails || settings.doCdnOriginals)) {
+    // Resolve folder identity before any CDN step runs — those steps key objects by
+    // stable_id/child_id, not by the current filename, so a rename or a retitle never
+    // orphans an uploaded object. Gated the same as the CDN steps themselves, so the
+    // cost is only paid when its result is actually used.
+    if (ctx.r2 && (settings.doThumbnails || settings.doCdnOriginals)) {
       try {
         ctx.cdnIdentity = await resolveCdnIdentity(ctx.collectedAssets ?? [], settings.outFolder || 'OUT');
       } catch (e) {
-        appendLog('error', `  ✕  CDN identity resolution failed, falling back to filename-based keys: ${e}`);
+        appendLog('error', `  ✕  CDN identity resolution failed — CDN steps will skip assets they can't key: ${e}`);
       }
     }
 

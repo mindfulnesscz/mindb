@@ -3,15 +3,13 @@
 -- pipeline instead; this file exists so a local portal has something to show.
 --
 -- Seeded sign-ins (LOCAL ONLY — never reuse this pattern on a hosted tier):
---   admin@acme.test  / password: dchub-local   (role: admin — full portal + admin area)
+--   admin@acme.test  / password: dchub-local   (role: super_admin — full access: environments, client creation, admin management)
 --   Additional users: create in Studio (http://localhost:54323 → Authentication);
 --   any @acme.test address auto-joins Acme Studio as role 'member'.
 
--- identity_migrated: the local dev client runs the stable-identity path
--- (matching production ESS) — the legacy path is not exercised locally.
 -- Storage: local publishing rehearses against the staging bucket.
-insert into public.clients (id, name, slug, accent, initials, domain_whitelist, identity_migrated) values
-  ('00000000-0000-0000-0000-000000000001', 'Acme Studio', 'acme', '#1d4ed8', 'AS', '{acme.test}', true);
+insert into public.clients (id, name, slug, accent, initials, domain_whitelist) values
+  ('00000000-0000-0000-0000-000000000001', 'Acme Studio', 'acme', '#1d4ed8', 'AS', '{acme.test}');
 
 insert into public.tags (client_id, name, dimension, sort_order) values
   ('00000000-0000-0000-0000-000000000001', 'Product',   'entity', 1),
@@ -50,11 +48,11 @@ insert into public.version_history (asset_id, version, status, date) values
 insert into public.asset_events (asset_id, event_type, role) values
   ('00000000-0000-0000-0000-00000000a001', 'view', 'public'),
   ('00000000-0000-0000-0000-00000000a001', 'view', 'public'),
-  ('00000000-0000-0000-0000-00000000a001', 'download', 'client');
+  ('00000000-0000-0000-0000-00000000a001', 'download', 'member');
 
 -- ── Seeded local admin: admin@acme.test / dchub-local ────────────────────
 -- Direct auth.users insert works on the local stack only, which is the point.
--- The handle_new_user trigger creates the profile (as 'client', via the
+-- The handle_new_user trigger creates the profile (as 'member', via the
 -- domain whitelist); the update below promotes it to admin.
 insert into auth.users (
   instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
@@ -82,7 +80,10 @@ insert into auth.identities (
   'email', now(), now(), now()
 );
 
-update public.profiles set role = 'admin', name = 'Local Admin', initials = 'LA'
+-- Seeded as super_admin so a fresh local reset can exercise every capability:
+-- environment management, client creation, and granting admins the create-client
+-- right. (On hosted tiers, super_admin is assigned deliberately — never seeded.)
+update public.profiles set role = 'super_admin', name = 'Local Super Admin', initials = 'LS'
   where id = '00000000-0000-0000-0000-0000000000ad';
 
 insert into public.client_members (user_id, client_id) values

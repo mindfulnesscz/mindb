@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import type { Asset } from '@dc-hub/asset-library'
-import { canApprove, canDownload, canRate, canComment, MOCK_COMMENTS } from '@dc-hub/asset-library'
+import { canApprove, canDownload, canRate, canComment, canReadComments, canSeeStats, MOCK_COMMENTS } from '@dc-hub/asset-library'
 import { useRole } from '../../context/RoleContext'
 import { useAuth } from '../../context/AuthContext'
 import { webAssetActions } from '../../lib/assetActions'
@@ -15,6 +15,7 @@ import {
   type PortalDestination,
 } from '../../services/destinationService'
 import { revealInDesktop } from '../../services/revealService'
+import { reportError } from '../../lib/reportError'
 import { ImageLightbox } from './ImageLightbox'
 import { isConfigured } from '../../lib/supabase'
 
@@ -133,7 +134,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
   const [childView, setChildView] = useState<'grid' | 'carousel'>('grid')
   const [carouselIdx, setCarouselIdx] = useState(0)
   // Folder-based stable identity variants (Task 3) — format/size siblings of this asset,
-  // distinct from legacy gallery `children` above (those are preview images, not download choices).
+  // distinct from gallery `children` above (those are preview images, not download choices).
   const [variants, setVariants] = useState<Asset[]>([])
   const [selectedVariantId, setSelectedVariantId] = useState<string>(asset.id)
   // Whichever variant actually matched the active gallery filter (e.g. a tag that only lives
@@ -163,7 +164,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
 
   const accent = activeClient?.accent ?? '#161616'
-  const isStaff = role === 'admin' || role === 'editor'
+  const isStaff = role === 'admin' || role === 'editor' || role === 'super_admin'
 
   // Portal destination defs — role-gate cloud share links + Reveal
   useEffect(() => {
@@ -183,7 +184,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
       const dest = visibleDests.find(d =>
         (link.destId && d.id === link.destId) || d.name === link.name,
       )
-      // Unknown dest (legacy link without matching def): show to staff only
+      // Unknown dest (a stored link with no matching definition): show to staff only
       if (!dest) return isStaff
       return true
     })
@@ -206,7 +207,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
     if (isStaff) fetchEventCounts(asset.id).then(setEventCounts).catch(console.error)
   }, [asset.id])
 
-  // Load children (legacy gallery preview images) and variants (Task 3 format/size siblings)
+  // Load children (gallery preview images) and variants (format/size siblings)
   useEffect(() => {
     if ((asset.childCount ?? 0) > 0) {
       Promise.all([
@@ -264,7 +265,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
 
   // Load comments on mount / asset change
   useEffect(() => {
-    if (!canComment(role)) return
+    if (!canReadComments(role)) return
     if (isConfigured()) {
       fetchComments(asset.id).then(setComments).catch(console.error)
     } else {
@@ -332,7 +333,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
       await updateAssetPerm(asset.id, newPerm)
       setCurrentPerm(newPerm)
     } catch (err) {
-      console.error('Failed to update perm:', err)
+      reportError('AssetDetail.updatePerm', err)
     } finally {
       setPermBusy(false)
     }
@@ -346,7 +347,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
       setRatingSaved(true)
       setTimeout(() => setRatingSaved(false), 2000)
     } catch (err) {
-      console.error('Failed to save rating:', err)
+      reportError('AssetDetail.saveRating', err)
     }
   }
 
@@ -362,7 +363,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
       if (thanksTimerRef.current) clearTimeout(thanksTimerRef.current)
       thanksTimerRef.current = setTimeout(() => setCommentThanks(false), 3000)
     } catch (err) {
-      console.error('Failed to add comment:', err)
+      reportError('AssetDetail.addComment', err)
     } finally {
       setCommentBusy(false)
     }
@@ -373,7 +374,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
       await deleteComment(id)
       setComments(prev => prev.filter(c => c.id !== id))
     } catch (err) {
-      console.error('Failed to delete comment:', err)
+      reportError('AssetDetail.deleteComment', err)
     }
   }
 
@@ -604,18 +605,22 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
           </div>
         )}
 
-        {/* Rating — staff only */}
-        {canRate(role) && (
+        {/* Rating — stats visible to all; the star input needs a user session */}
+        {canSeeStats(role) && (
           <div className="border border-border rounded-sm p-4 flex items-center justify-between">
             <div>
               <p className="text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-2">
-                Your rating
+                {userId && canRate(role) ? 'Your rating' : 'Rating'}
               </p>
-              <StarRating value={myRating} onChange={handleRatingChange} />
-              {ratingSaved && (
-                <p className="text-[10px] font-sans text-text-muted mt-1 transition-opacity">
-                  Saved
-                </p>
+              {userId && canRate(role) && (
+                <>
+                  <StarRating value={myRating} onChange={handleRatingChange} />
+                  {ratingSaved && (
+                    <p className="text-[10px] font-sans text-text-muted mt-1 transition-opacity">
+                      Saved
+                    </p>
+                  )}
+                </>
               )}
             </div>
             <div className="text-right">
@@ -672,6 +677,18 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
             {deleteError && (
               <p className="text-xs font-sans text-red-600">{deleteError}</p>
             )}
+          </div>
+        )}
+
+        {/* Status — read-only for members */}
+        {!isStaff && canReadComments(role) && (
+          <div className="space-y-2">
+            <p className="text-[10px] font-sans font-bold uppercase tracking-label text-text-muted">
+              Status
+            </p>
+            <span className="inline-block text-[11px] font-sans font-semibold uppercase tracking-label px-2.5 py-1 border border-border rounded-chip text-cosmos-black">
+              {STATUS_OPTIONS.find(o => o.value === currentStatus)?.label ?? currentStatus}
+            </span>
           </div>
         )}
 
@@ -820,8 +837,8 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
           </div>
         )}
 
-        {/* Comments — only for non-public roles */}
-        {canComment(role) && (
+        {/* Comments — members can read; only staff can post */}
+        {canReadComments(role) && (
           <div>
             <p className="text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-3">
               Comments · {comments.length}
@@ -856,32 +873,34 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
               ))}
             </div>
 
-            {/* Comment composer */}
-            <div className="mt-4 space-y-2">
-              {commentThanks && (
-                <p className="text-[11px] font-sans text-text-muted transition-opacity">
-                  Thank you for your comment!
-                </p>
-              )}
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={commentInput}
-                  onChange={e => setCommentInput(e.target.value)}
-                  onKeyDown={handleCommentKeyDown}
-                  placeholder="Add a comment…"
-                  disabled={commentBusy || !userId}
-                  className="flex-1 text-sm font-sans border border-border rounded-sm px-3 py-2 placeholder:text-text-subtle focus:outline-none focus:border-cosmos-black transition-colors disabled:opacity-50"
-                />
-                <button
-                  onClick={handleSubmitComment}
-                  disabled={commentBusy || !commentInput.trim() || !userId}
-                  className="px-4 py-2 text-sm font-sans font-semibold bg-cosmos-black text-clear-white rounded-sm hover:bg-ink-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {commentBusy ? '…' : 'Send'}
-                </button>
+            {/* Comment composer — staff only */}
+            {canComment(role) && (
+              <div className="mt-4 space-y-2">
+                {commentThanks && (
+                  <p className="text-[11px] font-sans text-text-muted transition-opacity">
+                    Thank you for your comment!
+                  </p>
+                )}
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={commentInput}
+                    onChange={e => setCommentInput(e.target.value)}
+                    onKeyDown={handleCommentKeyDown}
+                    placeholder="Add a comment…"
+                    disabled={commentBusy || !userId}
+                    className="flex-1 text-sm font-sans border border-border rounded-sm px-3 py-2 placeholder:text-text-subtle focus:outline-none focus:border-cosmos-black transition-colors disabled:opacity-50"
+                  />
+                  <button
+                    onClick={handleSubmitComment}
+                    disabled={commentBusy || !commentInput.trim() || !userId}
+                    className="px-4 py-2 text-sm font-sans font-semibold bg-cosmos-black text-clear-white rounded-sm hover:bg-ink-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {commentBusy ? '…' : 'Send'}
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )}
       </div>

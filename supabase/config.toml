@@ -158,9 +158,11 @@ enabled = true
 # in emails.
 site_url = "http://localhost:5173"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
-# external_url = ""
+# Pinned to localhost (not the default 127.0.0.1) so OAuth callbacks match Entra/Azure,
+# which rejects raw IPs. This is what GoTrue uses to build the provider redirect_uri.
+external_url = "http://localhost:54321/auth/v1"
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
-additional_redirect_urls = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:7623/auth-callback"]
+additional_redirect_urls = ["http://localhost:5173", "http://localhost:5173/**", "http://127.0.0.1:5173", "http://127.0.0.1:5173/**", "http://localhost:7623/auth-callback"]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
 # JWT issuer URL. If not set, defaults to auth.external_url.
@@ -333,6 +335,28 @@ url = ""
 skip_nonce_check = false
 # If enabled, it will allow the user to successfully authenticate when the provider does not return an email address.
 email_optional = false
+
+# Microsoft / Entra ID. Multi-tenant so any client organisation's Microsoft
+# account can sign in; the domain whitelist maps them to their client.
+# Secrets come from supabase/functions/.env (gitignored) or shell env.
+[auth.external.azure]
+enabled = true
+client_id = "env(SUPABASE_AUTH_EXTERNAL_AZURE_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_EXTERNAL_AZURE_SECRET)"
+# Multi-tenant: any Microsoft Entra org (use /organizations to exclude personal accounts).
+url = "https://login.microsoftonline.com/common"
+
+[auth.external.google]
+enabled = true
+client_id = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET)"
+# Required for local sign-in with Google.
+skip_nonce_check = true
+
+[auth.external.github]
+enabled = true
+client_id = "env(SUPABASE_AUTH_EXTERNAL_GITHUB_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_EXTERNAL_GITHUB_SECRET)"
 
 # Allow Solana wallet holders to sign in to your project via the Sign in with Solana (SIWS, EIP-4361) standard.
 # You can configure "web3" rate limit in the [auth.rate_limit] section and set up [auth.captcha] if self-hosting.

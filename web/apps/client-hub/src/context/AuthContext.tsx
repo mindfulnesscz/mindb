@@ -1,9 +1,19 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
+import {
+  checkEmailAuth,
+  sendMagicLink as sendMagicLinkCore,
+  signInWithProvider as signInWithProviderCore,
+  signOut as signOutCore,
+  type EmailAuthType,
+  type OAuthProvider,
+} from '@dc-hub/auth'
 import { supabase, isConfigured } from '../lib/supabase'
 import type { ProfileRow } from '../lib/database.types'
 
-export type EmailAuthType = 'staff' | 'whitelisted' | 'returning' | 'unknown'
+// Auth logic + types now live in the shared @dc-hub/auth package. Re-export the
+// types so existing importers (e.g. SignInModal) keep resolving them from here.
+export type { EmailAuthType, OAuthProvider }
 
 interface AuthContextValue {
   session: Session | null
@@ -11,8 +21,12 @@ interface AuthContextValue {
   loading: boolean
   checkEmail: (email: string) => Promise<EmailAuthType>
   sendMagicLink: (email: string, userData?: Record<string, string>, redirectTo?: string, clientId?: string) => Promise<string | null>
+  signInWithProvider: (provider: OAuthProvider, redirectTo?: string) => Promise<string | null>
+  completeProfile: (fields: { name: string; company: string; country: string; industry: string }) => Promise<string | null>
   signOut: () => Promise<void>
 }
+
+export interface ProfileFields { name: string; company: string; country: string; industry: string }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
@@ -42,16 +56,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function fetchProfile(userId: string) {
     if (!supabase) return
-    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
+    // maybeSingle: no profile row is a normal state (stale session, invite not completed).
+    // .single() answers that with an opaque 406 instead of null.
+    const { data } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle()
     setProfile(data as ProfileRow | null)
     setLoading(false)
   }
 
   async function checkEmail(email: string): Promise<EmailAuthType> {
     if (!supabase) return 'unknown'
-    const { data, error } = await (supabase as any).rpc('check_email_auth', { p_email: email })
-    if (error) return 'unknown'
-    return (data as EmailAuthType) ?? 'unknown'
+    // Soft-fail to 'unknown' — the modal just falls back to the profile form.
+    try {
+      return await checkEmailAuth(supabase, email)
+    } catch {
+      return 'unknown'
+    }
   }
 
   async function sendMagicLink(
@@ -61,22 +80,67 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clientId?: string,
   ): Promise<string | null> {
     if (!supabase) return 'Supabase not configured'
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
+    try {
+      await sendMagicLinkCore(supabase, email, {
         emailRedirectTo: redirectTo ?? window.location.origin,
         data: { ...userData, ...(clientId ? { client_id: clientId } : {}) },
-      },
-    })
-    return error?.message ?? null
+      })
+      return null
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  /**
+   * OAuth sign-in — no email, so corporate link-scanners (Microsoft Safe Links)
+   * can't break it. The provider returns the user's verified email, so the
+   * existing domain-whitelist auto-join in handle_new_user maps them to a
+   * client. (OAuth can't carry a client_id into user metadata; a first-time
+   * user on a non-whitelisted domain gets role 'public' and is assigned by an
+   * admin — same as an unknown magic-link user.)
+   */
+  async function signInWithProvider(
+    provider: OAuthProvider,
+    redirectTo?: string,
+  ): Promise<string | null> {
+    if (!supabase) return 'Supabase not configured'
+    try {
+      await signInWithProviderCore(supabase, provider, redirectTo ?? window.location.href)
+      return null
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  /**
+   * Fill in an authenticated guest's profile (name/company/country/industry).
+   * Used by the portal to collect details from OAuth users who signed in without
+   * the magic-link profile form. Keeps their role as-is (guest stays `public`);
+   * an admin promotes them if they need client access.
+   */
+  async function completeProfile(fields: ProfileFields): Promise<string | null> {
+    if (!supabase || !session) return 'Not signed in'
+    const { error } = await supabase
+      .from('profiles')
+      .update({
+        name:     fields.name,
+        company:  fields.company,
+        country:  fields.country,
+        industry: fields.industry,
+        initials: fields.name.replace(/[^A-Za-z ]/g, '').trim().slice(0, 2).toUpperCase(),
+      })
+      .eq('id', session.user.id)
+    if (error) return error.message
+    await fetchProfile(session.user.id)
+    return null
   }
 
   async function signOut() {
-    await supabase?.auth.signOut()
+    if (supabase) await signOutCore(supabase)
   }
 
   return (
-    <AuthContext.Provider value={{ session, profile, loading, checkEmail, sendMagicLink, signOut }}>
+    <AuthContext.Provider value={{ session, profile, loading, checkEmail, sendMagicLink, signInWithProvider, completeProfile, signOut }}>
       {children}
     </AuthContext.Provider>
   )

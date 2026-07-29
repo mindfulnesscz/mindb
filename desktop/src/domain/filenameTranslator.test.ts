@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseFilename, buildVocabContext } from './filenameTranslator';
+import { parseFilename, buildVocabMap } from './filenameTranslator';
 import { buildFilenameCode } from './vocabulary';
 import type { VocabularyData } from './vocabulary';
 
@@ -13,7 +13,7 @@ const vocab: VocabularyData = {
   ],
 };
 
-const ctx = buildVocabContext(vocab);
+const ctx = buildVocabMap(vocab);
 
 describe('parseFilename', () => {
   it('parses canonical tag prefix and version', () => {

@@ -11,9 +11,10 @@ import type { AppSettings } from '../store/settingsStore';
 import type { RunStats } from '../store/pipelineStore';
 import type { LogType } from '../store/pipelineStore';
 import type { RunContext, CloudUrlEntry } from './pipelineService';
+import { isOutFolder as namingIsOutFolder, isPackageFolder as namingIsPackageFolder } from '../domain/naming';
 import {
-  buildVocabContext, parseFilename, buildNoteName, translateExportName,
-  type ParsedFilename, type VocabContext,
+  buildVocabMap, parseFilename, buildNoteName, translateExportName,
+  type ParsedFilename, type VocabMap,
 } from '../domain/filenameTranslator';
 
 /* ── Canvas constants ───────────────────────────────────────────────────── */
@@ -97,11 +98,23 @@ function shouldSkip(name: string, s: AppSettings): boolean {
 }
 
 function isOutFolder(name: string, s: AppSettings): boolean {
-  return s.outFolder ? name.toLowerCase() === s.outFolder.toLowerCase() : false;
+  return namingIsOutFolder(name, {
+    packagePrefix: s.packagePrefix,
+    outFolder:     s.outFolder,
+    excludeMark:   s.excludeMark,
+    includeMark:   s.includeMark,
+    filterMode:    s.filterMode,
+  });
 }
 
 function isPackageFolder(name: string, s: AppSettings): boolean {
-  return s.packagePrefix ? name.startsWith(s.packagePrefix) : false;
+  return namingIsPackageFolder(name, {
+    packagePrefix: s.packagePrefix,
+    outFolder:     s.outFolder,
+    excludeMark:   s.excludeMark,
+    includeMark:   s.includeMark,
+    filterMode:    s.filterMode,
+  });
 }
 
 function safeName(name: string): string {
@@ -121,11 +134,23 @@ async function isUnchanged(a: string, b: string): Promise<boolean> {
 
 /* ── Scope / anchor finding ─────────────────────────────────────────────── */
 
+/* A vault nested inside the source folder (e.g. source "CLIENT", vault
+   "CLIENT/10 Vault") makes this step feed on its own output: notes are `.md`
+   files, `isPublishable` accepts them, so the next run treats every note folder
+   as an orphan OUT dir and writes notes about notes — one level deeper per run.
+   Never scan the vault, whether or not it sits under the source. */
+function isInsideVault(dir: string, s: AppSettings): boolean {
+  const vault = (s.vaultFolder ?? '').replace(/\/+$/, '');
+  if (!vault) return false;
+  const path = dir.replace(/\/+$/, '');
+  return path === vault || path.startsWith(vault + '/');
+}
+
 async function findPackageAnchors(root: string, s: AppSettings): Promise<string[]> {
   const anchors: string[] = [];
   async function walk(dir: string) {
     const name = dir.split('/').pop() ?? '';
-    if (shouldSkip(name, s)) return;
+    if (shouldSkip(name, s) || isInsideVault(dir, s)) return;
     const entries = await listDir(dir);
     if (entries.some(e => e.isDirectory && isPackageFolder(e.name, s))) {
       anchors.push(dir);
@@ -321,13 +346,6 @@ function patchMeta(
     }
   }
 
-  // Remove legacy <!-- dam:links_start -->...<!-- dam:links_end --> section
-  const legacyLinksRe = /\n*<!-- dam:links_start -->[\s\S]*?<!-- dam:links_end -->\n*/;
-  if (legacyLinksRe.test(content)) {
-    content = content.replace(legacyLinksRe, '\n\n');
-    changed = true;
-  }
-
   return { content, changed };
 }
 
@@ -335,7 +353,7 @@ function patchMeta(
 
 const IMAGE_EXTS = new Set(['.jpg','.jpeg','.png','.webp','.gif','.tif','.tiff','.bmp']);
 
-async function isGalleryFolder(path: string, vocab: VocabContext): Promise<boolean> {
+async function isGalleryFolder(path: string, vocab: VocabMap): Promise<boolean> {
   try {
     const parsed = parseFilename(path.split('/').pop()!, vocab);
     if (parsed.error) return false;
@@ -369,7 +387,7 @@ async function collectOutDirInfos(
 
   async function walk(dir: string) {
     const name = dir.split('/').pop() ?? '';
-    if (shouldSkip(name, s) || isPackageFolder(name, s)) return;
+    if (shouldSkip(name, s) || isPackageFolder(name, s) || isInsideVault(dir, s)) return;
     const entries = await listDir(dir);
     const outEntry = entries.find(e => e.isDirectory && isOutFolder(e.name, s));
     if (outEntry) {
@@ -662,7 +680,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
   appendLog('section', '━━━ DAM / OBSIDIAN ━━━');
   appendLog('dim', `  → ${settings.vaultFolder}`);
 
-  const vocabMap = buildVocabContext(vocab);
+  const vocabMap = buildVocabMap(vocab);
   const damFolder = await join(settings.vaultFolder, '05 DAM');
   const damRoot   = await join(damFolder, '01 EXPORTS');
   const canvasDir = damFolder; // flat _X canvases at DAM root for easy access

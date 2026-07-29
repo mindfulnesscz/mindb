@@ -11,11 +11,12 @@ export interface UserProfile {
   email: string
   createdAt: string
   memberClientIds?: string[]
+  canCreateClients: boolean
 }
 
-/** Normalize legacy DB role before it reaches permission helpers. */
-export function normalizeRole(role: string): Role {
-  if (role === 'client') return 'member'
+/** Widening cast at the DB boundary — `profiles.role` is a text column with a check
+ * constraint, so every stored value is already a valid Role. */
+export function asRole(role: string): Role {
   return role as Role
 }
 
@@ -36,12 +37,13 @@ export async function fetchAllUsers(): Promise<UserProfile[]> {
       id:         r.id,
       name:       r.name,
       initials:   r.initials,
-      role:       normalizeRole(r.role),
+      role:       asRole(r.role),
       clientId:   r.client_id,
       clientName: r.client_name,
       email:      r.email,
       createdAt:  r.created_at,
       memberClientIds,
+      canCreateClients: r.can_create_clients ?? false,
     }
   }))
   return users
@@ -52,6 +54,7 @@ export interface UpdateUserAccessInput {
   role: string
   clientId?: string | null
   memberClientIds?: string[]
+  canCreateClients?: boolean
 }
 
 export async function updateUserAccess(input: UpdateUserAccessInput): Promise<void> {
@@ -62,6 +65,7 @@ export async function updateUserAccess(input: UpdateUserAccessInput): Promise<vo
     p_role:              input.role,
     p_client_id:         input.clientId ?? undefined,
     p_member_client_ids: input.memberClientIds?.length ? input.memberClientIds : undefined,
+    p_can_create_clients: input.canCreateClients ?? undefined,
   })
   if (error) throw new Error(error.message)
 }

@@ -23,7 +23,8 @@ export function ClientPickerModal({ onClose }: Props) {
   const { environments, activeEnvId, setActiveEnvId } = useEnvironmentStore();
   const [busy, setBusy] = useState(false);
 
-  const isAdmin = profile?.role === 'admin';
+  const isAdmin = profile?.role === 'admin' || profile?.role === 'super_admin';
+  const isSuperAdmin = profile?.role === 'super_admin';
   const env = environments.find(e => e.id === activeEnvId) ?? null;
   const portalBase = portalUrlForEnvironment(env);
 
@@ -58,7 +59,7 @@ export function ClientPickerModal({ onClose }: Props) {
     if (!env || !profile) return;
     setBusy(true);
     try {
-      const { clients, activeClientId } = await loadClientsForEnvironment(env, profile.role, environments);
+      const { clients, activeClientId } = await loadClientsForEnvironment(env, profile.role);
       store.setClients(clients);
       store.setActiveClientId(activeClientId);
     } catch (e) {
@@ -103,7 +104,7 @@ export function ClientPickerModal({ onClose }: Props) {
           <button className={css.iconBtn} onClick={onClose}><X size={16} /></button>
         </div>
 
-        {environments.length > 1 && (
+        {isSuperAdmin && environments.length > 1 && (
           <div className={css.envRow}>
             <span className={css.envLabel}>Environment</span>
             <select

@@ -7,6 +7,7 @@ import { useClients } from '../../hooks/useClients'
 import { canSwitchClient } from '@dc-hub/asset-library'
 import type { Client } from '@dc-hub/asset-library'
 import SignInModal from '../auth/SignInModal'
+import CompleteProfile from '../auth/CompleteProfile'
 import GalleryView from '../gallery/GalleryView'
 
 interface PortalClient {
@@ -205,7 +206,7 @@ function PortalHeader({ client }: { client: PortalClient }) {
 
 export default function ClientPortalPage() {
   const { slug } = useParams<{ slug: string }>()
-  const { session } = useAuth()
+  const { session, profile } = useAuth()
   const { role, setActiveClient } = useRole()
 
   const [client,    setClient]   = useState<PortalClient | null>(null)
@@ -314,7 +315,12 @@ export default function ClientPortalPage() {
   }
 
   // ── Logged in: full admin nav for staff, simple header for clients ──
-  const isStaff = role === 'admin' || role === 'editor'
+  const isStaff = role === 'admin' || role === 'editor' || role === 'super_admin'
+
+  // Guest who signed in via OAuth without the profile form → collect details
+  // before browsing. Whitelisted/role-holding users (member+) skip this.
+  const needsProfile = !isStaff && profile?.role === 'public' && !profile?.company
+  if (needsProfile) return <CompleteProfile clientName={client.name} />
 
   return (
     <div className="flex flex-col h-screen">

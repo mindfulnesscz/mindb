@@ -1,5 +1,4 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import type { Database } from '@dc-hub/database'
+import { createAuthClient, type DcHubClient } from '@dc-hub/auth'
 
 const LS_URL = 'dc_hub_supabase_url'
 const LS_KEY = 'dc_hub_supabase_anon_key'
@@ -35,10 +34,13 @@ export function clearConfig(): void {
   localStorage.removeItem(LS_KEY)
 }
 
-function makeClient(): SupabaseClient<Database> | null {
+function makeClient(): DcHubClient | null {
   const { url, anonKey } = getConfig()
   if (!url || !anonKey) return null
-  return createClient<Database>(url, anonKey)
+  // Browser flow: detectSessionInUrl exchanges the post-redirect `?code=` on
+  // load. Shared PKCE defaults (and the code-verifier same-browser caveat) live
+  // in createAuthClient.
+  return createAuthClient({ url, anonKey }, { detectSessionInUrl: true })
 }
 
 // Singleton — recreated on page reload after config save

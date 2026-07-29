@@ -160,7 +160,7 @@ export type Database = {
       assets: {
         Row: {
           angles: string[]
-          child_id: string | null
+          child_id: string
           client_id: string
           created_at: string
           download_key: string | null
@@ -178,7 +178,7 @@ export type Database = {
           primary_format_id: string | null
           rename_status: string
           shortcode: string
-          stable_id: string | null
+          stable_id: string
           status: string
           tags: string[]
           thumbnail_url: string | null
@@ -189,7 +189,7 @@ export type Database = {
         }
         Insert: {
           angles?: string[]
-          child_id?: string | null
+          child_id: string
           client_id: string
           created_at?: string
           download_key?: string | null
@@ -207,7 +207,7 @@ export type Database = {
           primary_format_id?: string | null
           rename_status?: string
           shortcode: string
-          stable_id?: string | null
+          stable_id: string
           status?: string
           tags?: string[]
           thumbnail_url?: string | null
@@ -218,7 +218,7 @@ export type Database = {
         }
         Update: {
           angles?: string[]
-          child_id?: string | null
+          child_id?: string
           client_id?: string
           created_at?: string
           download_key?: string | null
@@ -236,7 +236,7 @@ export type Database = {
           primary_format_id?: string | null
           rename_status?: string
           shortcode?: string
-          stable_id?: string | null
+          stable_id?: string
           status?: string
           tags?: string[]
           thumbnail_url?: string | null
@@ -338,7 +338,6 @@ export type Database = {
           dimension_labels: Json
           domain_whitelist: string[]
           id: string
-          identity_migrated: boolean
           initials: string
           logo_url: string | null
           name: string
@@ -353,7 +352,6 @@ export type Database = {
           dimension_labels?: Json
           domain_whitelist?: string[]
           id?: string
-          identity_migrated?: boolean
           initials?: string
           logo_url?: string | null
           name: string
@@ -368,7 +366,6 @@ export type Database = {
           dimension_labels?: Json
           domain_whitelist?: string[]
           id?: string
-          identity_migrated?: boolean
           initials?: string
           logo_url?: string | null
           name?: string
@@ -419,6 +416,7 @@ export type Database = {
       }
       profiles: {
         Row: {
+          can_create_clients: boolean
           client_id: string | null
           company: string
           country: string
@@ -430,6 +428,7 @@ export type Database = {
           role: string
         }
         Insert: {
+          can_create_clients?: boolean
           client_id?: string | null
           company?: string
           country?: string
@@ -441,6 +440,7 @@ export type Database = {
           role?: string
         }
         Update: {
+          can_create_clients?: boolean
           client_id?: string | null
           company?: string
           country?: string
@@ -670,10 +670,12 @@ export type Database = {
       }
     }
     Functions: {
+      can_create_clients: { Args: never; Returns: boolean }
       check_email_auth: { Args: { p_email: string }; Returns: string }
       get_all_profiles: {
         Args: never
         Returns: {
+          can_create_clients: boolean
           client_id: string
           client_name: string
           created_at: string
@@ -701,10 +703,12 @@ export type Database = {
       }
       is_admin: { Args: never; Returns: boolean }
       is_staff: { Args: never; Returns: boolean }
+      is_super_admin: { Args: never; Returns: boolean }
       my_client_id: { Args: never; Returns: string }
       my_member_client_ids: { Args: never; Returns: string[] }
       update_user_access: {
         Args: {
+          p_can_create_clients?: boolean
           p_client_id?: string
           p_member_client_ids?: string[]
           p_role: string

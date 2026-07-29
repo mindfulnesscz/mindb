@@ -8,7 +8,7 @@ R2 objects served through a public domain or custom hostname are reachable by an
 
 ## Local secrets today
 
-Expect only **OAuth tokens** (and optional Google client secret) in local config. Restrict OS account access, disk backups, logs, and screenshots. Never put a service-role key or parent R2 secret in web env vars or the desktop. Client export bundles are secret-free (`_version: 2.0`); old imports strip legacy credential fields and warn to rotate.
+Expect only **OAuth tokens** (and optional Google client secret) in local config. Restrict OS account access, disk backups, logs, and screenshots. Never put a service-role key or parent R2 secret in web env vars or the desktop. Client export bundles are secret-free (`_version: 2.0`); importing an older bundle strips any credential fields it still carries and warns to rotate them.
 
 ## Temporary grants
 

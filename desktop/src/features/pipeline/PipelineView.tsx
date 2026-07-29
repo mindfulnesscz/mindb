@@ -10,7 +10,7 @@ import { tokenStatus, cloudToken, resolveExportShape } from '../../domain/client
 import type { CloudDestination, LocalDestConfig } from '../../domain/client';
 import { runPipeline, scanVersionMap, type RunContext } from '../../services/pipelineService';
 import type { CloudUrlEntry } from '../../services/pipelineService';
-import { exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary, fetchClientInventory, requestR2Grant, processRenameTasks } from '../../services/supabaseService';
+import { exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary, requestR2Grant, processRenameTasks } from '../../services/supabaseService';
 import { deleteCdnObjects } from '../../services/pipelineService';
 import { saveClients } from '../../services/clientService';
 import { loadVocabulary } from '../../services/vocabService';
@@ -120,8 +120,11 @@ function RunSummarySection() {
       value: `${stats.cdnOrigUploaded} uploaded · ${stats.cdnOrigCached} cached · ${stats.cdnOrigUnchanged} unchanged`,
     });
   }
-  if (stats.copied || stats.skipped) {
-    rows.push({ label: 'Distribute', value: `${stats.copied} copied · ${stats.skipped} skipped` });
+  if (stats.packages || stats.copied || stats.skipped) {
+    rows.push({
+      label: 'Distribute',
+      value: `${stats.packages} packages · ${stats.copied} copied · ${stats.skipped} unchanged`,
+    });
   }
   if (stats.published || stats.pubFolders) {
     rows.push({ label: 'Publish', value: `${stats.published} files · ${stats.pubFolders} folders · ${stats.disconnected} disconnected` });
@@ -131,8 +134,8 @@ function RunSummarySection() {
       label: 'Supabase',
       value: `${supabaseSync.created} new · ${supabaseSync.updated} updated · ${supabaseSync.disconnected} disconnected`,
     });
-    if (supabaseSync.deleted || supabaseSync.errors) {
-      rows.push({ label: '', value: `${supabaseSync.deleted} deleted · ${supabaseSync.errors} errors` });
+    if (supabaseSync.errors) {
+      rows.push({ label: '', value: `${supabaseSync.errors} errors` });
     }
   }
   if (stats.errors > 0) {
@@ -378,44 +381,7 @@ function ConfigSidebar() {
       }
     }
 
-    if (sbConfig) {
-      if (clientId && r2Config) {
-        // Pre-populate cdnUrls from DB so runCdnUpload skips already-uploaded assets
-        try {
-          const inventory = await fetchClientInventory(clientId, sbConfig);
-          const withUrl   = inventory.filter(r => r.thumbnail_url);
-          for (const rec of withUrl) {
-            // Gallery children use shortcodes with '|' — skip pre-populating so the CDN upload
-            // step always attempts to verify/re-upload them (guards against stale deletions).
-            if (rec.shortcode.includes('|')) continue;
-            // URL is .../thumbnails/{stem}-thumb.webp — extract stem to match runCdnUpload lookup key.
-            // Only add the stem key if the extracted stem belongs to this asset (not a gallery parent
-            // whose thumbnail_url points to a child's stem — that would wrongly skip the child upload).
-            const m = rec.thumbnail_url!.match(/thumbnails\/(.+)-thumb\.webp$/);
-            if (m) {
-              const urlStem     = decodeURIComponent(m[1]);
-              const urlShortcode = urlStem.replace(/\s+[vV]\d+(?:[-._]\d+)*\s*$/, '').trim();
-              if (urlShortcode === rec.shortcode) {
-                // Stem belongs to this asset — safe to skip CDN re-upload
-                cdnUrls.set(urlStem, rec.thumbnail_url!);
-              }
-              // If they differ (gallery parent whose thumbnail = first child's URL), don't cache the
-              // child stem — the CDN step will re-upload the child thumbnail as needed.
-            }
-            // Always key by shortcode so other versions of the same asset are also skipped
-            cdnUrls.set(rec.shortcode, rec.thumbnail_url!);
-          }
-          const noUrl = inventory.length - withUrl.length;
-          const noMatch = withUrl.filter(r => !r.thumbnail_url!.match(/thumbnails\/(.+)-thumb\.webp$/)).length;
-          appendLog('dim', `  CDN inventory: ${inventory.length} records · ${withUrl.length} with URL · ${noUrl} null · ${noMatch} regex miss`);
-          if (withUrl.length > 0) appendLog('dim', `  Sample URL: ${withUrl[0].thumbnail_url}`);
-        } catch (e) {
-          appendLog('dim', `  CDN inventory fetch skipped: ${e}`);
-        }
-      }
-    }
-
-    // ── Pipeline (thumbnails + CDN upload skips known assets) ─────────────────
+    // ── Pipeline ──────────────────────────────────────────────────────────────
     const stats = await runPipeline({
       settings: effectiveSettings,
       vocab:    vocabData,
@@ -428,23 +394,24 @@ function ConfigSidebar() {
       localExportLayout: resolveExportShape(runLocalDest ?? {}).exportLayout,
       localIncludePackages: resolveExportShape(runLocalDest ?? {}).includePackages,
       r2: r2Config,
-      identityMigrated: !!activeClient?.identityMigrated,
     });
 
     // ── Post-run: Supabase sync + targeted CDN cleanup ────────────────────────
     if (sbConfig && clientId) {
-      const { singles, galleries, packageDirs, filePaths } = groupAssets(collectedAssets, effectiveSettings.outFolder ?? 'OUT');
+      const { singles, galleries, unpackaged } = groupAssets(collectedAssets, effectiveSettings.outFolder ?? 'OUT');
+
+      for (const path of unpackaged) {
+        log('error', `  ✕  "${path.split('/').pop()}" has no ${effectiveSettings.outFolder ?? 'OUT'} folder above it — not an asset package. Skipped.`);
+      }
 
       if (!singles.length && !galleries.length) {
         appendLog('info', 'Supabase: no assets found in source — skipping export.');
       } else {
-        const identity = { migrated: !!activeClient?.identityMigrated, packageDirs, filePaths };
-        const sbResult = await exportAssetsToSupabase(singles, clientId, vocabData, sbConfig, log, cdnUrls, cloudUrls, galleries, identity, originalUrls);
+        const sbResult = await exportAssetsToSupabase(singles, clientId, vocabData, sbConfig, log, cdnUrls, cloudUrls, galleries, originalUrls);
         setSupabaseSync({
           created:      sbResult.created,
           updated:      sbResult.updated,
           disconnected: sbResult.disconnected,
-          deleted:      sbResult.deleted,
           errors:       sbResult.errors,
         });
 

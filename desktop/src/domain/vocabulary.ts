@@ -26,7 +26,6 @@ export interface VocabularyData {
   tags: VocabTag[];
   /** Parent groups from DB — portal-only structure. */
   parentGroups?: VocabParentGroup[];
-  legacy_aliases?: Record<string, string>;
   /** Set on local cache when there are unpublished edits (survives client switch). */
   _unpublished?: boolean;
 }

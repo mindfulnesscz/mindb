@@ -127,10 +127,10 @@ export async function fetchAssets(opts: FetchAssetsOptions = {}): Promise<{ asse
     .order('updated_at', { ascending: false })
 
   if (clientId)               query = query.eq('client_id', clientId)
-  // Children (legacy parent_id) and variants (folder-based stable identity, Task 3) are
+  // Children (parent_id, a gallery's images) and variants (variant_of, format siblings) are
   // both only visible inside the primary's detail view, never as their own top-level card.
   query = query.is('parent_id', null).is('variant_of', null)
-  const isStaff = opts.role === 'admin' || opts.role === 'editor'
+  const isStaff = opts.role === 'admin' || opts.role === 'editor' || opts.role === 'super_admin'
   if (filters.status?.length) {
     // Explicit status selection — show exactly what was requested
     query = query.in('status', filters.status)
@@ -198,9 +198,9 @@ export async function fetchAsset(id: string): Promise<Asset | null> {
     .from('assets')
     .select('*')
     .eq('id', id)
-    .single()
+    .maybeSingle()
 
-  if (error) return null
+  if (error || !data) return null
   const statsMap = await fetchStatsMap([id])
   return toAsset({ ...(data as unknown as AssetRow), stats: statsMap.get(id) ?? null })
 }

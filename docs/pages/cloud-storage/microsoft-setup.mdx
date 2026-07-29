@@ -1,0 +1,66 @@
+# Microsoft & SharePoint setup
+
+Everything Microsoft: portal **sign-in** and SharePoint **uploads** can share a
+single Entra app registration. This page covers the delivery (upload) side; for
+the login side see [Authentication](/auth).
+
+## What the code does
+
+- **Large files on every provider.** OneDrive uses a resumable **upload session**
+  (10 MiB chunks) above 4 MB; Google Drive uses a resumable upload above 5 MB;
+  Dropbox uses a chunked session above 150 MB. Small files keep the fast path.
+- **SharePoint delivery for Microsoft.** A OneDrive destination can target a
+  shared SharePoint document library (`driveId`) instead of a personal drive, so
+  links survive staff changes and storage is shared — matching Google Shared Drives.
+- **Share links** try `anonymous`, then fall back to `organization` scope
+  (corporate tenants usually block anonymous links).
+
+## 1. Register / reuse the Entra app
+
+Use the multi-tenant app from [Authentication](/auth) or create one. Multi-tenant
+lets client orgs sign in and lets staff authorize SharePoint uploads.
+
+**Authentication:**
+- Web redirect URI = `https://<project-ref>.supabase.co/auth/v1/callback` (portal login).
+- **Advanced settings → Allow public client flows → Yes** (the desktop connector uses device code).
+
+**API permissions (Microsoft Graph, delegated):**
+- `User.Read`, `offline_access`
+- `Files.ReadWrite` — personal drive fallback
+- `Sites.ReadWrite.All` — SharePoint document libraries
+- `email`, `openid`, `profile` — portal login
+- **Grant admin consent** for your tenant. Client orgs may need their own admin to consent.
+
+**Secrets:** the client secret is used for the *login* provider in Supabase. The
+**desktop connector uses the Client ID only** (device code, no secret).
+
+## 2. Connect SharePoint delivery (desktop)
+
+Desktop → **Cloud destinations** → add/edit a **OneDrive** destination:
+
+1. **Azure App (Client ID)** = the app's Application (client) ID.
+2. **Azure Tenant ID** = your tenant GUID (or `common`).
+3. **Connect** — device-code sign-in as an account with access to the target site.
+4. **SharePoint site URL** = e.g. `https://contoso.sharepoint.com/sites/Clients`, then **Resolve drive** to fill the `driveId` of that site's Documents library. Leave blank to use the personal drive.
+5. Set the **remote path** (subfolder within the library).
+
+`driveId`/`siteUrl` are stored as destination structure in Supabase
+(`clients.cloud_destinations`); OAuth tokens stay on the machine.
+
+> After upgrading, **reconnect** the destination once so the token carries the new `Sites.ReadWrite.All` scope.
+
+## 3. Access → roles
+
+Provisioning is by email and identical for magic link and OAuth. A whitelisted
+domain auto-creates users as **members** of that client; individual people and
+elevated roles are assigned by an admin. See
+[Authentication → Domain whitelist](/auth) and [Roles & permissions](/roles).
+
+## Testing checklist
+
+- Sign in with **Continue with Microsoft** — no email, no Safe Links problem.
+- Connect OneDrive, resolve a SharePoint site, run the pipeline; confirm the file lands in the library and the portal shows a working link.
+- Upload a **> 250 MB** file to exercise the resumable path (also verify on Google and Dropbox).
+
+If corporate policy blocks even organization-scoped links, enable sharing for that
+library in SharePoint admin.

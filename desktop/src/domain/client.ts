@@ -28,6 +28,8 @@ export interface OneDriveDestConfig {
   clientId:   string;
   tenantId:   string;   // Azure AD tenant GUID, or 'common' for multi-tenant/personal apps
   remotePath: string;
+  driveId?:   string;   // SharePoint / OneDrive-for-Business drive ID. Empty → signed-in user's own drive (/me/drive).
+  siteUrl?:   string;   // SharePoint site URL, kept for reference / re-resolving driveId.
   token:      CloudToken | null;
 }
 
@@ -72,32 +74,13 @@ export interface CloudDestination {
 }
 
 export function resolveExportShape(
-  raw: Omit<Partial<CloudDestination>, 'exportLayout'> & {
-    flatExport?: boolean;
-    exportPackages?: boolean;
-    /** Includes legacy `"packages"`. */
-    exportLayout?: DestExportLayout | 'packages' | string;
-    includePackages?: boolean;
-  },
+  raw: Partial<Pick<CloudDestination, 'exportLayout' | 'includePackages'>>,
 ): { exportLayout: DestExportLayout; includePackages: boolean } {
-  if (raw.exportLayout === 'packages' || raw.exportPackages) {
-    return { exportLayout: 'folders', includePackages: true };
-  }
-  const exportLayout: DestExportLayout =
-    raw.exportLayout === 'flat' || raw.flatExport ? 'flat' : 'folders';
-  const includePackages = exportLayout === 'folders' && Boolean(raw.includePackages);
-  return { exportLayout, includePackages };
-}
-
-/** @deprecated Prefer resolveExportShape — kept for call sites that only need layout. */
-export function resolveExportLayout(
-  raw: Omit<Partial<CloudDestination>, 'exportLayout'> & {
-    flatExport?: boolean;
-    exportPackages?: boolean;
-    exportLayout?: DestExportLayout | 'packages' | string;
-  },
-): DestExportLayout {
-  return resolveExportShape(raw).exportLayout;
+  const exportLayout: DestExportLayout = raw.exportLayout === 'flat' ? 'flat' : 'folders';
+  return {
+    exportLayout,
+    includePackages: exportLayout === 'folders' && Boolean(raw.includePackages),
+  };
 }
 
 export interface Client {
@@ -112,7 +95,6 @@ export interface Client {
   cloudDestinations: CloudDestination[];
   supabaseUrl:        string;
   supabaseAnonKey:    string;
-  identityMigrated:  boolean;
   lastCreationFolder: string;
   dimensionLabels?:  { entity: string; angle: string; format: string };
 }
@@ -129,7 +111,6 @@ export function makeClient(partial: Partial<Client> = {}): Client {
     cloudDestinations:  [],
     supabaseUrl:        '',
     supabaseAnonKey:    '',
-    identityMigrated:  false,
     lastCreationFolder: '',
     dimensionLabels:   { entity: 'Entity', angle: 'Angle', format: 'Format' },
     ...partial,
@@ -150,13 +131,13 @@ export function makeDestination(partial: Partial<CloudDestination> = {}): CloudD
     enabled:          true,
     config:           { type: 'local', path: '' },
     ...rest,
-    // Always resolve layout from partial (maps legacy packages/flatExport).
+    // Always resolve layout from partial so the pair stays internally consistent.
     exportLayout:     shape.exportLayout,
     includePackages:  shape.includePackages,
   };
 }
 
-/** Normalize portal / legacy JSON into a full CloudDestination. */
+/** Normalize portal JSON into a full CloudDestination. */
 export function normalizeDestination(raw: Partial<CloudDestination> & {
   id?: string;
   flatExport?: boolean;

@@ -1,18 +1,13 @@
 /* Clients — DB-first.
  *
- * The database owns client identity (name, accent, identity_migrated,
+ * The database owns client identity (name, accent,
  * cloud destination definitions); the desktop READS the list per environment
  * after sign-in, filtered by client_members (admins see everything). This
  * machine only stores what is machine-local: folder paths, R2 credentials
  * (until the Control API phase), OAuth tokens, logo, and the last active
  * client — keyed by `${environmentId}:${clientUuid}` in client-local.json.
- *
- * Legacy clients.json (the old desktop-owned client list) migrates on first
- * load: connection values became environments (environmentService), local
- * fields land in a name-keyed pending pool and are adopted — including the
- * vocab-<id>.json re-key — the first time a DB client with that name appears.
  */
-import { readTextFile, writeTextFile, exists, mkdir, copyFile } from '@tauri-apps/plugin-fs';
+import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { appDataDir, join } from '@tauri-apps/api/path';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { makeClient, normalizeDestination } from '../domain/client';
@@ -33,16 +28,10 @@ export interface LocalClientConfig {
   lastCreationFolder: string;
 }
 
-interface PendingLocalConfig extends LocalClientConfig {
-  legacyClientId: string | null;
-}
-
 interface PersistedLocal {
-  version:       2;
-  entries:       Record<string, LocalClientConfig>;
-  pendingByName: Record<string, PendingLocalConfig>;
-  activeByEnv:   Record<string, string>;
-  migratedFromClientsJson: boolean;
+  version:     3;
+  entries:     Record<string, LocalClientConfig>;
+  activeByEnv: Record<string, string>;
 }
 
 const EMPTY_LOCAL: LocalClientConfig = {
@@ -71,16 +60,10 @@ async function loadLocal(): Promise<PersistedLocal> {
   if (existing) {
     const entries: Record<string, LocalClientConfig> = {};
     for (const [k, v] of Object.entries(existing.entries ?? {})) entries[k] = pickLocalFields(v as Partial<Client>);
-    localMemo = {
-      version: 2,
-      entries,
-      pendingByName: existing.pendingByName ?? {},
-      activeByEnv:   existing.activeByEnv   ?? {},
-      migratedFromClientsJson: existing.migratedFromClientsJson ?? false,
-    };
+    localMemo = { version: 3, entries, activeByEnv: existing.activeByEnv ?? {} };
     return localMemo;
   }
-  localMemo = { version: 2, entries: {}, pendingByName: {}, activeByEnv: {}, migratedFromClientsJson: false };
+  localMemo = { version: 3, entries: {}, activeByEnv: {} };
   return localMemo;
 }
 
@@ -101,30 +84,6 @@ function pickLocalFields(c: Partial<Client>): LocalClientConfig {
   };
 }
 
-/** One-time migration of the legacy clients.json local fields into the
- * name-keyed pending pool for every environment (URLs may repeat across
- * clients, so entries attach to the environment matching their URL). */
-async function migrateLegacyClients(environments: Environment[]): Promise<void> {
-  const local = await loadLocal();
-  if (local.migratedFromClientsJson) return;
-  type LegacyClient = Partial<Client> & { id?: string; name?: string; supabaseUrl?: string };
-  const legacy = await readJsonIfExists<{ clients?: LegacyClient[] }>(
-    await join(await appDataDir(), 'clients.json'),
-  );
-  for (const c of legacy?.clients ?? []) {
-    if (!c.name) continue;
-    const url = (c.supabaseUrl ?? '').trim().replace(/\/+$/, '');
-    const env = environments.find(e => e.supabaseUrl === url) ?? environments[0];
-    if (!env) continue;
-    const key = `${env.id}:${c.name.trim().toLowerCase()}`;
-    if (!local.pendingByName[key]) {
-      local.pendingByName[key] = { ...pickLocalFields(c), legacyClientId: c.id ?? null };
-    }
-  }
-  local.migratedFromClientsJson = true;
-  await saveLocal();
-}
-
 /* ── DB clients ──────────────────────────────────────────────────────────── */
 
 interface DbClientRow {
@@ -133,7 +92,6 @@ interface DbClientRow {
   accent:             string | null;
   slug:               string | null;
   logo_url:           string | null;
-  identity_migrated:  boolean | null;
   dimension_labels:   { entity?: string; angle?: string; format?: string } | null;
 }
 
@@ -144,13 +102,13 @@ interface DbClientRow {
 async function fetchDbClients(role: string): Promise<DbClientRow[]> {
   const auth = getAuthClient();
   if (!auth) throw new Error('Not signed in');
-  const baseSelect = 'id,name,accent,slug,logo_url,identity_migrated';
+  const baseSelect = 'id,name,accent,slug,logo_url';
   const fullSelect = `${baseSelect},dimension_labels`;
   const timeout = (p: PromiseLike<{ data: unknown; error: { message: string } | null }>, label: string) =>
     withTimeout(Promise.resolve(p), 12_000, label);
 
   async function query(select: string): Promise<DbClientRow[]> {
-    if (role === 'admin') {
+    if (role === 'admin' || role === 'super_admin') {
       const { data, error } = await timeout(
         auth!.from('clients').select(select).order('name'),
         'Client list',
@@ -186,7 +144,6 @@ function mergeClient(env: Environment, row: DbClientRow, local: LocalClientConfi
     slug:               row.slug ?? undefined,
     logoUrl:            row.logo_url,
     brandColor:         row.accent || '#161616',
-    identityMigrated:   !!row.identity_migrated,
     dimensionLabels:    {
       entity: labels.entity ?? 'Entity',
       angle:  labels.angle  ?? 'Angle',
@@ -203,68 +160,25 @@ export interface LoadedClients {
   activeClientId: string | null;
 }
 
-/** The main entry: DB clients for this environment + user, merged with this
- * machine's local config (adopting legacy name-keyed configs on first sight,
- * including the vocab-file re-key). */
-function normalizeName(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]/g, '');
-}
-
+/** The main entry: DB clients for this environment + user, merged with this machine's
+ * local config. A client with no local config yet starts empty — its folders are picked
+ * in Pipeline → Paths and saved per environment+client from then on. */
 export async function loadClientsForEnvironment(
   env: Environment,
   role: string,
-  allEnvironments: Environment[],
 ): Promise<LoadedClients> {
-  await migrateLegacyClients(allEnvironments);
   const local = await loadLocal();
   const rows = await fetchDbClients(role);
 
-  let dirty = false;
-  const clients: Client[] = [];
-  for (const row of rows) {
-    const key = `${env.id}:${row.id}`;
-    let cfg = local.entries[key];
-    if (!cfg) {
-      // Normalized match: legacy local names and DB names can differ in
-      // spacing/punctuation ("FyzioBalance" vs "Fyzio Balance").
-      const want = normalizeName(row.name);
-      const pendingKey = Object.keys(local.pendingByName).find(k => {
-        const [envPart, ...nameParts] = k.split(':');
-        return envPart === env.id && normalizeName(nameParts.join(':')) === want;
-      });
-      const pending = pendingKey ? local.pendingByName[pendingKey] : undefined;
-      if (pending && pendingKey) {
-        const { legacyClientId, ...fields } = pending;
-        cfg = fields;
-        local.entries[key] = cfg;
-        delete local.pendingByName[pendingKey];
-        dirty = true;
-        if (legacyClientId) await adoptVocabFile(legacyClientId, row.id);
-      } else {
-        cfg = { ...EMPTY_LOCAL };
-      }
-    }
-    clients.push(mergeClient(env, row, cfg));
-  }
-  if (dirty) await saveLocal();
+  const clients = rows.map(row =>
+    mergeClient(env, row, local.entries[`${env.id}:${row.id}`] ?? { ...EMPTY_LOCAL }),
+  );
 
   const remembered = local.activeByEnv[env.id] ?? null;
   const activeClientId = clients.some(c => c.id === remembered)
     ? remembered
     : (clients.length === 1 ? clients[0].id : null);
   return { clients, activeClientId };
-}
-
-/** Re-keys a legacy vocab-<localId>.json to the client's DB uuid so the
- * per-client vocabulary survives the identity change. Copy, not move —
- * the legacy file stays as a harmless backup. */
-async function adoptVocabFile(legacyId: string, dbId: string): Promise<void> {
-  try {
-    const dir = await appDataDir();
-    const from = await join(dir, `vocab-${legacyId}.json`);
-    const to   = await join(dir, `vocab-${dbId}.json`);
-    if ((await exists(from)) && !(await exists(to))) await copyFile(from, to);
-  } catch { /* best-effort — worst case the client starts from the seed vocab */ }
 }
 
 /** Persists the machine-local slice of a merged Client. */
@@ -281,10 +195,9 @@ export async function saveActiveClient(envId: string, clientId: string | null): 
   await saveLocal();
 }
 
-/** Back-compat persistence for views that call `saveClients` after a store
- * update: writes each merged client's machine-local slice for the ACTIVE
- * environment plus the active selection. DB-owned fields (name, accent,
- * identity_migrated) are managed through the DB, not this file. */
+/** Persistence for views that call `saveClients` after a store update: writes each merged
+ * client's machine-local slice for the ACTIVE environment plus the active selection.
+ * DB-owned fields (name, accent, dimension labels) are managed through the DB, not here. */
 export async function saveClients(data: { clients: Client[]; activeClientId: string | null }): Promise<void> {
   const envId = useEnvironmentStore.getState().activeEnvId;
   if (!envId) return;
@@ -379,8 +292,8 @@ function sanitizeForExport(client: Client): Client {
 /** True when a parsed bundle still carries credential-bearing fields —
  * i.e. it predates secret-free exports and should trigger a rotation warning. */
 function bundleHasSecrets(client: Partial<Client>): boolean {
-  const legacy = client as Partial<Client> & { r2SecretKey?: string; r2AccessKeyId?: string; supabaseServiceKey?: string };
-  if (legacy.supabaseServiceKey || legacy.r2SecretKey || legacy.r2AccessKeyId) return true;
+  const withSecrets = client as Partial<Client> & { r2SecretKey?: string; r2AccessKeyId?: string; supabaseServiceKey?: string };
+  if (withSecrets.supabaseServiceKey || withSecrets.r2SecretKey || withSecrets.r2AccessKeyId) return true;
   return (client.cloudDestinations ?? []).some(d =>
     d.config.type !== 'local' && (d.config.token?.accessToken || d.config.token?.refreshToken ||
       (d.config.type === 'gdrive' && d.config.clientSecret)));

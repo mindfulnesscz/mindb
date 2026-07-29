@@ -1,11 +1,11 @@
 import { readFile, readTextFile, writeTextFile, exists as fsExists } from '@tauri-apps/plugin-fs';
-import { parseFilename, buildVocabContext } from '../domain/filenameTranslator';
+import { parseFilename, buildVocabMap } from '../domain/filenameTranslator';
 import type { CloudDestination } from '../domain/client';
 import { normalizeDestination, resolveExportShape } from '../domain/client';
 import { extractStableId, stripStableId } from '../domain/stableId';
 import { filterHighestVersions, parseVersion, compareVersions } from '../domain/version';
 import type { VocabularyData } from '../domain/vocabulary';
-import type { GalleryGroup } from '../domain/assetGrouping';
+import type { GalleryGroup, SingleAsset } from '../domain/assetGrouping';
 import type { AssetVersions, CloudUrlEntry } from './pipelineService';
 import { writeReadme } from './readmeService';
 import type { AssetStatsSnapshot } from './readmeService';
@@ -21,45 +21,22 @@ export interface SupabaseExportResult {
   created:        number;
   updated:        number;
   disconnected:   number; // stable-identity rows soft-marked disconnected this run
-  deleted:        number; // legacy rows hard-deleted this run
   errors:         number;
   staleObjectKeys: string[]; // R2 object keys that should be deleted (thumbnails + originals)
 }
 
-export interface InventoryRecord {
-  shortcode:     string;
-  thumbnail_url: string | null;
-  download_key:  string | null;
-}
-
 /** Existing stable_ids for a client — used to collision-check a freshly generated one
- * before scaffolding a new asset folder (see CreateAssetView.tsx / migrate-identity.ts). */
+ * before scaffolding a new asset folder (see VocabularyView.tsx). */
 export async function fetchExistingStableIds(
   clientId: string,
   config:   SupabaseConfig,
 ): Promise<Set<string>> {
   const base    = `${config.url}/rest/v1`;
   const headers = makeHeaders(config.anonKey);
-  const rows = await fetchAllForClient<{ stable_id: string | null }>(
-    base, 'assets?stable_id=not.is.null', clientId, 'stable_id', headers,
+  const rows = await fetchAllForClient<{ stable_id: string }>(
+    base, 'assets', clientId, 'stable_id', headers,
   );
-  return new Set(rows.map(r => r.stable_id).filter((x): x is string => !!x));
-}
-
-/** Fetch the CDN inventory for a client without running the full export. */
-export async function fetchClientInventory(
-  clientId: string,
-  config:   SupabaseConfig,
-): Promise<Pick<InventoryRecord, 'shortcode' | 'thumbnail_url'>[]> {
-  const base    = `${config.url}/rest/v1`;
-  const headers = makeHeaders(config.anonKey);
-  return fetchAllForClient<Pick<InventoryRecord, 'shortcode' | 'thumbnail_url'>>(
-    base,
-    'assets?status=neq.archived',
-    clientId,
-    'shortcode,thumbnail_url',
-    headers,
-  );
+  return new Set(rows.map(r => r.stable_id));
 }
 
 /**
@@ -245,8 +222,7 @@ export async function resolveTagId(
 export async function createDraftAsset(input: DraftAssetInput, config: SupabaseConfig): Promise<string> {
   const base    = `${config.url}/rest/v1`;
   const headers = makeHeaders(config.anonKey);
-  const key       = `${input.stableId}:c1`;
-  const shortcode = `${input.name} __${key}`;
+  const shortcode = input.name;
   const res = await sbFetch(`${base}/assets`, {
     method:  'POST',
     headers: { ...headers, Prefer: 'return=representation' },
@@ -284,7 +260,7 @@ function intersectStrings(lists: string[][]): string[] {
 }
 
 export function parseAssetForSupabase(assetStem: string, vocab: VocabularyData) {
-  const ctx    = buildVocabContext(vocab);
+  const ctx    = buildVocabMap(vocab);
   const parsed = parseFilename(assetStem, ctx);
 
   const shortcode  = stripVersionSuffix(assetStem);
@@ -373,14 +349,42 @@ function nextChildId(used: Set<string>): string {
 function versionLineageChildId(manifest: DchubManifest, filename: string): string | null {
   const parsed = parseVersion(filename);
   if (!parsed) return null;
-  let best: { childId: string; version: [number, number, number] } | null = null;
+  let best: { childId: string; version: [number, number, number]; entryName: string | null } | null = null;
   for (const [name, entry] of Object.entries(manifest.children)) {
     const p = parseVersion(name);
     if (!p) continue;
-    if (p.base.toLowerCase() !== parsed.base.toLowerCase() || p.ext.toLowerCase() !== parsed.ext.toLowerCase()) continue;
-    if (!best || compareVersions(p.version, best.version) > 0) best = { childId: entry.child_id, version: p.version };
+    if (p.base.toLowerCase() !== parsed.base.toLowerCase()) continue;
+    // An extensionless entry is the Vocabulary scaffold's placeholder (GeneratorView writes
+    // `OUT/<stem>` with no extension precisely so the scanner ignores it) holding the
+    // reserved 'c1'. Requiring an exact extension match would never let the real file claim
+    // that id: it would mint c2 and leave the draft DB row stranded as a phantom primary.
+    // Such a slot is claimable exactly once — otherwise a set of format variants sharing one
+    // base (foo v1-0-0.png + foo v1-0-0.pdf) would all resolve to the same child id and the
+    // duplicates would be dropped as self-variants of the primary. Retiring the key below is
+    // what enforces that; `used` can't, since it is pre-seeded with every id in the manifest.
+    const placeholder = !p.ext;
+    if (!placeholder && p.ext.toLowerCase() !== parsed.ext.toLowerCase()) continue;
+    if (!best || compareVersions(p.version, best.version) > 0) {
+      best = { childId: entry.child_id, version: p.version, entryName: placeholder ? name : null };
+    }
   }
-  return best?.childId ?? null;
+  if (!best) return null;
+  // Retire the placeholder key now that a real filename owns the id — the caller records the
+  // real filename, and leaving both would let a later run hand the same id to another file.
+  if (best.entryName) delete manifest.children[best.entryName];
+  return best.childId;
+}
+
+/** The scaffold's reserved placeholder slot (extensionless key, empty-content sha) that no
+ * real file has claimed yet — a gallery parent can adopt it so turning a freshly scaffolded
+ * asset into a gallery keeps the draft row instead of orphaning it. */
+function unclaimedScaffoldSlot(manifest: DchubManifest): { childId: string; key: string } | null {
+  for (const [name, entry] of Object.entries(manifest.children)) {
+    if (name.startsWith(GALLERY_SLOT_PREFIX)) continue;
+    if (/\.[A-Za-z0-9]{1,8}$/.test(name)) continue; // real file, not the placeholder
+    return { childId: entry.child_id, key: name };
+  }
+  return null;
 }
 
 /** Matching order per Task 4: manifest filename → content-hash (renamed file) →
@@ -406,10 +410,78 @@ async function resolveChildId(
   return { childId: nextChildId(used), sha256: sha, dirty: true };
 }
 
-export interface IdentityContext {
-  migrated:    boolean;               // client.identityMigrated — gates stable_id matching entirely
-  packageDirs: Map<string, string>;   // single stem, or gallery folder name → its package dir (OUT's parent)
-  filePaths:   Map<string, string>;   // any stem (single or gallery child) → absolute file path
+const GALLERY_SLOT_PREFIX = '__gallery__:';
+
+/**
+ * Gallery parents are keyed by folder path (`__gallery__:Selected`). A rename
+ * would otherwise mint a new child_id and leave the old parent holding the
+ * pictures, so an orphaned slot in the same package is reused before a fresh id
+ * is allocated.
+ */
+function resolveGalleryParentChildId(
+  state: { manifest: DchubManifest; used: Set<string>; dirty: boolean },
+  galleryPath: string,
+  currentPathsInPackage: Set<string>,
+): string {
+  const parentSlot = `${GALLERY_SLOT_PREFIX}${galleryPath}`;
+  const currentSlots = new Set(
+    [...currentPathsInPackage].map(p => `${GALLERY_SLOT_PREFIX}${p}`),
+  );
+  const orphans = Object.entries(state.manifest.children).filter(
+    ([k]) => k.startsWith(GALLERY_SLOT_PREFIX) && !currentSlots.has(k),
+  );
+
+  // One live gallery + one orphaned path slot ⇒ folder rename (also heals a prior
+  // bad run that minted an empty parent under the new path while children stayed
+  // on the old parent id).
+  if (currentPathsInPackage.size === 1 && orphans.length === 1) {
+    const [oldKey, entry] = orphans[0];
+    const exact = state.manifest.children[parentSlot]?.child_id;
+    if (exact && exact !== entry.child_id) delete state.manifest.children[parentSlot];
+    state.manifest.children[parentSlot] = { child_id: entry.child_id, sha256: '' };
+    delete state.manifest.children[oldKey];
+    state.dirty = true;
+    state.used.add(entry.child_id);
+    return entry.child_id;
+  }
+
+  const exact = state.manifest.children[parentSlot]?.child_id;
+  if (exact) {
+    state.used.add(exact);
+    return exact;
+  }
+
+  // Multi-gallery package: one renamed folder among several.
+  const unresolved = [...currentPathsInPackage].filter(
+    p => !state.manifest.children[`${GALLERY_SLOT_PREFIX}${p}`],
+  );
+  if (orphans.length === 1 && unresolved.length === 1 && unresolved[0] === galleryPath) {
+    const [oldKey, entry] = orphans[0];
+    state.manifest.children[parentSlot] = { child_id: entry.child_id, sha256: '' };
+    delete state.manifest.children[oldKey];
+    state.dirty = true;
+    state.used.add(entry.child_id);
+    return entry.child_id;
+  }
+
+  // Scaffolded-then-galleried: the Vocabulary placeholder reserved 'c1' for a single file,
+  // but the deliverable turned out to be a folder of them. Adopt that slot for the parent so
+  // the existing draft row becomes the gallery instead of a stranded phantom next to it.
+  if (currentPathsInPackage.size === 1) {
+    const scaffold = unclaimedScaffoldSlot(state.manifest);
+    if (scaffold) {
+      state.manifest.children[parentSlot] = { child_id: scaffold.childId, sha256: '' };
+      delete state.manifest.children[scaffold.key];
+      state.dirty = true;
+      state.used.add(scaffold.childId);
+      return scaffold.childId;
+    }
+  }
+
+  const parentChildId = nextChildId(state.used);
+  state.manifest.children[parentSlot] = { child_id: parentChildId, sha256: '' };
+  state.dirty = true;
+  return parentChildId;
 }
 
 type ManifestStates = Map<string, { manifest: DchubManifest; used: Set<string>; dirty: boolean }>;
@@ -432,10 +504,10 @@ async function getManifestState(manifests: ManifestStates, packageDir: string, s
 
 /** Resolves each collected asset's rename-proof stable identity (stable_id/child_id) for
  * CDN keying, without touching any Supabase record/DB logic — that stays entirely inside
- * `exportAssetsToSupabase`, unchanged. Meant to run once, early, before CDN uploads, so
- * those uploads can key by this identity instead of the current filename. Entries are
- * omitted for legacy/unmigrated/orphan files (no stable identity to key by) — callers
- * should fall back to filename/shortcode-based keys for those. */
+ * `exportAssetsToSupabase`. Meant to run once, early, before CDN uploads, so those uploads
+ * can key by this identity instead of the current filename. A file outside a hashed package
+ * folder has no identity and is left out of the map; the CDN steps report those and skip
+ * them rather than inventing a filename-based key. */
 export async function resolveCdnIdentity(
   collectedAssets: string[],
   outFolderName:   string,
@@ -451,7 +523,9 @@ export async function resolveCdnIdentity(
     const parts = absPath.replace(/\\/g, '/').split('/');
     let outIdx = -1;
     for (let i = parts.length - 1; i >= 0; i--) {
-      if (parts[i].toLowerCase() === outFolderName.toLowerCase()) { outIdx = i; break; }
+      const want = outFolderName.replace(/^\[\d+\]\s*/, '').trim().toLowerCase();
+      const got  = parts[i].replace(/^\[\d+\]\s*/, '').trim().toLowerCase();
+      if (got === want || got === 'out') { outIdx = i; break; }
     }
     if (outIdx < 0) continue; // orphan layout — no package dir to carry a hash
     const packageDir = parts.slice(0, outIdx).join('/');
@@ -480,7 +554,7 @@ export async function resolveCdnIdentity(
 }
 
 export async function exportAssetsToSupabase(
-  packageNames: string[],
+  singles:      SingleAsset[],
   clientId:     string,
   vocab:        VocabularyData,
   config:       SupabaseConfig,
@@ -488,63 +562,55 @@ export async function exportAssetsToSupabase(
   cdnUrls?:      Map<string, string>,
   cloudUrls?:    Map<string, CloudUrlEntry[]>,
   galleries?:    GalleryGroup[],
-  identity?:     IdentityContext,
   originalUrls?: Map<string, string>,
 ): Promise<SupabaseExportResult> {
-  const result: SupabaseExportResult = { created: 0, updated: 0, disconnected: 0, deleted: 0, errors: 0, staleObjectKeys: [] };
+  const result: SupabaseExportResult = { created: 0, updated: 0, disconnected: 0, errors: 0, staleObjectKeys: [] };
   const base    = `${config.url}/rest/v1`;
   const headers = makeHeaders(config.anonKey);
 
   const allGalleries = galleries ?? [];
-  const useStable     = !!identity?.migrated;
 
-  /* ── Partition into stable-identity groups (folder carries a __hash) vs.
-     legacy shortcode groups (everything else, or when the client hasn't
-     migrated) ────────────────────────────────────────────────────────────── */
-  const stableSingles:   Array<{ stem: string; packageDir: string; stableId: string }> = [];
-  const legacySingles:   string[] = [];
+  /* ── Resolve each item's folder identity ──────────────────────────────────
+     Every asset lives in a package folder carrying a ` __<hash>` suffix, written by
+     the Vocabulary scaffold. Anything without one has no identity to sync by and is
+     reported rather than guessed at. */
+  const stableSingles:   Array<SingleAsset & { stableId: string }> = [];
   const stableGalleries: Array<{ group: GalleryGroup; packageDir: string; stableId: string }> = [];
-  const legacyGalleries: GalleryGroup[] = [];
+  const unhashed: string[] = [];
 
-  if (useStable) {
-    const hashOwners = new Map<string, Set<string>>(); // stableId → package dirs claiming it this run
-    const claim = (sid: string, dir: string) => {
-      const owners = hashOwners.get(sid) ?? new Set<string>();
-      owners.add(dir);
-      hashOwners.set(sid, owners);
-    };
-    for (const stem of packageNames) {
-      const dir = identity!.packageDirs.get(stem);
-      const sid = dir ? extractStableId(dir.split('/').pop() ?? '') : null;
-      if (dir && sid) { stableSingles.push({ stem, packageDir: dir, stableId: sid }); claim(sid, dir); }
-      else legacySingles.push(stem);
-    }
-    for (const g of allGalleries) {
-      const dir = identity!.packageDirs.get(g.name);
-      const sid = dir ? extractStableId(dir.split('/').pop() ?? '') : null;
-      if (dir && sid) { stableGalleries.push({ group: g, packageDir: dir, stableId: sid }); claim(sid, dir); }
-      else legacyGalleries.push(g);
-    }
-    // Duplicate-hash guard — the same hash suffix claimed by more than one folder this run.
-    const conflicted = new Set([...hashOwners].filter(([, dirs]) => dirs.size > 1).map(([sid]) => sid));
-    for (const sid of conflicted) {
-      appendLog('error', `  ✕  Hash "__${sid}" claimed by multiple folders — same asset moved, or duplicated folder needing a fresh ID? Skipping sync for it this run.`);
-    }
-    if (conflicted.size) {
-      stableSingles.splice(0, stableSingles.length, ...stableSingles.filter(s => !conflicted.has(s.stableId)));
-      stableGalleries.splice(0, stableGalleries.length, ...stableGalleries.filter(g => !conflicted.has(g.stableId)));
-    }
-    const unscaffolded = legacySingles.length + legacyGalleries.length;
-    if (unscaffolded) appendLog('warn', `  ⚠  ${unscaffolded} folder(s) have no __hash yet — syncing via legacy shortcode match (unscaffolded)`);
-  } else {
-    legacySingles.push(...packageNames);
-    legacyGalleries.push(...allGalleries);
+  const hashOwners = new Map<string, Set<string>>(); // stableId → package dirs claiming it this run
+  const claim = (sid: string, dir: string) => {
+    const owners = hashOwners.get(sid) ?? new Set<string>();
+    owners.add(dir);
+    hashOwners.set(sid, owners);
+  };
+  for (const single of singles) {
+    const sid = extractStableId(single.packageDir.split('/').pop() ?? '');
+    if (sid) { stableSingles.push({ ...single, stableId: sid }); claim(sid, single.packageDir); }
+    else unhashed.push(single.stem);
+  }
+  for (const group of allGalleries) {
+    const sid = extractStableId(group.packageDir.split('/').pop() ?? '');
+    if (sid) { stableGalleries.push({ group, packageDir: group.packageDir, stableId: sid }); claim(sid, group.packageDir); }
+    else unhashed.push(group.name);
+  }
+  // Duplicate-hash guard — the same hash suffix claimed by more than one folder this run.
+  const conflicted = new Set([...hashOwners].filter(([, dirs]) => dirs.size > 1).map(([sid]) => sid));
+  for (const sid of conflicted) {
+    appendLog('error', `  ✕  Hash "__${sid}" claimed by multiple folders — same asset moved, or duplicated folder needing a fresh ID? Skipping sync for it this run.`);
+  }
+  if (conflicted.size) {
+    stableSingles.splice(0, stableSingles.length, ...stableSingles.filter(s => !conflicted.has(s.stableId)));
+    stableGalleries.splice(0, stableGalleries.length, ...stableGalleries.filter(g => !conflicted.has(g.stableId)));
   }
 
-  const totalReceived = packageNames.length + allGalleries.reduce((n, g) => n + 1 + g.childStems.length, 0);
+  const totalReceived = singles.length + allGalleries.reduce((n, g) => n + 1 + g.children.length, 0);
   appendLog('section', '━━━ SUPABASE EXPORT ━━━');
-  appendLog('dim', `  ${packageNames.length} flat + ${allGalleries.length} galler${allGalleries.length === 1 ? 'y' : 'ies'} (${totalReceived} total)`);
-  if (useStable) appendLog('dim', `  ${stableSingles.length + stableGalleries.length} via stable identity · ${legacySingles.length + legacyGalleries.length} via legacy shortcode`);
+  appendLog('dim', `  ${singles.length} flat + ${allGalleries.length} galler${allGalleries.length === 1 ? 'y' : 'ies'} (${totalReceived} total)`);
+  for (const name of unhashed) {
+    appendLog('error', `  ✕  "${name}" sits in a folder with no " __<hash>" suffix — create it through Vocabulary → Create folder so it gets an identity. Skipped.`);
+    result.errors += 1;
+  }
 
   function buildRecord(stem: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
     const p = parseAssetForSupabase(stem, vocab);
@@ -566,278 +632,21 @@ export async function exportAssetsToSupabase(
     };
   }
 
-  // ── Phase 1: flat singles + gallery parents (parent_id: null) ──────────────
-  const seen = new Map<string, Record<string, unknown>>();
-  for (const pkgName of legacySingles) {
-    const rec = buildRecord(pkgName);
-    seen.set(rec.shortcode as string, rec);
-  }
-  for (const g of legacyGalleries) {
-    const firstChild = g.childStems.length > 0 ? g.childStems[0] : null;
-    const firstChildThumb    = firstChild ? (cdnUrls?.get(firstChild) ?? null) : null;
-    const firstChildOriginal = firstChild ? (originalUrls?.get(firstChild) ?? null) : null;
-    const firstChildCloud    = firstChild ? (cloudUrls?.get(firstChild) ?? []) : [];
-    const p = parseAssetForSupabase(g.name, vocab);
-    seen.set(p.shortcode, {
-      client_id:     clientId,
-      shortcode:     p.shortcode,
-      name:          p.name,
-      entities:      p.entities,
-      formats:       p.formats,
-      angles:        p.angles,
-      tags:          p.tags,
-      version:       p.version,
-      status:        'published',
-      perm:          'public',
-      thumbnail_url: firstChildThumb,
-      download_url:  firstChildOriginal,
-      download_urls: firstChildCloud,
-    });
-  }
-  const phase1Records = [...seen.values()];
-
-  // Fetch all current (non-archived) assets to diff creates vs updates
-  appendLog('dim', '  Fetching existing records…');
-  type ExistingRow = { id: string; shortcode: string; thumbnail_url: string | null; download_url?: string | null; download_urls?: unknown[] | null; download_key?: string | null };
-  const existingMap = new Map<string, ExistingRow>(); // shortcode → row
-  try {
-    // Once a client has migrated, stable-identity rows are handled entirely in the block
-    // below — excluding them here prevents this legacy pass from seeing them as "not
-    // currently produced" and deleting them (see the ── Stale detection ── comment below).
-    const stableFilter = useStable ? '&stable_id=is.null' : '';
-    const rows = await fetchAllForClient<ExistingRow>(
-      base, `assets?status=neq.archived${stableFilter}`, clientId,
-      'id,shortcode,thumbnail_url,download_url,download_urls', headers,
-    );
-    for (const r of rows) existingMap.set(r.shortcode.trim(), r);
-  } catch (e) {
-    appendLog('error', `  ✕  Could not fetch existing records: ${e}`);
-    result.errors += totalReceived;
-    return result;
-  }
-
-  // A cached or disabled upload phase leaves the URL maps empty for assets whose
-  // objects are already on R2 — never let that overwrite a URL the DB already has.
-  // (The bulk upsert must send uniform keys per batch, so fill rather than omit.)
-  function preserveExistingUrls(records: Record<string, unknown>[]): void {
-    for (const rec of records) {
-      const prev = existingMap.get((rec.shortcode as string).trim());
-      if (!prev) continue;
-      if (rec.thumbnail_url == null && prev.thumbnail_url) rec.thumbnail_url = prev.thumbnail_url;
-      if (rec.download_url == null && prev.download_url) rec.download_url = prev.download_url;
-      if (Array.isArray(rec.download_urls) && rec.download_urls.length === 0 && prev.download_urls?.length) {
-        rec.download_urls = prev.download_urls;
-      }
-    }
-  }
-  preserveExistingUrls(phase1Records);
-
-  // Phase 1 upsert
-  const p1Create = phase1Records.filter(r => !existingMap.has(r.shortcode as string)).length;
-  appendLog('dim', `  Phase 1 — ${p1Create} to create · ${phase1Records.length - p1Create} to update`);
-  for (let i = 0; i < phase1Records.length; i += BATCH) {
-    const batch    = phase1Records.slice(i, i + BATCH);
-    const batchNum = Math.floor(i / BATCH) + 1;
-    try {
-      const res = await sbFetch(`${base}/assets?on_conflict=client_id,shortcode`, {
-        method:  'POST',
-        headers: { ...headers, Prefer: 'resolution=merge-duplicates,return=minimal' },
-        body:    JSON.stringify(batch),
-      });
-      if (!res.ok) {
-        appendLog('error', `  ✕  Phase 1 batch ${batchNum}: ${await res.text()}`);
-        result.errors += batch.length;
-      } else {
-        const created = batch.filter(r => !existingMap.has(r.shortcode as string)).length;
-        result.created += created;
-        result.updated += batch.length - created;
-        appendLog('success', `  ✓  Phase 1 batch ${batchNum}: ${created} new · ${batch.length - created} updated`);
-      }
-    } catch (e) {
-      appendLog('error', `  ✕  Phase 1 batch ${batchNum}: ${e}`);
-      result.errors += batch.length;
-    }
-  }
-
-  // ── Phase 2: gallery children (parent_id set) ──────────────────────────────
-  let childRecords: Record<string, unknown>[] = [];
-  if (legacyGalleries.length > 0) {
-    const parentShortcodes = legacyGalleries.map(g => parseAssetForSupabase(g.name, vocab).shortcode);
-    const parentIdMap = new Map<string, string>(); // parentShortcode → uuid
-
-    // Primary: existingMap already has pre-existing parent IDs — no extra network request
-    for (const sc of parentShortcodes) {
-      const row = existingMap.get(sc);
-      if (row?.id) parentIdMap.set(sc, row.id);
-    }
-    // Fallback: for parents newly created in Phase 1, fetch individually via eq. (safe with special chars)
-    const missing = parentShortcodes.filter(sc => !parentIdMap.has(sc));
-    for (const sc of missing) {
-      try {
-        const res = await sbFetch(
-          `${base}/assets?client_id=eq.${clientId}&shortcode=eq.${encodeURIComponent(sc)}&select=id&limit=1`,
-          { headers },
-        );
-        if (res.ok) {
-          const rows = await res.json() as Array<{ id: string }>;
-          if (rows[0]?.id) parentIdMap.set(sc, rows[0].id);
-        }
-      } catch { /* skip this parent */ }
-    }
-    appendLog('dim', `  Gallery parents: ${parentIdMap.size}/${legacyGalleries.length} IDs resolved`);
-
-    const childSeen = new Map<string, Record<string, unknown>>(); // shortcode → record (dedup)
-    for (const g of legacyGalleries) {
-      const parentShortcode = parseAssetForSupabase(g.name, vocab).shortcode;
-      const parentId = parentIdMap.get(parentShortcode);
-      if (!parentId) {
-        appendLog('error', `  ✕  No parent ID for gallery "${g.name}" — children skipped`);
-        continue;
-      }
-      const pp = parseAssetForSupabase(g.name, vocab);
-      for (const childStem of g.childStems) {
-        const sc = `${parentShortcode}|${childStem}`;
-        if (childSeen.has(sc)) continue; // skip duplicate stems within same gallery
-        const cp = parseAssetForSupabase(childStem, vocab);
-        childSeen.set(sc, {
-          client_id:     clientId,
-          shortcode:     sc,
-          name:          cp.name || childStem,
-          entities:      cp.entities.length ? cp.entities : pp.entities,
-          formats:       cp.formats.length  ? cp.formats  : pp.formats,
-          angles:        cp.angles.length   ? cp.angles   : pp.angles,
-          tags:          cp.tags.length     ? cp.tags     : pp.tags,
-          version:       cp.version || pp.version,
-          status:        'published',
-          perm:          'public',
-          thumbnail_url: cdnUrls?.get(childStem) ?? null,
-          download_url:  originalUrls?.get(childStem) ?? null,
-          download_urls: cloudUrls?.get(childStem) ?? [],
-          parent_id:     parentId,
-        });
-      }
-    }
-    childRecords = [...childSeen.values()];
-    preserveExistingUrls(childRecords);
-
-    appendLog('dim', `  Phase 2 — ${childRecords.length} child record(s)`);
-    for (let i = 0; i < childRecords.length; i += BATCH) {
-      const batch    = childRecords.slice(i, i + BATCH);
-      const batchNum = Math.floor(i / BATCH) + 1;
-      try {
-        const res = await sbFetch(`${base}/assets?on_conflict=client_id,shortcode`, {
-          method:  'POST',
-          headers: { ...headers, Prefer: 'resolution=merge-duplicates,return=minimal' },
-          body:    JSON.stringify(batch),
-        });
-        if (!res.ok) {
-          appendLog('error', `  ✕  Phase 2 batch ${batchNum}: ${await res.text()}`);
-          result.errors += batch.length;
-        } else {
-          const created = batch.filter(r => !existingMap.has(r.shortcode as string)).length;
-          result.created += created;
-          result.updated += batch.length - created;
-          appendLog('success', `  ✓  Phase 2 batch ${batchNum}: ${created} new · ${batch.length - created} updated`);
-        }
-      } catch (e) {
-        appendLog('error', `  ✕  Phase 2 batch ${batchNum}: ${e}`);
-        result.errors += batch.length;
-      }
-    }
-
-    // Include child shortcodes in the "current" set for stale detection (placeholder row)
-    for (const cr of childRecords) {
-      existingMap.set(cr.shortcode as string, { id: '', shortcode: cr.shortcode as string, thumbnail_url: null, download_key: null });
-    }
-  }
-
-  // ── Stale detection ────────────────────────────────────────────────────────
-  const currentShortcodes = new Set([
-    ...phase1Records.map(r => r.shortcode as string),
-    ...legacyGalleries.flatMap(g => {
-      const ps = parseAssetForSupabase(g.name, vocab).shortcode;
-      return g.childStems.map(cs => `${ps}|${cs}`);
-    }),
-  ]);
-
-  const staleRows = [...existingMap.entries()]
-    .filter(([sc, row]) => !currentShortcodes.has(sc) && row.id)
-    .map(([, row]) => row);
-
-  // Collect R2 object keys to delete (returned to caller; actual deletion handled by pipeline)
-  function urlToObjectKey(url: string | null): string | null {
-    if (!url) return null;
-    const path = url.split('?')[0];
-    const m = path.match(/(?:thumbnails|originals)\/.+/);
-    return m ? m[0] : null;
-  }
-
-  // Protect R2 objects still referenced by any active record.
-  // Gallery parents share their thumbnail_url with the first child — deleting a stale
-  // parent record must not remove a CDN object that an active child still points to.
-  const activeObjectKeys = new Set<string>();
-  for (const [sc, row] of existingMap.entries()) {
-    if (currentShortcodes.has(sc)) {
-      const k = urlToObjectKey(row.thumbnail_url);
-      if (k) activeObjectKeys.add(k);
-    }
-  }
-  for (const r of phase1Records) {
-    const k = urlToObjectKey(r.thumbnail_url as string | null);
-    if (k) activeObjectKeys.add(k);
-  }
-  for (const r of childRecords) {
-    const k = urlToObjectKey(r.thumbnail_url as string | null);
-    if (k) activeObjectKeys.add(k);
-  }
-
-  const staleObjectKeys: string[] = [
-    ...staleRows.map(r => urlToObjectKey(r.thumbnail_url))
-      .filter((k): k is string => !!k && !activeObjectKeys.has(k)),
-    ...staleRows.map(r => r.download_key).filter(Boolean) as string[],
-  ];
-  result.staleObjectKeys = staleObjectKeys;
-
-  appendLog('dim', `  ${staleRows.length} stale → delete · ${staleObjectKeys.length} CDN object(s) to remove`);
-
-  // Delete stale records — ON DELETE CASCADE removes any gallery children automatically
-  for (let i = 0; i < staleRows.length; i += BATCH) {
-    const batch    = staleRows.slice(i, i + BATCH);
-    const batchNum = Math.floor(i / BATCH) + 1;
-    try {
-      const res = await sbFetch(`${base}/assets?id=in.(${batch.map(r => r.id).join(',')})`, {
-        method:  'DELETE',
-        headers: { ...headers, Prefer: 'return=minimal' },
-      });
-      if (!res.ok) {
-        appendLog('error', `  ✕  Delete batch ${batchNum}: ${await res.text()}`);
-        result.errors += batch.length;
-      } else {
-        appendLog('dim', `  ✕  Deleted ${batch.length} stale record(s)`);
-        result.deleted += batch.length;
-      }
-    } catch (e) {
-      appendLog('error', `  ✕  Delete batch ${batchNum}: ${e}`);
-      result.errors += batch.length;
-    }
-  }
-
-  /* ═══════════════ Stable-identity groups (folder-anchored) ═══════════════
-     Matched/written independently of the legacy pass above: keyed by
-     `${stable_id}:${child_id}`, never by shortcode. A folder disappearing
-     marks its rows `disconnected` (soft) rather than deleting them outright —
-     unlike the legacy hard-delete above, since the entire point of this
-     identity is to survive transient disk changes without orphaning
+  /* ═══════════════ Sync ═══════════════
+     Rows are matched by `${stable_id}:${child_id}` — the package folder's hash plus
+     the manifest's per-file id — never by shortcode, so renaming a file or retitling
+     an asset keeps its row. A folder disappearing marks its rows `disconnected`
+     (soft) rather than deleting them, so transient disk changes never orphan
      ratings/comments/asset_events/approvals. */
-  if (useStable && (stableSingles.length || stableGalleries.length)) {
-    type StableRow = { id: string; stable_id: string; child_id: string | null; thumbnail_url: string | null; download_key?: string | null; parent_id: string | null; variant_of: string | null };
+  if (stableSingles.length || stableGalleries.length) {
+    type StableRow = { id: string; stable_id: string; child_id: string; thumbnail_url: string | null; download_key?: string | null; parent_id: string | null; variant_of: string | null };
     const stableExistingMap = new Map<string, StableRow>(); // `${stable_id}:${child_id}` → row
     try {
       const rows = await fetchAllForClient<StableRow>(
-        base, 'assets?status=neq.archived&stable_id=not.is.null', clientId,
+        base, 'assets?status=neq.archived', clientId,
         'id,stable_id,child_id,thumbnail_url,parent_id,variant_of', headers,
       );
-      for (const r of rows) stableExistingMap.set(`${r.stable_id}:${r.child_id ?? ''}`, r);
+      for (const r of rows) stableExistingMap.set(`${r.stable_id}:${r.child_id}`, r);
     } catch (e) {
       appendLog('error', `  ✕  Could not fetch existing stable-identity records: ${e}`);
     }
@@ -853,7 +662,7 @@ export async function exportAssetsToSupabase(
     const parentWrites: Array<{ key: string; record: Record<string, unknown> }> = [];
     // Two distinct relationships, per client feedback: a gallery (many related-but-distinct
     // files under OUT/<subfolder>/, e.g. 60 event photos) needs a grid/carousel — that's
-    // `parent_id`, the same field/UI legacy clients already use. A variant (several files
+    // `parent_id`. A variant (several files
     // sitting directly in OUT — the same deliverable in different renditions, e.g. format
     // or background options) needs a picker — that's `variant_of`. Conflating them made the
     // web portal show a 60-chip picker for what should be a photo grid.
@@ -866,9 +675,9 @@ export async function exportAssetsToSupabase(
     // gallery subfolder) — per Task 3, they're variants of one logical asset, not separate
     // assets. Group by dir first so we can single out the primary (child_id 'c1') before
     // deciding which write path (parent vs. variant) each one takes.
-    const singlesByDir = new Map<string, Array<{ stem: string; stableId: string }>>();
-    for (const { stem, packageDir, stableId } of stableSingles) {
-      (singlesByDir.get(packageDir) ?? singlesByDir.set(packageDir, []).get(packageDir)!).push({ stem, stableId });
+    const singlesByDir = new Map<string, Array<{ stem: string; absPath: string; stableId: string }>>();
+    for (const { stem, absPath, packageDir, stableId } of stableSingles) {
+      (singlesByDir.get(packageDir) ?? singlesByDir.set(packageDir, []).get(packageDir)!).push({ stem, absPath, stableId });
     }
 
     for (const [packageDir, items] of singlesByDir) {
@@ -876,11 +685,9 @@ export async function exportAssetsToSupabase(
       const state    = await manifestState(packageDir, stableId);
 
       // Multiple files that differ only by trailing version (v1-2-1, v1-3-3, v1-3-5, ...)
-      // are version history of ONE asset, not variants — collapse to the highest, exactly
-      // like the legacy shortcode path always has (there, they silently overwrote one
-      // another in the same Map). Older versions are still tracked, just via
-      // syncVersionHistory, not as separate stable-identity rows. Only files that remain
-      // genuinely distinct after this pass are true variants.
+      // are version history of ONE asset, not variants — collapse to the highest. Older
+      // versions are still tracked, just via syncVersionHistory, not as separate rows.
+      // Only files that remain genuinely distinct after this pass are true variants.
       const highestStems = new Set(filterHighestVersions(items.map(i => i.stem)));
       // Also collapse duplicate stems: groupAssets emits one entry per FILE, so
       // extension pairs (foo.pdf + foo.png) repeat a stem — resolving the stem
@@ -898,21 +705,13 @@ export async function exportAssetsToSupabase(
       const ordered  = [...deduped].sort((a, b) => a.stem.localeCompare(b.stem));
 
       const resolvedItems: Array<{ stem: string; childId: string; record: Record<string, unknown> }> = [];
-      for (const { stem } of ordered) {
-        const absPath  = identity!.filePaths.get(stem);
-        const filename = absPath?.split('/').pop() ?? stem;
-        const resolved = absPath
-          ? await resolveChildId(state.manifest, filename, absPath, state.used)
-          : { childId: nextChildId(state.used), sha256: '', dirty: true };
+      for (const { stem, absPath } of ordered) {
+        const filename = absPath.split('/').pop()!;
+        const resolved = await resolveChildId(state.manifest, filename, absPath, state.used);
         if (resolved.dirty) { state.manifest.children[filename] = { child_id: resolved.childId, sha256: resolved.sha256 }; state.dirty = true; }
 
         const key    = `${stableId}:${resolved.childId}`;
         const record = buildRecord(stem, { stable_id: stableId, child_id: resolved.childId });
-        // The old client_id+shortcode unique constraint still exists (legacy upserts rely on it
-        // for their on_conflict arbiter) — suffix with the now-guaranteed-unique stable key so
-        // two different stable-identity assets can never collide just because they render the
-        // same display text (e.g. two variants, or two unrelated assets with the same name).
-        record.shortcode = `${record.shortcode} __${key}`;
         currentStableKeys.add(key);
         resolvedItems.push({ stem, childId: resolved.childId, record });
       }
@@ -950,7 +749,7 @@ export async function exportAssetsToSupabase(
       // 'c1' just reclaimed primary status from a stand-in. Without this it stays disconnected
       // but still top-of-hierarchy forever: a phantom duplicate card sitting next to the real one.
       for (const row of existingByStableId.get(stableId) ?? []) {
-        const rowKey = `${row.stable_id}:${row.child_id ?? ''}`;
+        const rowKey = `${row.stable_id}:${row.child_id}`;
         if (rowKey === primaryKey) continue;
         if (row.parent_id !== null || row.variant_of !== null) continue;
         if (currentStableKeys.has(rowKey)) continue; // already queued as an ordinary variant above
@@ -958,24 +757,24 @@ export async function exportAssetsToSupabase(
       }
     }
 
-    for (const { group, packageDir, stableId } of stableGalleries) {
-      const state = await manifestState(packageDir, stableId);
-      // One parent slot per gallery folder path — two galleries in the same package
-      // (e.g. Selected vs All) must not collapse onto a shared __gallery_parent__.
-      const parentSlot = `__gallery__:${group.name}`;
-      let parentChildId = state.manifest.children[parentSlot]?.child_id;
-      if (!parentChildId) {
-        parentChildId = nextChildId(state.used);
-        state.manifest.children[parentSlot] = { child_id: parentChildId, sha256: '' };
-        state.dirty = true;
-      } else {
-        state.used.add(parentChildId);
-      }
+    // Group by package so gallery-folder renames can reuse orphaned parent slots.
+    const galleriesByPackage = new Map<string, typeof stableGalleries>();
+    for (const entry of stableGalleries) {
+      const list = galleriesByPackage.get(entry.packageDir) ?? [];
+      list.push(entry);
+      galleriesByPackage.set(entry.packageDir, list);
+    }
 
-      const firstStableChild       = group.childStems.length > 0 ? group.childStems[0] : null;
-      const firstChildThumb        = firstStableChild ? (cdnUrls?.get(firstStableChild) ?? null) : null;
-      const firstChildOriginalUrl  = firstStableChild ? (originalUrls?.get(firstStableChild) ?? null) : null;
-      const firstChildCloudUrls    = firstStableChild ? (cloudUrls?.get(firstStableChild) ?? []) : [];
+    for (const [, packageGalleries] of galleriesByPackage) {
+      const pathsInPackage = new Set(packageGalleries.map(g => g.group.name));
+      for (const { group, packageDir, stableId } of packageGalleries) {
+      const state = await manifestState(packageDir, stableId);
+      const parentChildId = resolveGalleryParentChildId(state, group.name, pathsInPackage);
+
+      const firstChild             = group.children[0]?.stem ?? null;
+      const firstChildThumb        = firstChild ? (cdnUrls?.get(firstChild) ?? null) : null;
+      const firstChildOriginalUrl  = firstChild ? (originalUrls?.get(firstChild) ?? null) : null;
+      const firstChildCloudUrls    = firstChild ? (cloudUrls?.get(firstChild) ?? []) : [];
       // Nested gallery paths (Galleries/Selected) — parse the leaf folder for tags/name.
       const leafFolder = group.name.includes('/') ? group.name.slice(group.name.lastIndexOf('/') + 1) : group.name;
       const pp         = parseAssetForSupabase(leafFolder, vocab);
@@ -996,7 +795,7 @@ export async function exportAssetsToSupabase(
         key: parentKey,
         record: {
           client_id: clientId, stable_id: stableId, child_id: parentChildId,
-          shortcode: `${pp.shortcode || pkg?.shortcode || leafFolder} __${parentKey}`,
+          shortcode: pp.shortcode || pkg?.shortcode || leafFolder,
           name: displayName,
           entities: uniq([...(pkg?.entities ?? []), ...pp.entities]),
           formats:  uniq([...(pkg?.formats ?? []),  ...pp.formats]),
@@ -1008,15 +807,13 @@ export async function exportAssetsToSupabase(
         },
       });
 
-      for (const childStem of group.childStems) {
-        const absPath  = identity!.filePaths.get(childStem);
-        const filename = absPath?.split('/').pop() ?? childStem.split('/').pop() ?? childStem;
-        const resolved = absPath
-          ? await resolveChildId(state.manifest, filename, absPath, state.used)
-          : { childId: nextChildId(state.used), sha256: '', dirty: true };
+      for (const child of group.children) {
+        const absPath  = child.absPath;
+        const filename = absPath.split('/').pop()!;
+        const resolved = await resolveChildId(state.manifest, filename, absPath, state.used);
         if (resolved.dirty) { state.manifest.children[filename] = { child_id: resolved.childId, sha256: resolved.sha256 }; state.dirty = true; }
 
-        const fileStem = filename.replace(/\.[^.]+$/, '');
+        const fileStem = child.stem;
         const cp      = parseAssetForSupabase(fileStem, vocab);
         const childKey = `${stableId}:${resolved.childId}`;
         currentStableKeys.add(childKey);
@@ -1024,17 +821,18 @@ export async function exportAssetsToSupabase(
           key: childKey, parentKey, relation: 'parent_id',
           record: {
             client_id: clientId, stable_id: stableId, child_id: resolved.childId,
-            shortcode: `${pp.shortcode}|${fileStem} __${childKey}`, name: cp.name || fileStem,
+            shortcode: `${pp.shortcode}|${fileStem}`, name: cp.name || fileStem,
             entities: cp.entities.length ? cp.entities : pp.entities,
             formats:  cp.formats.length  ? cp.formats  : pp.formats,
             angles:   cp.angles.length   ? cp.angles   : pp.angles,
             tags:     cp.tags.length     ? cp.tags     : pp.tags,
             version:  cp.version || pp.version,
-            status: 'published', perm: 'public', thumbnail_url: cdnUrls?.get(childStem) ?? cdnUrls?.get(fileStem) ?? null,
-            download_url: originalUrls?.get(childStem) ?? originalUrls?.get(fileStem) ?? null,
-            download_urls: cloudUrls?.get(childStem) ?? cloudUrls?.get(fileStem) ?? [],
+            status: 'published', perm: 'public', thumbnail_url: cdnUrls?.get(fileStem) ?? null,
+            download_url: originalUrls?.get(fileStem) ?? null,
+            download_urls: cloudUrls?.get(fileStem) ?? [],
           },
         });
+      }
       }
     }
 
@@ -1149,7 +947,7 @@ export async function exportAssetsToSupabase(
         .map(t => parentIdByKey.get(`${t.stableId}:c1`))
         .filter((id): id is string => !!id);
       const statsMap = await fetchAssetStats(primaryIds, config);
-      const vocabCtx = buildVocabContext(vocab);
+      const vocabCtx = buildVocabMap(vocab);
       let written = 0;
       for (const t of readmeTargets) {
         const primaryId = parentIdByKey.get(`${t.stableId}:c1`);
@@ -1192,7 +990,7 @@ export async function exportAssetsToSupabase(
   }
 
   appendLog('section',
-    `━━━ SUPABASE DONE — ${result.created} new · ${result.updated} updated · ${result.disconnected} disconnected · ${result.deleted} deleted · ${result.errors} errors ━━━`,
+    `━━━ SUPABASE DONE — ${result.created} new · ${result.updated} updated · ${result.disconnected} disconnected · ${result.errors} errors ━━━`,
   );
   return result;
 }
@@ -1448,29 +1246,27 @@ export async function syncVersionHistory(
 
   const base     = `${config.url}/rest/v1`;
   const headers  = makeHeaders(config.anonKey);
-  const vocabCtx = buildVocabContext(vocab);
+  const vocabCtx = buildVocabMap(vocab);
   const today    = new Date().toISOString().slice(0, 10);
 
-  // Step 1: Fetch asset id+shortcode for this client
+  // Step 1: Fetch asset identities for this client. Keyed `${stable_id}:${shortcode}` to
+  // match scanVersionMap — the folder hash scopes the display text to one package, so two
+  // assets rendering the same name can't collapse onto a single history.
   appendLog('dim', '  Fetching asset IDs…');
-  const shortcodeToId = new Map<string, string>(); // display shortcode → asset uuid
+  const assetKeyToId = new Map<string, string>();
   try {
-    const rows = await fetchAllForClient<{ id: string; shortcode: string }>(
-      base, 'assets', clientId, 'id,shortcode', headers,
+    const rows = await fetchAllForClient<{ id: string; shortcode: string; stable_id: string }>(
+      base, 'assets', clientId, 'id,shortcode,stable_id', headers,
     );
-    // Stable-identity rows carry a " __<hash>:<child>" suffix on shortcode (kept unique
-    // per the identity key, since it's display-only there) — strip it back off so this
-    // matches scanVersionMap's plain, version-stripped keys the same way a legacy row's
-    // shortcode already does.
-    for (const r of rows) shortcodeToId.set(r.shortcode.trim().replace(/ __[0-9a-f]{8}:c\d+$/, ''), r.id);
+    for (const r of rows) assetKeyToId.set(`${r.stable_id}:${r.shortcode.trim()}`, r.id);
   } catch (e) {
     appendLog('error', `  ✕  Failed to fetch asset IDs: ${e}`);
     return;
   }
-  appendLog('dim', `  ${shortcodeToId.size} asset(s) found`);
+  appendLog('dim', `  ${assetKeyToId.size} asset(s) found`);
 
   // Step 2: Fetch existing VH rows for these assets
-  const assetIds = [...shortcodeToId.values()];
+  const assetIds = [...assetKeyToId.values()];
   const existingVH = new Map<string, Map<string, { id: string; status: string }>>(); // assetId → version → record
   try {
     const rows = await fetchVHForAssets(base, assetIds, headers);
@@ -1486,17 +1282,18 @@ export async function syncVersionHistory(
   const totalExisting = [...existingVH.values()].reduce((n, m) => n + m.size, 0);
   appendLog('dim', `  ${totalExisting} VH record(s) loaded`);
 
-  const assetIdToShortcode = new Map([...shortcodeToId.entries()].map(([sc, id]) => [id, sc]));
+  const assetIdToKey = new Map([...assetKeyToId.entries()].map(([key, id]) => [id, key]));
 
   const toUpsert:     Record<string, unknown>[] = [];
   const toDisconnect: string[]                  = [];
   const toRemove:     string[]                  = [];
 
   // Step 3: Diff desired state vs existing
-  for (const [sc, av] of versionMap) {
-    const assetId = shortcodeToId.get(sc);
+  for (const [key, av] of versionMap) {
+    const sc      = av.shortcode;
+    const assetId = assetKeyToId.get(key);
     if (!assetId) {
-      appendLog('dim', `  ⚠  No Supabase asset for "${sc}" — VH skipped`);
+      appendLog('dim', `  ⚠  No Supabase asset for "${sc}" (${key}) — VH skipped`);
       continue;
     }
 
@@ -1540,8 +1337,8 @@ export async function syncVersionHistory(
 
   // Assets entirely gone from source → Removed
   for (const [assetId, byVersion] of existingVH) {
-    const sc = assetIdToShortcode.get(assetId);
-    if (!sc || !versionMap.has(sc)) {
+    const key = assetIdToKey.get(assetId);
+    if (!key || !versionMap.has(key)) {
       for (const [, rec] of byVersion) {
         if (rec.status !== 'Removed') toRemove.push(rec.id);
       }

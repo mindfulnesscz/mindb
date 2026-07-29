@@ -1,9 +1,45 @@
 import { useState, useRef, useEffect } from 'react'
-import { useAuth, type EmailAuthType } from '../../context/AuthContext'
+import { useAuth, type EmailAuthType, type OAuthProvider } from '../../context/AuthContext'
 
 type Step = 'email' | 'checking' | 'extra' | 'sending' | 'sent'
 
-const INDUSTRY_OPTIONS = [
+export const OAUTH_PROVIDERS: { id: OAuthProvider; label: string; icon: React.ReactNode }[] = [
+  {
+    id: 'azure',
+    label: 'Microsoft',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden>
+        <rect x="1" y="1" width="6.5" height="6.5" fill="#F25022" />
+        <rect x="8.5" y="1" width="6.5" height="6.5" fill="#7FBA00" />
+        <rect x="1" y="8.5" width="6.5" height="6.5" fill="#00A4EF" />
+        <rect x="8.5" y="8.5" width="6.5" height="6.5" fill="#FFB900" />
+      </svg>
+    ),
+  },
+  {
+    id: 'google',
+    label: 'Google',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden>
+        <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.6 30.2 0 24 0 14.6 0 6.4 5.4 2.5 13.3l7.8 6c1.9-5.6 7.1-9.8 13.7-9.8z" />
+        <path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.5 3-2.2 5.5-4.7 7.2l7.3 5.7c4.3-4 6.7-9.8 6.7-17.4z" />
+        <path fill="#FBBC05" d="M10.3 28.3c-.5-1.4-.8-3-.8-4.3s.3-2.9.8-4.3l-7.8-6C.9 16.9 0 20.3 0 24s.9 7.1 2.5 10.3l7.8-6z" />
+        <path fill="#34A853" d="M24 48c6.2 0 11.4-2 15.2-5.5l-7.3-5.7c-2 1.4-4.7 2.3-7.9 2.3-6.6 0-11.8-4.2-13.7-9.8l-7.8 6C6.4 42.6 14.6 48 24 48z" />
+      </svg>
+    ),
+  },
+  {
+    id: 'github',
+    label: 'GitHub',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z" />
+      </svg>
+    ),
+  },
+]
+
+export const INDUSTRY_OPTIONS = [
   'Advertising & Marketing',
   'Architecture & Design',
   'Consumer Goods',
@@ -51,12 +87,13 @@ interface SignInModalProps {
 }
 
 export default function SignInModal({ redirectTo, clientId, onClose }: SignInModalProps = {}) {
-  const { checkEmail, sendMagicLink } = useAuth()
+  const { checkEmail, sendMagicLink, signInWithProvider } = useAuth()
 
   const [step,     setStep]     = useState<Step>('email')
   const [email,    setEmail]    = useState('')
   const [, setAuthType] = useState<EmailAuthType | null>(null)
   const [error,    setError]    = useState('')
+  const [oauthBusy, setOauthBusy] = useState<OAuthProvider | null>(null)
 
   // Extra fields for unknown users
   const [name,     setName]     = useState('')
@@ -68,6 +105,17 @@ export default function SignInModal({ redirectTo, clientId, onClose }: SignInMod
   const emailRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { emailRef.current?.focus() }, [])
+
+  async function handleOAuth(provider: OAuthProvider) {
+    setError('')
+    setOauthBusy(provider)
+    const err = await signInWithProvider(provider, redirectTo)
+    // On success the browser redirects to the provider; only errors return here.
+    if (err) {
+      setError(err)
+      setOauthBusy(null)
+    }
+  }
 
   async function handleEmailSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -148,7 +196,7 @@ export default function SignInModal({ redirectTo, clientId, onClose }: SignInMod
               ? `We sent a magic link to ${email}`
               : step === 'extra'
               ? 'Tell us a bit about yourself to get access.'
-              : 'Enter your email to receive a magic link.'}
+              : 'Continue with a provider, or use your email.'}
           </p>
         </div>
 
@@ -174,6 +222,29 @@ export default function SignInModal({ redirectTo, clientId, onClose }: SignInMod
               >
                 Use a different email
               </button>
+            </div>
+          )}
+
+          {/* ── OAuth providers ── */}
+          {(step === 'email' || step === 'checking') && (
+            <div className="space-y-2 mb-5">
+              {OAUTH_PROVIDERS.map(p => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => handleOAuth(p.id)}
+                  disabled={oauthBusy !== null || step === 'checking'}
+                  className="w-full flex items-center justify-center gap-2.5 py-2.5 text-sm font-sans font-semibold border border-cosmos-black rounded-sm bg-bg text-cosmos-black hover:bg-surface-sunken transition-colors disabled:opacity-50"
+                >
+                  {p.icon}
+                  {oauthBusy === p.id ? 'Redirecting…' : `Continue with ${p.label}`}
+                </button>
+              ))}
+              <div className="flex items-center gap-3 pt-2">
+                <span className="h-px flex-1 bg-border" />
+                <span className="text-[10px] font-sans uppercase tracking-label text-text-muted">or</span>
+                <span className="h-px flex-1 bg-border" />
+              </div>
             </div>
           )}
 
