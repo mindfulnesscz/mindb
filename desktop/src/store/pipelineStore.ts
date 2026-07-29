@@ -40,7 +40,6 @@ export interface SupabaseSyncSummary {
   created:      number;
   updated:      number;
   disconnected: number; // stable-identity rows soft-marked disconnected this run
-  deleted:      number; // legacy rows hard-deleted this run
   errors:       number;
 }
 

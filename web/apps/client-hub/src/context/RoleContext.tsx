@@ -4,7 +4,7 @@ import { MOCK_CLIENTS } from '@dc-hub/asset-library'
 import { supabase, isConfigured } from '../lib/supabase'
 import { toClient } from '../services/clientService'
 import type { ClientRow } from '../lib/database.types'
-import { normalizeRole } from '../services/userService'
+import { asRole } from '../services/userService'
 import { useAuth } from './AuthContext'
 
 interface RoleContextValue {
@@ -35,7 +35,7 @@ export function RoleProvider({ children }: { children: ReactNode }) {
   )
 
   const role: Role = configured
-    ? normalizeRole(profile?.role ?? 'public')
+    ? asRole(profile?.role ?? 'public')
     : demoRole
   const user = configured && profile
     ? { name: profile.name, initials: profile.initials }
@@ -48,7 +48,7 @@ export function RoleProvider({ children }: { children: ReactNode }) {
       .from('clients')
       .select('*')
       .eq('id', profile.client_id)
-      .single()
+      .maybeSingle()
       .then(({ data }) => {
         if (data) setActiveClient(toClient(data as ClientRow))
       })

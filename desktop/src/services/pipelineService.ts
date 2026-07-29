@@ -14,12 +14,12 @@ import type { LogType } from '../store/pipelineStore';
 import type { RunStats } from '../store/pipelineStore';
 import type { VocabularyData } from '../domain/vocabulary';
 import { filterHighestVersions } from '../domain/version';
-import { buildVocabContext, translateExportName, parseFilename } from '../domain/filenameTranslator';
+import { buildVocabMap, translateExportName, parseFilename } from '../domain/filenameTranslator';
 import { runObsidian } from './damService';
 import { uploadDropboxFile, uploadOneDriveFile, uploadGDriveFile } from './cloudService';
 import type { CloudDestination, DestExportLayout } from '../domain/client';
 import { resolveExportShape } from '../domain/client';
-import { stripStableId } from '../domain/stableId';
+import { stripStableId, extractStableId } from '../domain/stableId';
 import { isOutFolder as namingIsOutFolder, isPackageFolder as namingIsPackageFolder, stripWorkflowPrefix } from '../domain/naming';
 import { resolveCdnIdentity } from './supabaseService';
 import { storageKey } from './pipeline/storageKey';
@@ -58,7 +58,6 @@ export interface RunContext {
   /** Local publish shape from the checked local destination. */
   localExportLayout?: DestExportLayout;
   localIncludePackages?: boolean;
-  identityMigrated?: boolean;
   cdnIdentity?:      Map<string, { stableId: string; childId: string }>;
   storageKeyPrefix?: string;  // mirrors r2.keyPrefix when CDN enabled
 }
@@ -260,7 +259,7 @@ async function purgePackageMirror(
 async function syncPackageFromOut(
   pkg: string,
   s: AppSettings,
-  vocabMap: ReturnType<typeof buildVocabContext>,
+  vocabMap: ReturnType<typeof buildVocabMap>,
   dryRun: boolean,
   appendLog: (t: LogType, m: string) => void,
   onError?: (file: string, reason: string) => void,
@@ -383,7 +382,7 @@ async function runDistribute(ctx: RunContext, stats: RunStats): Promise<void> {
 
   appendLog('info', `  Found ${packages.length} package folder(s)`);
   const total = packages.length;
-  const vocabMap = buildVocabContext(ctx.vocab);
+  const vocabMap = buildVocabMap(ctx.vocab);
 
   for (let idx = 0; idx < packages.length; idx++) {
     const pkg = packages[idx];
@@ -557,7 +556,7 @@ async function runPublish(ctx: RunContext, stats: RunStats): Promise<void> {
   appendLog('dim', `  Layout: ${layout}${includePackages ? ' + nested packages' : ''} · always highest version only`);
 
   const livePub = new Set<string>();
-  const vocabMap = buildVocabContext(vocab);
+  const vocabMap = buildVocabMap(vocab);
 
   async function copyOne(srcPath: string, fileDest: string, logName: string) {
     if (livePub.has(fileDest)) { stats.skipped += 1; return; }
@@ -876,6 +875,8 @@ export interface VersionEntry {
 }
 
 export interface AssetVersions {
+  /** Display shortcode (version-stripped stem) — the map is keyed by identity, not by this. */
+  shortcode: string;
   current: VersionEntry | null;
   history: VersionEntry[];
 }
@@ -885,18 +886,33 @@ export async function scanVersionMap(
   vocab:    VocabularyData,
   settings: AppSettings,
 ): Promise<Map<string, AssetVersions>> {
+  // Keyed `${stableId}:${shortcode}`, not by shortcode alone: display text repeats freely
+  // across packages (and shortcode carries no identity), so a bare-shortcode key silently
+  // merged two unrelated assets' version histories into whichever one was scanned last.
   const vmap     = new Map<string, AssetVersions>();
-  const vocabCtx = buildVocabContext(vocab);
+  const vocabCtx = buildVocabMap(vocab);
+
+  /** stable_id of the package folder (OUT's parent) this file sits under, if any. */
+  function stableIdFor(file: string): string | null {
+    const parts = file.replace(/\\/g, '/').split('/');
+    for (let i = parts.length - 1; i >= 0; i--) {
+      if (isOutFolder(parts[i], settings)) return extractStableId(parts[i - 1] ?? '');
+    }
+    return null;
+  }
 
   function addEntry(file: string, name: string, isHistory: boolean) {
     if (!isPublishableFile(name) || name.includes('-thumb')) return;
+    const stableId = stableIdFor(file);
+    if (!stableId) return; // no folder identity — nothing in the DB to attach history to
     const dot       = name.lastIndexOf('.');
     const stem      = dot > 0 ? name.slice(0, dot) : name;
     const parsed    = parseFilename(stem, vocabCtx);
     const version   = parsed.version ?? '';
     const shortcode = stripVersionSuffix(stem);
+    const key       = `${stableId}:${shortcode}`;
     const entry: VersionEntry = { file, stem, version, shortcode };
-    const av = vmap.get(shortcode) ?? { current: null, history: [] };
+    const av = vmap.get(key) ?? { shortcode, current: null, history: [] };
     if (isHistory) {
       av.history.push(entry);
     } else {
@@ -909,7 +925,7 @@ export async function scanVersionMap(
         av.history.push(entry);
       }
     }
-    vmap.set(shortcode, av);
+    vmap.set(key, av);
   }
 
   async function walkForVH(dir: string) {
@@ -1115,12 +1131,6 @@ async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<void> {
     return;
   }
 
-  appendLog('dim', `  inventory map: ${ctx.cdnUrls?.size ?? 0} entries`);
-  if (ctx.cdnUrls && ctx.cdnUrls.size > 0) {
-    const sample = [...ctx.cdnUrls.keys()].slice(0, 2);
-    appendLog('dim', `  sample stems: ${sample.map(s => `"${s}"`).join(', ')}`);
-  }
-
   let uploaded = 0;
   let skipped  = 0; // no local thumb file, or already known uploaded per DB inventory
   let cached   = 0; // local mtime+size match last upload — skipped without hashing or a network call
@@ -1144,13 +1154,16 @@ async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<void> {
       }
       const fileName = thumbPath.split('/').pop()!;
       const identity = ctx.cdnIdentity?.get(stem);
-      // Stable-identity key when resolved (rename-proof) — else today's filename-based key.
-      const objectKey = storageKey(
-        r2.keyPrefix,
-        identity
-          ? `thumbnails/${identity.stableId}/${identity.childId}.webp`
-          : `thumbnails/${fileName}`,
-      );
+      if (!identity) {
+        // No folder identity means no rename-proof key to store this under. Uploading it
+        // under its filename would strand the object the moment the file is renamed, so
+        // the asset is reported instead.
+        appendLog('error', `  ✕  ${fileName} — no folder identity (missing " __<hash>" package folder). Skipped.`);
+        errors += 1;
+        stats.errors += 1;
+        return;
+      }
+      const objectKey = storageKey(r2.keyPrefix, `thumbnails/${identity.stableId}/${identity.childId}.webp`);
 
       // Cheap local check (mtime+size, no file read/hash/network) before the real thing.
       // A manifest that says the key is gone from R2 overrides the cache — re-upload.
@@ -1216,15 +1229,12 @@ async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<void> {
 }
 
 /* ── Original-file CDN upload — content-hash deduped, version/rename-stable key ──
-   Keyed by stable identity (stableId/childId) when resolved — rename-proof, since
-   that identity survives file/folder renames (see resolveCdnIdentity). Falls back to
-   shortcode (version stripped) for legacy/unmigrated assets — not rename-proof, but
-   still version-stable, so a new version's upload overwrites the last one's key rather
-   than accumulating. Either way, upload_to_r2 only actually re-uploads when the file's
+   Keyed by stable identity (stableId/childId), which survives file and folder renames
+   (see resolveCdnIdentity), so a new version's upload overwrites the last one's key
+   rather than accumulating. upload_to_r2 only actually re-uploads when the file's
    content hash differs from what's already stored — unchanged re-runs are skipped. A
-   small per-asset cleanup below handles the rare case where a version bump (or, for
-   stable identity, an actual content-hash mismatch under the same key) changes the
-   file extension. */
+   small per-asset cleanup below handles the rare case where a content-hash mismatch
+   under the same key changes the file extension. */
 async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promise<void> {
   const { r2, appendLog, collectedAssets } = ctx;
   if (!r2?.endpoint || !r2.accessKeyId || !r2.secretKey || !r2.bucket || !r2.publicDomain) {
@@ -1241,8 +1251,7 @@ async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promise<void
     const dotIdx    = fileName.lastIndexOf('.');
     const ext       = dotIdx > 0 ? fileName.slice(dotIdx) : '';
     const stem      = dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName;
-    const shortcode = stem.replace(/\s+[vV]\d+(?:[-._]\d+)*\s*$/, '').trim();
-    return { srcPath, stem, ext, shortcode };
+    return { srcPath, stem, ext };
   });
 
   if (!files.length) {
@@ -1259,14 +1268,18 @@ async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promise<void
   let r2CacheDirty = false;
   const remoteKeys = await fetchR2KeyManifest(r2, storageKey(r2.keyPrefix, 'originals/'), appendLog);
 
-  // Identity by full filename first — extension-only variants (foo.pdf + foo.webp)
-  // share a stem but carry distinct child ids in the manifest. Falling back to the
-  // stem covers files scanned before per-file resolution existed.
-  const withKeys = files.map(f => {
-    const identity  = ctx.cdnIdentity?.get(`${f.stem}${f.ext}`) ?? ctx.cdnIdentity?.get(f.stem);
-    const rel = identity ? `originals/${identity.stableId}/${identity.childId}` : `originals/${f.shortcode}`;
-    const keyPrefix = storageKey(r2.keyPrefix, rel);
-    return { ...f, keyPrefix, objectKey: `${keyPrefix}${f.ext}` };
+  // Identity by full filename first — extension-only variants (foo.pdf + foo.webp) share a
+  // stem but carry distinct child ids in the manifest.
+  const withKeys = files.flatMap(f => {
+    const identity = ctx.cdnIdentity?.get(`${f.stem}${f.ext}`) ?? ctx.cdnIdentity?.get(f.stem);
+    if (!identity) {
+      appendLog('error', `  ✕  ${f.stem}${f.ext} — no folder identity (missing " __<hash>" package folder). Skipped.`);
+      errors += 1;
+      stats.errors += 1;
+      return [];
+    }
+    const keyPrefix = storageKey(r2.keyPrefix, `originals/${identity.stableId}/${identity.childId}`);
+    return [{ ...f, keyPrefix, objectKey: `${keyPrefix}${f.ext}` }];
   });
   // Keys claimed by any file this run — the stale-sibling cleanup must never delete
   // these, or two files sharing a key prefix would destroy each other's upload.
@@ -1371,30 +1384,30 @@ async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promise<void
 
 /* ── CDN cleanup — remove stale thumbnails from R2 ─────────────────────── */
 
-/** Full R2 reconcile — lists all objects and deletes stale ones. Use manually when DB is out of sync.
- * Not currently wired to any UI action. If `ctx.cdnIdentity` isn't already populated (e.g. by a
- * prior `resolveCdnIdentity` call on this same ctx), expected keys fall back to filename-based —
- * call `resolveCdnIdentity` first for accurate results on stable-identity clients. */
+/** Full R2 reconcile — lists all objects and deletes stale ones. Use manually when DB is out of
+ * sync. Not currently wired to any UI action. Requires `ctx.cdnIdentity` to be populated by a
+ * prior `resolveCdnIdentity` call on the same ctx — without it nothing is considered expected,
+ * and every object would look stale. */
 export async function reconcileCdn(ctx: RunContext, stats: RunStats): Promise<void> {
   const { r2, appendLog, collectedAssets } = ctx;
   if (!r2) return;
 
   appendLog('section', '━━━ CDN CLEANUP ━━━');
 
-  // Keys that should exist — one per collected asset. Mirrors runCdnUpload's key logic
-  // exactly (stable-identity when resolved, filename-based fallback otherwise) so this
-  // never mistakes a current object under the new scheme for a stale one.
+  // Keys that should exist — one per collected asset, mirroring runCdnUpload's key logic
+  // exactly so this never mistakes a current object for a stale one.
+  if (!ctx.cdnIdentity?.size) {
+    appendLog('error', '  ✕  No CDN identity resolved — refusing to reconcile (every object would look stale).');
+    return;
+  }
   const expectedKeys = new Set(
-    (collectedAssets ?? []).map(srcPath => {
+    (collectedAssets ?? []).flatMap(srcPath => {
       const fileName = srcPath.split('/').pop()!;
       const stem     = fileName.substring(0, fileName.lastIndexOf('.'));
       const identity = ctx.cdnIdentity?.get(stem);
-      return storageKey(
-        r2.keyPrefix,
-        identity
-          ? `thumbnails/${identity.stableId}/${identity.childId}.webp`
-          : `thumbnails/${stem}-thumb.webp`,
-      );
+      return identity
+        ? [storageKey(r2.keyPrefix, `thumbnails/${identity.stableId}/${identity.childId}.webp`)]
+        : [];
     }),
   );
 
@@ -1539,7 +1552,7 @@ async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
   }
 
   const outFolder = settings.outFolder || 'OUT';
-  const vocabMap = buildVocabContext(vocab);
+  const vocabMap = buildVocabMap(vocab);
   const cloudCache = await loadCloudCache();
   let cloudCacheDirty = false;
 
@@ -1814,15 +1827,15 @@ export async function runPipeline(ctx: RunContext): Promise<RunStats> {
       ctx.collectedAssets?.push(...scanned);
     }
 
-    // Resolve rename-proof CDN identity before any CDN step runs, so those steps can key
-    // by it instead of the current filename. Gated the same as the CDN steps themselves
-    // (r2 configured, and thumbnails/originals actually enabled) so this cost is only ever
-    // paid when its result will actually be used.
-    if (ctx.identityMigrated && ctx.r2 && (settings.doThumbnails || settings.doCdnOriginals)) {
+    // Resolve folder identity before any CDN step runs — those steps key objects by
+    // stable_id/child_id, not by the current filename, so a rename or a retitle never
+    // orphans an uploaded object. Gated the same as the CDN steps themselves, so the
+    // cost is only paid when its result is actually used.
+    if (ctx.r2 && (settings.doThumbnails || settings.doCdnOriginals)) {
       try {
         ctx.cdnIdentity = await resolveCdnIdentity(ctx.collectedAssets ?? [], settings.outFolder || 'OUT');
       } catch (e) {
-        appendLog('error', `  ✕  CDN identity resolution failed, falling back to filename-based keys: ${e}`);
+        appendLog('error', `  ✕  CDN identity resolution failed — CDN steps will skip assets they can't key: ${e}`);
       }
     }
 

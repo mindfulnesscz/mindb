@@ -101,7 +101,7 @@ export default function App() {
   useEffect(() => {
     if (authStatus !== 'signedIn' || !profile || !activeEnv) return;
     useClientStore.getState().setLoadError(null);
-    loadClientsForEnvironment(activeEnv, profile.role, environments)
+    loadClientsForEnvironment(activeEnv, profile.role)
       .then(({ clients, activeClientId }) => {
         setClients(clients);
         setActiveClientId(activeClientId);

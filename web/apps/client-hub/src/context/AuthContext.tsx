@@ -56,7 +56,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function fetchProfile(userId: string) {
     if (!supabase) return
-    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
+    // maybeSingle: no profile row is a normal state (stale session, invite not completed).
+    // .single() answers that with an opaque 406 instead of null.
+    const { data } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle()
     setProfile(data as ProfileRow | null)
     setLoading(false)
   }

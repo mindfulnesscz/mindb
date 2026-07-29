@@ -18,7 +18,6 @@ One row per client company.
 | `portal_bg` | text | Colour, gradient string, or image URL |
 | `domain_whitelist` | text[] | Email domains for auto-member assignment |
 | `dimension_labels` | jsonb | Display names for entity / angle / format |
-| `identity_migrated` | boolean | Stable-identity matching |
 | `created_at` | timestamptz | |
 
 ### `profiles`
@@ -43,7 +42,7 @@ One row per asset version.
 |---|---|---|
 | `id` | uuid | PK |
 | `client_id` | uuid | FK → clients |
-| `shortcode` | text | Unique key derived from filename by the pipeline |
+| `shortcode` | text | Display string derived from the filename — not an identity key |
 | `name` | text | Display name |
 | `entities` | text[] | e.g. `['Sealing']` |
 | `formats` | text[] | e.g. `['Presentation', 'PDF']` |
@@ -57,10 +56,18 @@ One row per asset version.
 | `download_url` | text | CDN URL |
 | `download_key` | text | R2 object key (used by pipeline for stale detection) |
 | `parent_id` | uuid | Set for gallery child assets |
+| `variant_of` | uuid | Set for format/size variants of another asset |
+| `stable_id` | text | Package folder hash (` __<hash>` suffix) — the identity anchor |
+| `child_id` | text | Per-file id from the folder's `.dchub.json` manifest |
 | `created_at` | timestamptz | |
 | `updated_at` | timestamptz | |
 
 Gallery children use shortcodes with a `|` separator: `ParentShortcode|childStem`.
+
+Identity is `(stable_id, child_id)` — the package folder's hash plus the manifest's per-file
+id — never `shortcode`. That pair survives file renames, retitles and version bumps, so the
+pipeline matches rows on it and writes by row id. A folder that disappears has its rows
+marked `disconnected` rather than deleted, keeping ratings, comments and events attached.
 
 ### `ratings`
 
@@ -148,7 +155,7 @@ Queue for taxonomy-driven filesystem updates (`tag_rename`, `tag_delete`, `asset
 | `get_client_portal(p_slug)` | anon | Returns client data for portal welcome screen |
 | `get_all_profiles()` | editor, admin | Profiles joined with auth email |
 | `update_user_access(...)` | admin | Role + member `client_id` + editor `client_members` |
-| `update_user_role(p_user_id, p_role)` | admin | Legacy role-only helper |
+| `update_user_role(p_user_id, p_role)` | admin | Role-only helper — prefer `update_user_access` |
 | `get_user_client_members(p_user_id)` | authenticated | Editor memberships for admin UI |
 | `handle_new_user` / profile trigger | trigger | Auto-creates profile; portal OTP can set member `client_id` |
 

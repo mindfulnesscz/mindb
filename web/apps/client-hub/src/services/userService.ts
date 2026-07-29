@@ -14,9 +14,9 @@ export interface UserProfile {
   canCreateClients: boolean
 }
 
-/** Normalize legacy DB role before it reaches permission helpers. */
-export function normalizeRole(role: string): Role {
-  if (role === 'client') return 'member'
+/** Widening cast at the DB boundary — `profiles.role` is a text column with a check
+ * constraint, so every stored value is already a valid Role. */
+export function asRole(role: string): Role {
   return role as Role
 }
 
@@ -37,7 +37,7 @@ export async function fetchAllUsers(): Promise<UserProfile[]> {
       id:         r.id,
       name:       r.name,
       initials:   r.initials,
-      role:       normalizeRole(r.role),
+      role:       asRole(r.role),
       clientId:   r.client_id,
       clientName: r.client_name,
       email:      r.email,

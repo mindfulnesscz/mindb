@@ -134,7 +134,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
   const [childView, setChildView] = useState<'grid' | 'carousel'>('grid')
   const [carouselIdx, setCarouselIdx] = useState(0)
   // Folder-based stable identity variants (Task 3) — format/size siblings of this asset,
-  // distinct from legacy gallery `children` above (those are preview images, not download choices).
+  // distinct from gallery `children` above (those are preview images, not download choices).
   const [variants, setVariants] = useState<Asset[]>([])
   const [selectedVariantId, setSelectedVariantId] = useState<string>(asset.id)
   // Whichever variant actually matched the active gallery filter (e.g. a tag that only lives
@@ -184,7 +184,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
       const dest = visibleDests.find(d =>
         (link.destId && d.id === link.destId) || d.name === link.name,
       )
-      // Unknown dest (legacy link without matching def): show to staff only
+      // Unknown dest (a stored link with no matching definition): show to staff only
       if (!dest) return isStaff
       return true
     })
@@ -207,7 +207,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
     if (isStaff) fetchEventCounts(asset.id).then(setEventCounts).catch(console.error)
   }, [asset.id])
 
-  // Load children (legacy gallery preview images) and variants (Task 3 format/size siblings)
+  // Load children (gallery preview images) and variants (format/size siblings)
   useEffect(() => {
     if ((asset.childCount ?? 0) > 0) {
       Promise.all([

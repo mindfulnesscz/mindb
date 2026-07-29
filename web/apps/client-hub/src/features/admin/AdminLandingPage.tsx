@@ -13,7 +13,7 @@ import {
 } from '../../services/taxonomyImport'
 import { TagsAdmin } from './TagsAdmin'
 import { DestinationsAdmin } from './DestinationsAdmin'
-import { fetchAllUsers, updateUserAccess, createUser, normalizeRole, type UserProfile } from '../../services/userService'
+import { fetchAllUsers, updateUserAccess, createUser, asRole, type UserProfile } from '../../services/userService'
 import { isConfigured } from '../../lib/supabase'
 
 // ── DC logo mark ──────────────────────────────────────────────
@@ -922,7 +922,7 @@ function UserCreateDrawer({ clients, onClose, onCreated, canManageAdmins: viewer
 
 function UsersView({ isAdmin }: { isAdmin: boolean }) {
   const { profile: self } = useAuth()
-  const viewerCanManageAdmins = canManageAdmins(normalizeRole(self?.role ?? 'public'))
+  const viewerCanManageAdmins = canManageAdmins(asRole(self?.role ?? 'public'))
   const { clients } = useClients()
   const [users, setUsers] = useState<UserProfile[]>([])
   const [loading, setLoading] = useState(true)
@@ -1132,7 +1132,7 @@ function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
   const [tab, setTab] = useState<'clients' | 'users'>('clients')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [editingClient, setEditingClient] = useState<Client | null>(null)
-  const role = normalizeRole(profile?.role ?? 'public')
+  const role = asRole(profile?.role ?? 'public')
   const manageClients = canManageClients(role)   // edit existing clients (admin+)
   const createClients = canCreateClients(role, profile?.can_create_clients ?? false) // super_admin, or granted admin
 
@@ -1288,8 +1288,8 @@ export default function AdminLandingPage() {
 
   if (!session) return <AdminSignIn />
 
-  if (profile && (normalizeRole(profile.role) === 'admin' || normalizeRole(profile.role) === 'super_admin')) return <AdminDashboard isAdmin />
-  if (profile && normalizeRole(profile.role) === 'editor') return <EditorRouter />
+  if (profile && (asRole(profile.role) === 'admin' || asRole(profile.role) === 'super_admin')) return <AdminDashboard isAdmin />
+  if (profile && asRole(profile.role) === 'editor') return <EditorRouter />
 
   if (profile) {
     return (

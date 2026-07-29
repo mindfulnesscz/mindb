@@ -59,7 +59,7 @@ export function ClientPickerModal({ onClose }: Props) {
     if (!env || !profile) return;
     setBusy(true);
     try {
-      const { clients, activeClientId } = await loadClientsForEnvironment(env, profile.role, environments);
+      const { clients, activeClientId } = await loadClientsForEnvironment(env, profile.role);
       store.setClients(clients);
       store.setActiveClientId(activeClientId);
     } catch (e) {

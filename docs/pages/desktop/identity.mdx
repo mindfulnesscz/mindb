@@ -1,13 +1,33 @@
 # Stable asset identity
 
-Legacy matching uses a version-stripped filename shortcode. Rename the logical asset and the pipeline may interpret the old row as removed and the new name as a new asset, breaking continuity for comments, ratings, and history.
+An asset's identity is its **package folder**, not its filename. Every package carries an
+eight-character hash suffix (` __a1b2c3d4`) plus a `.dchub.json` manifest mapping filenames to
+stable child IDs. The resolved `(stable_id, child_id)` pair is the permanent key for one file.
 
-Migrated clients instead use an eight-character stable ID on the package folder and a `.dchub.json` manifest that maps filenames to stable child IDs. Resolution first uses a filename match and can use SHA-256 content matching when a file was renamed. New child IDs are allocated without reusing an existing manifest identity.
+Resolution order for a child ID: manifest filename match → SHA-256 content match (the file was
+renamed) → version lineage (`v1-0-0` → `v1-1-0` of a known asset) → a fresh ID. New child IDs
+never reuse an existing manifest identity.
 
-Gallery **parents** are keyed as `__gallery__:<path-under-OUT>`. Renaming a gallery folder reuses the orphaned parent slot in the same package (so children stay attached and tags/name update on the same card). File children remain rename-proof via content hash / version lineage.
+Because identity is decoupled from the name, renaming a file, retitling an asset, or changing
+its taxonomy codes all keep the same database row — and with it comments, ratings, approvals,
+events and version history. `shortcode` is a display string derived from the filename; nothing
+matches on it.
 
-The same resolved pair keys R2 and Supabase. CDN resolution writes the manifest before metadata sync, so the later sync reads the recorded mapping rather than independently guessing again.
+Gallery **parents** are keyed as `__gallery__:<path-under-OUT>`. Renaming a gallery folder
+reuses the orphaned parent slot in the same package, so children stay attached while the card's
+tags and name update. File children stay rename-proof via content hash / version lineage.
 
-For migrated clients, missing database assets are marked `disconnected`; legacy cleanup can hard-delete stale rows. Migration is therefore a data-lifecycle boundary, not a cosmetic folder rename. Back up data, run the provided migration script deliberately, and verify manifests and portal continuity before setting `identityMigrated=true`.
+The same resolved pair keys R2 and Supabase. CDN resolution writes the manifest before metadata
+sync, so the later sync reads the recorded mapping rather than independently guessing again. An
+asset outside a hashed package folder has no identity: the CDN steps and the sync both report it
+and skip it, rather than inventing a filename-based key.
 
-New packages created through the Vocabulary screen are born with a folder stable ID, `.dchub.json`, child `c1`, package readme, and Supabase draft row. Existing legacy packages use `desktop/scripts/migrate-identity.ts`; do not set the client migration flag merely because one newly created package has a manifest.
+Assets missing from disk are marked `disconnected`, never deleted — a disconnected row is
+reclaimed if the folder reappears.
+
+New packages created through the Vocabulary screen are born with a folder stable ID,
+`.dchub.json`, child `c1`, package readme, and a Supabase draft row. The scaffold seeds an
+extensionless placeholder in `OUT` reserving `c1`; the first real file with that base name
+claims it, so the draft row becomes the published asset instead of a duplicate. If the
+deliverable turns out to be a folder of files instead of one file, the gallery parent adopts
+that reserved slot.

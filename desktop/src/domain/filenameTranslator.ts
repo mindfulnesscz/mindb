@@ -13,36 +13,16 @@ export interface ParsedFilename {
   error:       string | null;
 }
 
-export interface VocabContext {
-  tags:    Map<string, VocabTag>;
-  aliases: Map<string, string>;
-}
+export type VocabMap = Map<string, VocabTag>;
 
-export function buildVocabMap(vocab: VocabularyData): Map<string, VocabTag> {
+export function buildVocabMap(vocab: VocabularyData): VocabMap {
   return new Map(vocab.tags.map(t => [t.shortcode, t]));
 }
 
-export function buildVocabContext(vocab: VocabularyData): VocabContext {
-  const tags    = buildVocabMap(vocab);
-  const aliases = new Map<string, string>();
-  if (vocab.legacy_aliases) {
-    for (const [old, canonical] of Object.entries(vocab.legacy_aliases)) {
-      if (old === '_comment') continue;
-      if (!tags.has(canonical)) continue; // only map to known shortcodes
-      if (tags.has(old)) continue;        // don't shadow a real shortcode
-      aliases.set(old, canonical);
-    }
-  }
-  return { tags, aliases };
-}
-
-export function parseFilename(stem: string, vocab: Map<string, VocabTag> | VocabContext): ParsedFilename {
+export function parseFilename(stem: string, tags: VocabMap): ParsedFilename {
   const r: ParsedFilename = {
     tags: [], unknownTags: [], description: null, version: null, yymm: null, error: null,
   };
-
-  const tags    = vocab instanceof Map ? vocab : vocab.tags;
-  const aliases = vocab instanceof Map ? undefined : vocab.aliases;
 
   const leadMatch = stem.match(/^(?:\([^)]+\)|\[[^\]]+\])+/);
   if (!leadMatch) {
@@ -55,8 +35,7 @@ export function parseFilename(stem: string, vocab: Map<string, VocabTag> | Vocab
 
   for (const tag of rawTags) {
     if (/^\d{2}(0[1-9]|1[0-2])$/.test(tag)) { r.yymm = tag; continue; }
-    const resolved = aliases?.get(tag) ?? tag;
-    const entry    = tags.get(resolved);
+    const entry = tags.get(tag);
     if (entry) r.tags.push(entry);
     else r.unknownTags.push(tag);
   }
@@ -83,7 +62,7 @@ export function buildNoteName(p: ParsedFilename): string {
 
 /* Mirrors Python's _translate_export_name(): full translation with version + ext.
    Falls back to the original stem+ext when parsing fails entirely. */
-export function translateExportName(stem: string, ext: string, vocab: Map<string, VocabTag> | VocabContext): string {
+export function translateExportName(stem: string, ext: string, vocab: VocabMap): string {
   const p = parseFilename(stem, vocab);
   if (p.error && !p.tags.length && !p.unknownTags.length) return stem + ext;
 
