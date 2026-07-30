@@ -1317,14 +1317,19 @@ contexts. Both defects share a root: a test that never ran in the conditions the
 | 2c | ~~Split `supabaseService` 1438 → 47 + 13~~ ✅       | High                | L      | 2     |
 | 2d | ~~Split portal components~~ ⚠️ partial (AssetDetail) | Med               | M      | 2     |
 | 2d-1 | ~~jsdom stack + AssetDetail's 6 hooks~~ ✅ 923→622  | Med               | M      | 2     |
-| 2d-2 | Extract AssetDetail's JSX panels (622 → <400)     | Low                 | S      | 2     |
+| 2d-2 | ~~Extract AssetDetail's JSX panels~~ ✅ 923 → 354  | Low                 | S      | 2     |
 | 2c-1 | ~~Characterize + split `assetExport`~~ ✅ 489 → 156 | Med               | M      | 2     |
 | A1 | ~~One workspace: desktop joined, 1 lockfile~~ ✅   | High (structural)   | M      | 2     |
 | 7  | ~~Rate-limit `asset_events` (F-2 remainder)~~ ✅   | Med                 | S      | 4     |
 | 10 | ~~CI-generated DB types + one client projection~~ ✅ | High             | M      | 3     |
 | 11 | ~~Error log + breadcrumbs + boundaries + guardrails~~ ✅ | High          | M      | 4     |
 | 12 | ~~e2e smoke + clippy + coverage ratchet~~ ✅       | Med                 | M      | 5     |
+| 14 | ~~app_errors sink + super-admin errors view + Slack~~ ✅ | High           | M      | 4     |
+| 15 | ~~Hidden source maps + build version in reports~~ ✅ | High             | S      | 5     |
 | 13 | Docs: Nextra 2→4 (unblocks React 19 + workspace)  | Low                 | M      | 5     |
+| 16 | Control plane: server-supplied environments        | Critical (blocks distribution) | L | 6 |
+| 17 | `npm audit` / unused-dependency sweep              | Med                 | M      | 5     |
+| 18 | Raise services coverage toward 70% (`dam/`, roots) | Med                 | L      | 5     |
 
 ---
 
