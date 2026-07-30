@@ -89,10 +89,12 @@ When thumbnails are enabled and the grant succeeds, the pipeline uploads via nat
 
 Keys always start with the client UUID (or `branding/{client_id}/` for logos):
 
-| Identity mode | Thumbnail | Original |
-|---|---|---|
-| Migrated package | `{client_id}/thumbnails/<stableId>/<childId>.webp` | `{client_id}/originals/<stableId>/<childId><ext>` |
-| Legacy/fallback | `{client_id}/thumbnails/<full-stem>-thumb.webp` | `{client_id}/originals/<version-stripped-shortcode><ext>` |
+| Thumbnail | Original |
+|---|---|
+| `{client_id}/thumbnails/<stableId>/<childId>.webp` | `{client_id}/originals/<stableId>/<childId><ext>` |
+
+Keys come from folder identity only, so a rename never strands an object. A file outside a
+hashed package folder has no key and is reported and skipped instead of uploaded.
 
 Public URLs append `?v=<12-char content hash>`. After an original upload, sibling objects with the same key prefix but a stale extension may be removed. Whole-bucket orphan cleanup is not an automatic UI action.
 

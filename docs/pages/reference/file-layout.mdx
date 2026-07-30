@@ -1,26 +1,62 @@
 # Repository map
 
+One npm workspace, one lockfile. `docs/` is the only member kept outside it — see
+[Architecture](/getting-started/architecture) for why.
+
+## Shared packages
+
+Everything both applications must agree about lives here, at the repository root.
+
 | Path | Purpose |
 |---|---|
-| `package.json` | Root setup, dev, build, check, and version command surface |
-| `scripts/dev.mjs` | Starts/supervises desktop, web, and docs with prefixed logs |
-| `scripts/version.mjs` | Synchronizes the monorepo's canonical version |
-| `.github/workflows` | `check.yml` (PR gates), `db.yml` (migrations/functions), desktop release |
-| `CHANGELOG.md` / `VERSIONING.md` | Shared release history and release procedure |
-| `desktop/src/features` | Desktop screens and controls |
-| `desktop/src/services` | Pipeline, sync, providers, DAM; `supabase/` and `pipeline/` modules |
-| `desktop/src/domain` | Naming, vocabulary, identity, client types |
-| `desktop/src/store` | Zustand settings/client/pipeline/environment state |
-| `desktop/src-tauri/src` | Native commands for thumbnails, R2, cloud, Supabase |
-| `web/apps/client-hub/src/features` | Portal/admin/gallery screens |
+| `packages/domain` | Platform-free product rules: identity, filename grammar, versions, vocabulary, grouping. No React, Tauri, Supabase or Node imports — CI-enforced |
+| `packages/database` | Generated `@dc-hub/database` types (`npm run db:types`) and the one `clients` row projection |
+| `packages/auth` | Shared Supabase auth client and the email pre-flight |
+| `packages/asset-library` | Shared `Client` type, permissions, filters, `ErrorBoundary` |
+
+## Desktop
+
+| Path | Purpose |
+|---|---|
+| `desktop/src/features` | Screens, each with its own hooks and panels |
+| `desktop/src/services` | Pipeline, sync, providers, DAM |
+| `desktop/src/services/pipeline` | One module per stage; `pipelineService.ts` is the orchestrator |
+| `desktop/src/services/supabase` | Identity, manifests, queries, export stages |
+| `desktop/src/services/cloud` | One module per provider, plus shared PKCE |
+| `desktop/src/services/dam` | Obsidian vault and canvas builder |
+| `desktop/src/domain` | `client.ts` only — it mixes portal identity with machine-local config, so it is not shareable. Everything else moved to `packages/domain` |
+| `desktop/src/store` | Zustand settings / client / pipeline / environment state |
+| `desktop/src/test` | In-memory harnesses: `vfs`, `invokeStub`, `fetchStub` |
+| `desktop/src-tauri/src` | Native commands: thumbnails, R2 signing, cloud, Supabase proxy, reveal bridge |
+
+## Portal
+
+| Path | Purpose |
+|---|---|
+| `web/apps/client-hub/src/features` | Portal, gallery and admin screens |
 | `web/apps/client-hub/src/services` | Browser data access |
 | `web/apps/client-hub/src/context` | Auth and role/client state |
-| `web/packages/asset-library` | Shared types, permissions, filters |
-| `web/packages/database` | Generated `@dc-hub/database` types (`npm run db:types`) |
-| `supabase/migrations` | Checked-in schema changes (replayable from zero) |
-| `supabase/functions` | Edge functions (`r2-grant`, `r2-branding-upload`, …) |
-| `docs/pages` | This Nextra documentation |
 
-Machine-local desktop files (not in git): `environments.json`, `client-local.json`, OAuth tokens under app data.
+## Backend, tooling, docs
 
-Generated/dependency directories (`node_modules`, `dist`, `.next`, and `desktop/src-tauri/target`) are ignored and should not be reviewed as source. The duplicate `.js` files beside TypeScript in `web/packages/asset-library/src` are currently checked-in artifacts; edit the `.ts` sources unless the build/release process is explicitly changed to regenerate them.
+| Path | Purpose |
+|---|---|
+| `supabase/migrations` | Checked-in schema changes, replayable from zero |
+| `supabase/tests` | pgTAP: RLS, relation constraints, rate limits |
+| `supabase/functions` | Edge functions (`r2-grant`, `r2-branding-upload`, `admin-create-user`) |
+| `e2e` | Playwright smoke against a local stack |
+| `scripts/version.mjs` | Synchronises the monorepo's canonical version |
+| `scripts/toolchain.mjs` | Fails the build on any tool-version disagreement |
+| `scripts/db-types.mjs` | Generates database types and gates them against the schema |
+| `.github/workflows` | `check.yml` (PR gates + e2e), `db.yml` (migrations/functions), desktop release |
+| `CHANGELOG.md` / `VERSIONING.md` | Shared release history and procedure |
+| `CONTRIBUTING.md` | The rules that are expensive to rediscover |
+| `docs/pages` | This handbook |
+
+## Not in git
+
+Machine-local desktop files under the app data directory: `environments.json`, `client-local.json`,
+OAuth tokens, and `errors.log`.
+
+Generated directories (`node_modules`, `dist`, `.next`, `coverage`, `test-results`,
+`desktop/src-tauri/target`) are ignored and should not be reviewed as source.

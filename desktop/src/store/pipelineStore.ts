@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { addBreadcrumb } from '../services/reportError';
 
 export type LogType = 'section' | 'info' | 'success' | 'skip' | 'warn' | 'error' | 'dim' | 'disconnected';
 
@@ -40,7 +41,6 @@ export interface SupabaseSyncSummary {
   created:      number;
   updated:      number;
   disconnected: number; // stable-identity rows soft-marked disconnected this run
-  deleted:      number; // legacy rows hard-deleted this run
   errors:       number;
 }
 
@@ -98,10 +98,14 @@ export const usePipelineStore = create<PipelineStore>((set) => ({
 
   setProgress: (p) => set({ progress: p }),
 
-  appendLog: (type, message) =>
+  appendLog: (type, message) => {
+    // Stage headings become breadcrumbs, so a later reportError says WHERE in the run it happened.
+    // Only sections: a trail of individual file lines would push out the stage that matters.
+    if (type === 'section') addBreadcrumb(message);
     set(state => ({
       log: [...state.log, { id: uid(), timestamp: now(), type, message }],
-    })),
+    }));
+  },
 
   clearLog: () => set({ log: [] }),
 

@@ -32,3 +32,8 @@ web/apps/client-hub/src/**/*.js
 web/apps/client-hub/src/**/*.js.map
 packages/*/src/**/*.js
 packages/*/src/**/*.js.map
+
+# Coverage output (the ratchet reads it in-process; nothing here is committed)
+coverage/
+test-results/
+playwright-report/

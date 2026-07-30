@@ -5,18 +5,16 @@ export type AssetPerm = 'public' | 'client' | 'internal'
 export type ApprovalState = 'approved' | 'pending' | 'changes' | 'none'
 export type EntityType = 'product' | 'customer' | 'partner' | 'event' | 'company'
 
-export interface Client {
-  id: string
-  name: string
-  slug?: string
-  accent: string
-  initials: string
-  logoUrl?: string
-  website?: string
-  portalBg?: string
-  domainWhitelist?: string[]
-  dimensionLabels?: { entity: string; angle: string; format: string }
-}
+/**
+ * A client's portal-owned identity. Defined once, in @dc-hub/database, next to the generated row type
+ * it is projected from — this used to be a second, hand-maintained declaration of the same fields,
+ * free to drift from both the schema and desktop's copy. Re-exported under its original name so
+ * consumers are unaffected.
+ *
+ * Note `dimensionLabels` is now REQUIRED and always fully populated: `toClientIdentity` defaults each
+ * label individually, so callers no longer have to repeat the fallbacks at every use site.
+ */
+export type { ClientIdentity as Client } from '@dc-hub/database'
 
 export interface Asset {
   id: string

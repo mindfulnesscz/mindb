@@ -9,7 +9,8 @@
     "paths": {
       "@dc-hub/asset-library": ["../../../packages/asset-library/src/index.ts"],
       "@dc-hub/database": ["../../../packages/database/src/index.ts"],
-      "@dc-hub/auth": ["../../../packages/auth/src/index.ts"]
+      "@dc-hub/auth": ["../../../packages/auth/src/index.ts"],
+      "@dc-hub/domain": ["../../../packages/domain/src/index.ts"]
     }
   },
   "include": ["src", "vite.config.ts"]

@@ -1,0 +1,129 @@
+# Error reporting
+
+Every caught error in both apps goes through one function, `reportError(context, err)`. Nothing writes
+a bare `console.error` — `no-console` is disabled only inside the two `reportError` modules, so a stray
+one fails CI rather than quietly swallowing a failure.
+
+A report goes to up to three places:
+
+| Destination | Applies to | Purpose |
+|---|---|---|
+| Console | both | Development |
+| `errors.log` | desktop | A packaged binary has no devtools; this works offline |
+| `public.app_errors` | both | The queryable record, per backend |
+
+## Contexts are sorted by concern
+
+The first segment of a context is the **concern**, not the file. That is what lets the log answer
+*"where are the flaws — auth, syncing, display?"* before anyone reads a stack.
+
+```ts
+reportError('config.PipelineView.saveClients', e)
+//          └─ concern   └─ location
+```
+
+Valid concerns: `auth` `env` `config` `vocab` `sync` `os` `feedback` `asset` `pipeline` `cdn` `ui`.
+
+This is enforced by an ESLint rule, not by convention — a prefix that only some call sites use makes
+the histogram lie. Add a concern to the list in `eslint.config.js` when a genuinely new one appears.
+
+## Breadcrumbs
+
+On desktop, pipeline **stage headings** become breadcrumbs, so a report says where in a run it
+happened:
+
+```
+2026-07-30T10:20:30.000Z [cdn.pipeline.uploadOriginals] Storage grant refused (401)
+  | after: COLLECTING → THUMBNAILS → CDN UPLOAD
+```
+
+"Storage grant refused" is not diagnosable. The trail is. Only section headings are recorded — a
+breadcrumb per copied file would push out the stage that matters. The trail is capped at 12.
+
+## The desktop log file
+
+`~/Library/Application Support/com.disruptcollective.dc-hub/errors.log`
+
+Reachable from **Settings → Diagnostics**, which shows the path, whether anything has been recorded,
+and buttons to open it or reveal it in Finder. Send this file when reporting a problem.
+
+It truncates at 256 KB rather than rotating — this is a diagnostic tail, not an audit trail — and
+always starts at a whole entry so it stays parseable line by line.
+
+## The portal view
+
+**Admin → Errors**, visible to **super admins only**. Error messages quote asset names and folder
+paths, so they are maintainer data rather than client data; a plain admin sees neither the errors nor
+the Slack destinations. This is enforced in RLS, so the UI gate is a courtesy and the policy is the
+control.
+
+Rows are grouped by `(context, message)`, because the raw table is mostly repetition — one broken
+screen writes the same row hundreds of times and would bury the second problem under the first. A row
+expands to the stack, breadcrumbs, build version and environment.
+
+`NEW` marks a signature seen for the first time inside the window — first appearance, not merely
+present.
+
+## Slack digests
+
+Add an **incoming webhook URL** under the errors view. A Slack *channel id* alone cannot receive
+anything: posting to one needs a bot token and a Slack app. A webhook URL already encodes its channel
+and needs no app, no token and no scopes.
+
+The URL **is** the credential, which is why the table is super-admin-only, the column is constrained to
+`hooks.slack.com` so it cannot become an arbitrary exfiltration target, and the UI never renders a
+stored URL in full.
+
+- A scheduled job (`error-digest`, 08:00 UTC daily) reads its destinations from the table, so adding a
+  channel in the portal is the only step. There is nothing to configure per backend.
+- Digests carry **new signatures only** by default. "Every occurrence" is a per-destination option and
+  is off deliberately: a component in a render loop would post until the channel is muted, and a muted
+  alert channel still looks like monitoring while being none.
+- Nothing is sent when there is nothing to report. A daily "no errors" message trains people to ignore
+  the channel.
+- **Send test** posts immediately. The digest runs once a day, so without it "did I paste the right
+  URL?" takes 24 hours to answer — and the answer is silence either way, indistinguishable from a quiet
+  day. The button says *Queued*, not *Sent*: `pg_net` hands off asynchronously and Slack's reply
+  arrives afterwards.
+
+## Rate limiting
+
+`app_errors` is capped at **20 rows per context per minute**; excess is dropped, never rejected.
+`reportError` runs inside `.catch()` handlers, so a raised error would replace the failure being
+reported with a worse one. Past the ceiling, the rows are duplicates of a report already stored.
+
+> **The trigger is `security definer` on purpose.** Reads on `app_errors` are super-admin-only, so an
+> invoker-rights counter runs under the caller's RLS, sees zero rows and never reaches the ceiling — the
+> limit then works only for callers who never needed limiting. This was a real bug (F-10), found by
+> generating sample reports through the real REST path.
+>
+> Definer is right for a **counter** ("how many rows exist") and wrong for a **predicate** ("may this
+> caller see X"). `can_see_asset()` is deliberately invoker for exactly that reason.
+
+## What is deliberately not stored
+
+No asset names or file paths beyond what a message already carries, and `user_id` only when a session
+exists. Reporting is open to everyone, including signed-out visitors — a failed sign-in is exactly the
+error worth capturing — but a caller may only attribute a report to themselves.
+
+## Why not Sentry
+
+Sentry does two things that are hard to replicate: un-minifying stacks from uploaded source maps, and
+telling you an error is *new* rather than merely present. Everything else it offers already exists
+here — a database, RLS, migrations, `pg_cron` and `pg_net`, and a team fluent in all of them.
+
+Against that: another vendor and bill, and once the tool is deployed to another agency, becoming the
+processor of *their* error data — a contractual question rather than a configuration one. Revisit when
+either advantage starts to hurt. Adding it later is additive, because `reportError` is a single
+function in each app.
+
+## Source maps
+
+Both builds emit `sourcemap: 'hidden'` — the `.map` files are produced, but no `//# sourceMappingURL`
+comment is left in the bundle, so browsers do not fetch them and devtools does not advertise them.
+Every report also carries the build version, injected from `package.json`.
+
+Without both, a production stack reads `index-4f2a.js:1:48210`, which no error sink of any kind can
+make readable. The maps are still deployed alongside the bundle and fetchable by anyone who guesses the
+URL; if that ever matters, upload them somewhere private and delete them from `dist` as a build step
+rather than turning source maps off.

@@ -23,10 +23,10 @@ const packageFiles = [
 ]
 
 // npm lockfiles: file → the `packages` entries that carry a version.
-// The web workspace is now part of the repo-root lockfile.
+// ONE lockfile: desktop/ and docs/ became workspace members (see REFACTOR_PLAN.md "Target
+// architecture"), so their versions are recorded here rather than in per-tree lockfiles.
 const lockFiles = {
-  'desktop/package-lock.json': [''],
-  'package-lock.json': ['', 'web/apps/client-hub', 'packages/asset-library'],
+  'package-lock.json': ['', 'desktop', 'web/apps/client-hub', 'packages/asset-library'],
   'docs/package-lock.json': [''],
 }
 

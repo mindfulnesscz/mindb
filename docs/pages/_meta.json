@@ -11,6 +11,6 @@
   "auth": "Authentication",
   "portals": "Client portals",
   "admin": "Admin dashboard",
-  "database": "Database (legacy overview)",
-  "pipeline": "Pipeline (legacy overview)"
+  "database": "Database (overview)",
+  "pipeline": "Pipeline (overview)"
 }

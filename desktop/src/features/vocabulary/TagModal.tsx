@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
-import { type Slot, type VocabTag } from '../../domain/vocabulary';
+import { type Slot, type VocabTag } from '@dc-hub/domain';
 import { useVocabularyStore } from '../../store/vocabularyStore';
 import css from './TagModal.module.css';
 

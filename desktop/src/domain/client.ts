@@ -1,4 +1,8 @@
-/* Client domain — client config, cloud destinations, OAuth token types */
+/* Client domain — the portal's client identity, this machine's config, cloud destinations,
+   and OAuth token types. */
+
+import { DEFAULT_DIMENSION_LABELS } from '@dc-hub/database';
+import type { ClientIdentity } from '@dc-hub/database';
 
 export type DestType = 'local' | 'dropbox' | 'onedrive' | 'gdrive';
 export type DestRole = 'internal' | 'client';
@@ -74,66 +78,46 @@ export interface CloudDestination {
 }
 
 export function resolveExportShape(
-  raw: Omit<Partial<CloudDestination>, 'exportLayout'> & {
-    flatExport?: boolean;
-    exportPackages?: boolean;
-    /** Includes legacy `"packages"`. */
-    exportLayout?: DestExportLayout | 'packages' | string;
-    includePackages?: boolean;
-  },
+  raw: Partial<Pick<CloudDestination, 'exportLayout' | 'includePackages'>>,
 ): { exportLayout: DestExportLayout; includePackages: boolean } {
-  if (raw.exportLayout === 'packages' || raw.exportPackages) {
-    return { exportLayout: 'folders', includePackages: true };
-  }
-  const exportLayout: DestExportLayout =
-    raw.exportLayout === 'flat' || raw.flatExport ? 'flat' : 'folders';
-  const includePackages = exportLayout === 'folders' && Boolean(raw.includePackages);
-  return { exportLayout, includePackages };
+  const exportLayout: DestExportLayout = raw.exportLayout === 'flat' ? 'flat' : 'folders';
+  return {
+    exportLayout,
+    includePackages: exportLayout === 'folders' && Boolean(raw.includePackages),
+  };
 }
 
-/** @deprecated Prefer resolveExportShape — kept for call sites that only need layout. */
-export function resolveExportLayout(
-  raw: Omit<Partial<CloudDestination>, 'exportLayout'> & {
-    flatExport?: boolean;
-    exportPackages?: boolean;
-    exportLayout?: DestExportLayout | 'packages' | string;
-  },
-): DestExportLayout {
-  return resolveExportShape(raw).exportLayout;
-}
-
-export interface Client {
-  id:                string;
-  name:              string;
-  slug?:             string;
-  logoUrl?:          string | null;
-  brandColor:        string;
+/**
+ * The portal's identity for a client, plus what only this machine knows.
+ *
+ * `ClientIdentity` is shared with the portal (@dc-hub/database) rather than redeclared, so a field
+ * added to a client cannot exist on one side only. Everything below it is machine-local and is never
+ * written to the database: folder paths, per-machine destination toggles, OAuth tokens.
+ */
+export interface Client extends ClientIdentity {
   sourceFolder:      string;
   targetFolder:      string;
   vaultFolder:       string;
   cloudDestinations: CloudDestination[];
   supabaseUrl:        string;
   supabaseAnonKey:    string;
-  identityMigrated:  boolean;
   lastCreationFolder: string;
-  dimensionLabels?:  { entity: string; angle: string; format: string };
 }
 
 export function makeClient(partial: Partial<Client> = {}): Client {
   return {
     id:                crypto.randomUUID(),
     name:              '',
-    logoUrl:           null,
-    brandColor:        '#161616',
+    accent:            '#161616',
+    initials:          '',
     sourceFolder:      '',
     targetFolder:      '',
     vaultFolder:       '',
     cloudDestinations:  [],
     supabaseUrl:        '',
     supabaseAnonKey:    '',
-    identityMigrated:  false,
     lastCreationFolder: '',
-    dimensionLabels:   { entity: 'Entity', angle: 'Angle', format: 'Format' },
+    dimensionLabels:   { ...DEFAULT_DIMENSION_LABELS },
     ...partial,
   };
 }
@@ -152,13 +136,13 @@ export function makeDestination(partial: Partial<CloudDestination> = {}): CloudD
     enabled:          true,
     config:           { type: 'local', path: '' },
     ...rest,
-    // Always resolve layout from partial (maps legacy packages/flatExport).
+    // Always resolve layout from partial so the pair stays internally consistent.
     exportLayout:     shape.exportLayout,
     includePackages:  shape.includePackages,
   };
 }
 
-/** Normalize portal / legacy JSON into a full CloudDestination. */
+/** Normalize portal JSON into a full CloudDestination. */
 export function normalizeDestination(raw: Partial<CloudDestination> & {
   id?: string;
   flatExport?: boolean;

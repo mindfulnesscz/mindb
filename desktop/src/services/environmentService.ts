@@ -8,7 +8,6 @@
  *
  * Persisted to environments.json. On first run, migrates from:
  *   - auth-server.json  (the Phase-B login gate's single server config)
- *   - clients.json      (legacy per-client supabaseUrl/anon-key pairs)
  */
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { appDataDir, join } from '@tauri-apps/api/path';
@@ -54,21 +53,13 @@ function supabaseProjectRef(url: string): string | null {
   }
 }
 
-function guessName(url: string): string {
-  if (url.includes('127.0.0.1') || url.includes('localhost')) return 'Local';
-  const ref = supabaseProjectRef(url);
-  if (ref && PORTAL_BY_SUPABASE_REF[ref] === STAGING_PORTAL) return 'Staging';
-  if (ref && PORTAL_BY_SUPABASE_REF[ref] === PRODUCTION_PORTAL) return 'Production';
-  return ref ? `Environment (${ref.slice(0, 8)})` : 'Environment';
-}
-
 /** Portal origin for "Manage in portal" — follows the active Supabase environment. */
 export function portalUrlForEnvironment(env: Environment | null | undefined): string {
   const url = (env?.supabaseUrl ?? '').trim();
   if (!url || /127\.0\.0\.1|localhost/i.test(url)) return LOCAL_PORTAL;
 
   // Prefer the project ref from the URL — never trust env display names alone.
-  // (Legacy migrations named every hosted env "Production (…)", which would otherwise open prod.)
+  // (An env mislabelled "Production (…)" would otherwise open the production portal.)
   const ref = supabaseProjectRef(url);
   if (ref && PORTAL_BY_SUPABASE_REF[ref]) return PORTAL_BY_SUPABASE_REF[ref];
 
@@ -120,61 +111,17 @@ async function readJsonIfExists<T>(path: string): Promise<T | null> {
   }
 }
 
-/** Loads environments, running the one-time migration from auth-server.json
- * and legacy clients.json when environments.json doesn't exist yet. */
+/** Loads environments from disk. When none exist, the login screen creates the first one —
+ * there is no config to inherit from anywhere else. */
 export async function loadEnvironments(): Promise<PersistedEnvironments> {
-  const path = await filePath();
-  const existing = await readJsonIfExists<PersistedEnvironments>(path);
-  if (existing) {
-    // Re-shape strictly: files written before Phase 3 carried a serviceKey —
-    // dropping unknown fields here scrubs it from disk on the next save.
-    const list = (existing.list ?? []).map(e => makeEnvironment({
-      id: e.id, name: e.name, supabaseUrl: e.supabaseUrl, anonKey: e.anonKey,
-    }));
-    return { activeId: existing.activeId ?? null, list };
-  }
-
-  const dir = await appDataDir();
-  const list: Environment[] = [];
-  const byUrl = new Map<string, Environment>();
-
-  // Legacy clients.json → one environment per distinct Supabase URL.
-  type LegacyClient = { name?: string; supabaseUrl?: string; supabaseAnonKey?: string; supabaseServiceKey?: string };
-  const legacy = await readJsonIfExists<{ clients?: LegacyClient[] }>(await join(dir, 'clients.json'));
-  for (const c of legacy?.clients ?? []) {
-    const url = (c.supabaseUrl ?? '').trim().replace(/\/+$/, '');
-    if (!url) continue;
-    const found = byUrl.get(url);
-    if (found) {
-      if (!found.anonKey && c.supabaseAnonKey) found.anonKey = c.supabaseAnonKey;
-      continue;
-    }
-    const env = makeEnvironment({
-      name:        guessName(url),
-      supabaseUrl: url,
-      anonKey:     c.supabaseAnonKey ?? '',
-    });
-    byUrl.set(url, env);
-    list.push(env);
-  }
-
-  // Phase-B auth-server.json → merge into a matching env or create one.
-  const authServer = await readJsonIfExists<{ url?: string; anonKey?: string }>(await join(dir, 'auth-server.json'));
-  if (authServer?.url && authServer.anonKey) {
-    const url = authServer.url.trim().replace(/\/+$/, '');
-    const found = byUrl.get(url);
-    if (found) {
-      if (!found.anonKey) found.anonKey = authServer.anonKey;
-    } else {
-      const env = makeEnvironment({ name: guessName(url), supabaseUrl: url, anonKey: authServer.anonKey });
-      byUrl.set(url, env);
-      list.push(env);
-    }
-  }
-
-  const data: PersistedEnvironments = { activeId: list[0]?.id ?? null, list };
-  if (list.length) await saveEnvironments(data);
-  return data;
+  const existing = await readJsonIfExists<PersistedEnvironments>(await filePath());
+  if (!existing) return { activeId: null, list: [] };
+  // Re-shape strictly: files written before Phase 3 carried a serviceKey —
+  // dropping unknown fields here scrubs it from disk on the next save.
+  const list = (existing.list ?? []).map(e => makeEnvironment({
+    id: e.id, name: e.name, supabaseUrl: e.supabaseUrl, anonKey: e.anonKey,
+  }));
+  return { activeId: existing.activeId ?? null, list };
 }
 
 export async function saveEnvironments(data: PersistedEnvironments): Promise<void> {

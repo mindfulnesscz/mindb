@@ -1,7 +1,10 @@
 {
   "compilerOptions": {
     "target": "ES2020",
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    // ES2022 lib (not target) purely for `new Error(msg, { cause })` — supported
+    // by every browser/WebView this ships to, and how caught errors keep their
+    // original stack instead of being flattened into a string.
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",

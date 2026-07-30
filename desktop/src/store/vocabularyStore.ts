@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { VocabTag, VocabularyData } from '../domain/vocabulary';
+import { type VocabTag, type VocabularyData } from '@dc-hub/domain';
 import { getSeedVocabulary } from '../services/vocabService';
 
 const EMPTY_VOCAB: VocabularyData = {

@@ -4,6 +4,7 @@ import { useAppStore, type NavDest } from '../store/appStore';
 import { useClientStore } from '../store/clientStore';
 import { useAuthStore } from '../store/authStore';
 import { signOut } from '../services/authService';
+import { reportError } from '../services/reportError';
 import { ClientPickerModal, ClientAvatar } from '../features/clients/ClientPickerModal';
 import css from './NavRail.module.css';
 
@@ -22,7 +23,7 @@ export function NavRail() {
   const activeClient = clients.find(c => c.id === activeClientId) ?? null;
 
   async function handleSignOut() {
-    await signOut().catch(console.error);
+    await signOut().catch(e => reportError('auth.NavRail.signOut', e));
     setProfile(null);
     setStatus('signedOut');
   }

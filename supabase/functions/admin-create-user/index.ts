@@ -124,7 +124,7 @@ Deno.serve(async (req) => {
   }
 
   const meta = name ? { name } : {};
-  let userId: string | null = null;
+  let userId: string | null;
 
   if (sendInvitation) {
     const res = await fetch(`${supabaseUrl}/auth/v1/invite`, {

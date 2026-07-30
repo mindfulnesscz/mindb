@@ -1,6 +1,6 @@
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { appDataDir, join } from '@tauri-apps/api/path';
-import type { VocabularyData, VocabTag, Slot } from '../domain/vocabulary';
+import { type VocabularyData, type VocabTag, type Slot } from '@dc-hub/domain';
 import { activeEnvironment } from '../store/environmentStore';
 import { makeHeaders, sbFetch } from './supabase/rest';
 
@@ -21,32 +21,13 @@ function emptyVocab(comment: string): VocabularyData {
     _schema_version: '4.0.0',
     _comment: comment,
     tags: [],
-    legacy_aliases: {},
   };
-}
-
-/** Migrate legacy local-cache shapes (subtype / obsidian_tag) → parentGroup / key. */
-function migrateTags(tags: VocabTag[]): VocabTag[] {
-  return tags.map(t => {
-    const legacy = t as VocabTag & { subtype?: string; obsidian_tag?: string };
-    return {
-      shortcode: legacy.shortcode,
-      slot: legacy.slot,
-      parentGroup: legacy.parentGroup ?? (legacy.subtype ?? null),
-      label: legacy.label,
-      key: legacy.key || legacy.obsidian_tag || legacy.label.toLowerCase().replace(/\s+/g, '-'),
-      icon: legacy.icon ?? '',
-    };
-  });
 }
 
 function parseSafe(text: string): VocabularyData | null {
   try {
     const parsed = JSON.parse(text) as VocabularyData;
-    if (parsed && Array.isArray(parsed.tags)) {
-      parsed.tags = migrateTags(parsed.tags);
-      return parsed;
-    }
+    if (parsed && Array.isArray(parsed.tags)) return parsed;
   } catch { /* fall through */ }
   return null;
 }
@@ -110,7 +91,6 @@ export function tagsToVocabulary(rows: DbTagRow[]): VocabularyData {
     _comment: `Synced from public.tags (${rows.length} rows, ${parentGroups.length} groups, ${tags.length} leaves).`,
     tags,
     parentGroups,
-    legacy_aliases: {},
   };
 }
 
@@ -119,7 +99,7 @@ async function fetchTagsFromDb(clientId: string): Promise<VocabularyData | null>
   if (!env?.supabaseUrl || !env.anonKey) return null;
 
   try {
-    const headers = makeHeaders(env.anonKey);
+    const headers = await makeHeaders(env.anonKey);
     const base =
       `${env.supabaseUrl.replace(/\/+$/, '')}/rest/v1/tags` +
       `?client_id=eq.${clientId}&order=sort_order.asc`;

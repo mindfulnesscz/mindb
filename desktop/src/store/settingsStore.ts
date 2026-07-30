@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import type { FilterMode } from '../domain/naming';
 
 export interface AppSettings {
   /* Paths */
@@ -20,13 +19,13 @@ export interface AppSettings {
   dryRun:            boolean;
   keepHighestVersion: boolean;
   preserveStructure:  boolean;
+  /** Opt out of the blast-radius tripwire for one run — see services/guardrail.ts. */
+  allowLargeDeletions: boolean;
 
   /* Folder patterns */
   packagePrefix: string;
   outFolder:     string;
   excludeMark:   string;
-  includeMark:   string;
-  filterMode:    FilterMode;
 
   /* Thumbnails & DAM */
   thumbWidth:   string;
@@ -51,12 +50,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dryRun:            false,
   keepHighestVersion: true,
   preserveStructure:  false,
+  allowLargeDeletions: false,
 
   packagePrefix: '[00] 📦',
   outFolder:     '[03] OUT',
   excludeMark:   '⦰',
-  includeMark:   '🏁',
-  filterMode:    'blacklist',
 
   thumbWidth:   '640',
   thumbQuality: '70',

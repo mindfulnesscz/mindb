@@ -1,0 +1,17 @@
+# Mirrors the `ignores` block in eslint.config.js. Prettier also honours
+# .gitignore, but be explicit: `format` must never rewrite generated files.
+node_modules/
+dist/
+.next/
+out/
+target/
+*.d.ts
+package-lock.json
+CHANGELOG.md
+
+# Generated from the database schema — `npm run db:types` owns these.
+packages/database/src/database.types.ts
+web/apps/client-hub/src/lib/database.types.ts
+
+# Stale compiled .js sitting next to the .tsx sources (Vite builds from main.tsx).
+web/apps/client-hub/src/**/*.js

@@ -1,6 +1,6 @@
 import { supabase } from '../lib/supabase'
 import type { Asset, FilterState, Role, AssetStatus, AssetPerm } from '@dc-hub/asset-library'
-import type { AssetRow, AssetStats } from '../lib/database.types'
+import type { AssetRow, AssetStats } from '@dc-hub/database'
 
 type AssetRowWithStats = AssetRow & { stats: AssetStats | AssetStats[] | null }
 
@@ -127,7 +127,7 @@ export async function fetchAssets(opts: FetchAssetsOptions = {}): Promise<{ asse
     .order('updated_at', { ascending: false })
 
   if (clientId)               query = query.eq('client_id', clientId)
-  // Children (legacy parent_id) and variants (folder-based stable identity, Task 3) are
+  // Children (parent_id, a gallery's images) and variants (variant_of, format siblings) are
   // both only visible inside the primary's detail view, never as their own top-level card.
   query = query.is('parent_id', null).is('variant_of', null)
   const isStaff = opts.role === 'admin' || opts.role === 'editor' || opts.role === 'super_admin'
@@ -198,9 +198,9 @@ export async function fetchAsset(id: string): Promise<Asset | null> {
     .from('assets')
     .select('*')
     .eq('id', id)
-    .single()
+    .maybeSingle()
 
-  if (error) return null
+  if (error || !data) return null
   const statsMap = await fetchStatsMap([id])
   return toAsset({ ...(data as unknown as AssetRow), stats: statsMap.get(id) ?? null })
 }
@@ -237,7 +237,7 @@ export async function updateAssetStatus(
   status: Asset['status'],
 ): Promise<void> {
   if (!supabase) throw new Error('Supabase not configured')
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const { error } = await (supabase as any).from('assets').update({ status }).eq('id', id)
   if (error) throw new Error(error.message)
 }
@@ -247,14 +247,14 @@ export async function updateAssetPerm(
   perm: Asset['perm'],
 ): Promise<void> {
   if (!supabase) throw new Error('Supabase not configured')
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const { error } = await (supabase as any).from('assets').update({ perm }).eq('id', id)
   if (error) throw new Error(error.message)
 }
 
 export async function deleteAsset(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase not configured')
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const { error } = await (supabase as any).from('assets').delete().eq('id', id)
   if (error) throw new Error(error.message)
 }

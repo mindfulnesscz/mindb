@@ -8,8 +8,9 @@ import {
   type EmailAuthType,
   type OAuthProvider,
 } from '@dc-hub/auth'
-import { supabase, isConfigured } from '../lib/supabase'
-import type { ProfileRow } from '../lib/database.types'
+import { supabase, isConfigured, getConfig } from '../lib/supabase'
+import { configureErrorSink } from '../lib/reportError'
+import type { ProfileRow } from '@dc-hub/database'
 
 // Auth logic + types now live in the shared @dc-hub/auth package. Re-export the
 // types so existing importers (e.g. SignInModal) keep resolving them from here.
@@ -33,6 +34,20 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const configured = isConfigured()
   const [session, setSession] = useState<Session | null>(null)
+
+  /* The sink follows the configured backend, so a staging failure lands in staging. Set before the
+     session resolves, because a failed sign-in is exactly the error worth capturing. */
+  useEffect(() => {
+    const { url, anonKey } = getConfig()
+    configureErrorSink(url && anonKey
+      ? {
+          url, anonKey,
+          environment: import.meta.env.MODE,
+          appVersion: __APP_VERSION__,
+          userId: session?.user.id ?? null,
+        }
+      : null)
+  }, [session?.user.id])
   const [profile, setProfile] = useState<ProfileRow | null>(null)
   const [loading, setLoading] = useState(configured)
 
@@ -56,7 +71,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function fetchProfile(userId: string) {
     if (!supabase) return
-    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
+    // maybeSingle: no profile row is a normal state (stale session, invite not completed).
+    // .single() answers that with an opaque 406 instead of null.
+    const { data } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle()
     setProfile(data as ProfileRow | null)
     setLoading(false)
   }

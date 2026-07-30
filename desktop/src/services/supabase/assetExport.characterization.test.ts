@@ -1,0 +1,373 @@
+/* Characterization tests — ASSET EXPORT (exportAssetsToSupabase), the pipeline's Supabase sync.
+ *
+ * This decides, for every asset on disk, whether a row is created, updated, or soft-disconnected —
+ * and how variants, galleries and version history relate. Getting it wrong either duplicates a
+ * client's assets in the portal or disconnects live ones, taking their ratings and comments with
+ * them.
+ *
+ * Until now its only coverage needed a live local Postgres, so CI proved nothing about it. These
+ * tests are hermetic: the manifest lives in the virtual filesystem, and the REST layer is a
+ * recording stub, so the assertions are on the rows this code WOULD write.
+ *
+ * Written before splitting the 489-line function (2c-1) — the same prove-then-move order that made
+ * the pipelineService split a non-event.
+ */
+
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+vi.mock('@tauri-apps/plugin-fs', async () => (await import('../../test/vfs')).vfs.fsApi());
+vi.mock('@tauri-apps/api/path', async () => (await import('../../test/vfs')).vfs.pathApi());
+vi.mock('./rest', async () => (await import('../../test/restStub')).restStub.api());
+// readme.md generation and stats are separate concerns with their own paths; stub them so a
+// failure there cannot look like a sync failure here.
+vi.mock('../readmeService', () => ({ writeReadme: async () => {} }));
+vi.mock('./assetQueries', () => ({ fetchAssetStats: async () => new Map() }));
+
+const { vfs } = await import('../../test/vfs');
+const { restStub } = await import('../../test/restStub');
+const { exportAssetsToSupabase } = await import('./assetExport');
+const { groupAssets } = await import('@dc-hub/domain');
+import type { VocabularyData, VocabTag } from '@dc-hub/domain';
+
+const SRC = '/src';
+const CLIENT = 'client-1';
+const config = { url: 'https://test.supabase.co', anonKey: 'anon' };
+
+const tag = (shortcode: string, slot: VocabTag['slot'], label: string): VocabTag =>
+  ({ shortcode, slot, parentGroup: null, label, key: label.toLowerCase(), icon: '' });
+
+const VOCAB: VocabularyData = {
+  _schema_version: '4.0.0', _comment: 'test',
+  tags: [
+    tag('PRD', 'entity', 'Product'),
+    tag('ACQ', 'entity', 'Acquisition'),
+    tag('OVR', 'angle', 'Overview'),
+    tag('SlD', 'format', 'Slides'),
+    tag('Pdf', 'format', 'PDF'),
+    tag('Gll', 'format', 'Gallery'),
+  ],
+};
+
+/** Drive the sync from real file paths, through the real grouping logic. */
+async function sync(paths: string[], opts: { cdnUrls?: Map<string, string> } = {}) {
+  const { singles, galleries } = groupAssets(paths, 'OUT');
+  const logs: Array<{ type: string; msg: string }> = [];
+  const result = await exportAssetsToSupabase(
+    singles, CLIENT, VOCAB, config,
+    (type, msg) => { logs.push({ type, msg }); },
+    opts.cdnUrls, undefined, galleries, undefined,
+  );
+  return { result, logs, logged: (n: string) => logs.some(l => l.msg.includes(n)) };
+}
+
+beforeEach(() => { vfs.reset(); restStub.reset(); });
+
+describe('assetExport — a fresh package folder', () => {
+  it('creates one row, keyed by stable_id + child_id rather than by shortcode', async () => {
+    vfs.put(`${SRC}/Asset __a1000001/OUT/(PRD)(SlD) Deck.pdf`, 'pdf');
+    const { result } = await sync([`${SRC}/Asset __a1000001/OUT/(PRD)(SlD) Deck.pdf`]);
+
+    expect(result.created).toBe(1);
+    expect(result.updated).toBe(0);
+    expect(restStub.inserted()).toHaveLength(1);
+    expect(restStub.inserted()[0]).toMatchObject({
+      client_id: CLIENT, stable_id: 'a1000001', child_id: 'c1',
+      shortcode: '(PRD)(SlD) Deck', name: 'Product Slides — Deck',
+      status: 'published', perm: 'public',
+      parent_id: null, variant_of: null,
+    });
+  });
+
+  it('persists the manifest so the next run resolves the same child_id', async () => {
+    const p = `${SRC}/Asset __a1000002/OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.put(p, 'pdf');
+    await sync([p]);
+
+    const manifest = JSON.parse(vfs.text(`${SRC}/Asset __a1000002/.dchub.json`));
+    expect(manifest.stable_id).toBe('a1000002');
+    expect(manifest.children['(PRD)(SlD) Deck.pdf'].child_id).toBe('c1');
+  });
+
+  it('UPDATES rather than duplicates when the row already exists', async () => {
+    const p = `${SRC}/Asset __a1000003/OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.put(p, 'pdf');
+    restStub.existingRows = [{ id: 'row-existing', stable_id: 'a1000003', child_id: 'c1' }];
+
+    const { result } = await sync([p]);
+
+    expect(result.created).toBe(0);
+    expect(result.updated).toBe(1);
+    expect(restStub.byMethod('PATCH')[0].url).toContain('id=eq.row-existing');
+  });
+
+  it('refuses to sync a folder with no identity, and reports it', async () => {
+    // No " __<hash>" suffix means no permanent key. Guessing one would orphan the row on the
+    // first rename, so the asset is reported instead.
+    const p = `${SRC}/Unhashed Folder/OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.put(p, 'pdf');
+    const { result, logged } = await sync([p]);
+
+    expect(restStub.inserted()).toEqual([]);
+    expect(result.errors).toBe(1);
+    expect(logged('no " __<hash>" suffix')).toBe(true);
+  });
+});
+
+describe('assetExport — version history collapses to one row', () => {
+  it('syncs only the highest version of a deliverable', async () => {
+    // v1 and v2 of one asset are version HISTORY, not two assets. Older versions are tracked by
+    // syncVersionHistory instead.
+    const paths = [
+      `${SRC}/Asset __a2000001/OUT/(PRD)(SlD) Deck v1.pdf`,
+      `${SRC}/Asset __a2000001/OUT/(PRD)(SlD) Deck v2.pdf`,
+    ];
+    paths.forEach(p => vfs.put(p, p));
+    const { result } = await sync(paths);
+
+    expect(result.created).toBe(1);
+    expect(restStub.inserted()[0].shortcode).toBe('(PRD)(SlD) Deck');
+    expect(restStub.inserted()[0].version).toBe('v2');
+  });
+
+  it('keeps the same child_id across a version bump, so the row survives', async () => {
+    // The row carries the ratings and comments — a new child_id would strand them.
+    const v1 = `${SRC}/Asset __a2000002/OUT/(PRD)(SlD) Deck v1.pdf`;
+    vfs.put(v1, 'v1');
+    await sync([v1]);
+    const firstChildId = restStub.inserted()[0].child_id;
+
+    restStub.reset();
+    const v2 = `${SRC}/Asset __a2000002/OUT/(PRD)(SlD) Deck v2.pdf`;
+    vfs.put(v2, 'v2');
+    await sync([v2]);
+
+    expect(restStub.inserted()[0].child_id).toBe(firstChildId);
+  });
+});
+
+describe('assetExport — variants (several renditions in one OUT)', () => {
+  it('makes the first a primary and links the rest with variant_of, not parent_id', async () => {
+    // Variants are the same deliverable in different renditions — the portal shows a picker.
+    const paths = [
+      `${SRC}/Asset __a3000001/OUT/(PRD)(SlD) Deck.pdf`,
+      `${SRC}/Asset __a3000001/OUT/(PRD)(Pdf) Deck Print.pdf`,
+    ];
+    paths.forEach(p => vfs.put(p, p));
+    const { result } = await sync(paths);
+
+    expect(result.created).toBe(2);
+    const rows = restStub.inserted();
+    const primary = rows.find(r => r.variant_of === null && r.parent_id === null);
+    const variant = rows.find(r => r.variant_of !== null && r.variant_of !== undefined);
+    expect(primary).toBeDefined();
+    expect(variant).toBeDefined();
+    expect(variant!.parent_id).toBeNull();     // never both relations at once
+  });
+
+  it('renames the primary to the tags every variant SHARES', async () => {
+    // Otherwise the group card is named after whichever variant happened to be primary, which
+    // reads as noise ("... — Print").
+    const paths = [
+      `${SRC}/Asset __a3000002/OUT/(PRD)(SlD) Deck.pdf`,
+      `${SRC}/Asset __a3000002/OUT/(PRD)(Pdf) Deck.pdf`,
+    ];
+    paths.forEach(p => vfs.put(p, p));
+    await sync(paths);
+
+    const primary = restStub.inserted().find(r => r.variant_of === null)!;
+    expect(primary.name).toBe('Product');        // the one tag both variants share
+  });
+
+  it('rolls every variant tag UP onto the primary, so filters still surface the group', async () => {
+    const paths = [
+      `${SRC}/Asset __a3000003/OUT/(PRD)(SlD) Deck.pdf`,
+      `${SRC}/Asset __a3000003/OUT/(ACQ)(Pdf) Deck.pdf`,
+    ];
+    paths.forEach(p => vfs.put(p, p));
+    await sync(paths);
+
+    const primary = restStub.inserted().find(r => r.variant_of === null)!;
+    expect(new Set(primary.tags as string[])).toEqual(
+      new Set(['Product', 'Slides', 'Acquisition', 'PDF']),
+    );
+    expect(new Set(primary.entities as string[])).toEqual(new Set(['Product', 'Acquisition']));
+    expect(new Set(primary.formats as string[])).toEqual(new Set(['Slides', 'PDF']));
+  });
+
+  it('leaves a single-file package named after its own file', async () => {
+    const p = `${SRC}/Asset __a3000004/OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.put(p, 'x');
+    await sync([p]);
+
+    expect(restStub.inserted()[0].name).toBe('Product Slides — Deck');
+  });
+
+  it('does not treat extension pairs of one stem as two variants', async () => {
+    // groupAssets emits one entry per FILE, so foo.pdf + foo.png repeat a stem. Resolving the
+    // stem twice used to stamp variant_of onto the primary's own row, hiding the group.
+    const paths = [
+      `${SRC}/Asset __a3000005/OUT/(PRD)(SlD) Deck.pdf`,
+      `${SRC}/Asset __a3000005/OUT/(PRD)(SlD) Deck.png`,
+    ];
+    paths.forEach(p => vfs.put(p, p));
+    const { result } = await sync(paths);
+
+    expect(result.created).toBe(1);
+    expect(restStub.inserted()[0].variant_of).toBeNull();
+  });
+});
+
+describe('assetExport — galleries (a folder of related files)', () => {
+  it('creates a parent for the folder and links children with parent_id, not variant_of', async () => {
+    // A gallery is many related-but-distinct files — the portal shows a grid, not a picker.
+    const paths = [
+      `${SRC}/Shoot __a4000001/OUT/(PRD)(Gll) Studios/01.jpg`,
+      `${SRC}/Shoot __a4000001/OUT/(PRD)(Gll) Studios/02.jpg`,
+    ];
+    paths.forEach(p => vfs.put(p, p));
+    const { result } = await sync(paths);
+
+    expect(result.created).toBe(3);              // 1 parent + 2 children
+    const rows = restStub.inserted();
+    const children = rows.filter(r => r.parent_id !== null && r.parent_id !== undefined);
+    expect(children).toHaveLength(2);
+    for (const c of children) expect(c.variant_of).toBeNull();
+  });
+
+  it('keeps same-named galleries in different packages apart', async () => {
+    // Two packages each holding an "Old/" gallery is a real client shape; a shared key would let
+    // the second overwrite the first.
+    const paths = [
+      `${SRC}/A __a4000002/OUT/Old/a.jpg`,
+      `${SRC}/B __a4000003/OUT/Old/b.jpg`,
+    ];
+    paths.forEach(p => vfs.put(p, p));
+    await sync(paths);
+
+    const stableIds = new Set(restStub.inserted().map(r => r.stable_id));
+    expect(stableIds).toEqual(new Set(['a4000002', 'a4000003']));
+  });
+});
+
+describe('assetExport — disconnecting what is gone', () => {
+  it('soft-marks a row whose file left the disk, never deletes it', async () => {
+    // Deleting would take the asset's ratings, comments and events with it. A transient disk
+    // change must never do that.
+    const p = `${SRC}/Asset __a5000001/OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.put(p, 'pdf');
+    restStub.existingRows = [
+      { id: 'row-live', stable_id: 'a5000001', child_id: 'c1' },
+      { id: 'row-gone', stable_id: 'a5000001', child_id: 'c9' },
+    ];
+
+    const { result } = await sync([p]);
+
+    expect(result.disconnected).toBe(1);
+    expect(restStub.disconnectedIds()).toEqual(['row-gone']);
+    expect(restStub.byMethod('DELETE')).toEqual([]);
+  });
+
+  it('reports the stale CDN keys for a separate, explicit cleanup', async () => {
+    const p = `${SRC}/Asset __a5000002/OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.put(p, 'pdf');
+    restStub.existingRows = [
+      { id: 'row-live', stable_id: 'a5000002', child_id: 'c1' },
+      { id: 'row-gone', stable_id: 'a5000002', child_id: 'c9', download_key: 'originals/a5000002/c9.pdf' },
+    ];
+
+    const { result } = await sync([p]);
+
+    expect(result.staleObjectKeys).toEqual(['originals/a5000002/c9.pdf']);
+  });
+
+  it('disconnects nothing when every row is still on disk', async () => {
+    const p = `${SRC}/Asset __a5000003/OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.put(p, 'pdf');
+    restStub.existingRows = [{ id: 'row-live', stable_id: 'a5000003', child_id: 'c1' }];
+
+    const { result } = await sync([p]);
+
+    expect(result.disconnected).toBe(0);
+    expect(restStub.disconnectedIds()).toEqual([]);
+  });
+});
+
+describe('assetExport — guards', () => {
+  it('skips a hash claimed by two folders rather than syncing either', async () => {
+    // Same hash in two places means a duplicated folder or a moved asset. Writing either would
+    // corrupt the other's row, so the run reports and skips.
+    const paths = [
+      `${SRC}/One __a6000001/OUT/(PRD)(SlD) A.pdf`,
+      `${SRC}/Two __a6000001/OUT/(PRD)(SlD) B.pdf`,
+    ];
+    paths.forEach(p => vfs.put(p, p));
+    const { logged } = await sync(paths);
+
+    expect(restStub.inserted()).toEqual([]);
+    expect(logged('claimed by multiple folders')).toBe(true);
+  });
+
+  it('omits absent URL fields from a PATCH so a cached run cannot wipe stored URLs', async () => {
+    // PATCH leaves omitted fields untouched in Postgres. Sending thumbnail_url: null when the
+    // upload phase was skipped would blank the portal's image.
+    const p = `${SRC}/Asset __a6000002/OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.put(p, 'pdf');
+    restStub.existingRows = [{ id: 'row-x', stable_id: 'a6000002', child_id: 'c1' }];
+
+    await sync([p]);
+
+    const body = restStub.patched()[0];
+    expect('thumbnail_url' in body).toBe(false);
+    expect('download_url' in body).toBe(false);
+  });
+
+  it('DOES send a URL field when the run actually produced one', async () => {
+    const p = `${SRC}/Asset __a6000003/OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.put(p, 'pdf');
+    restStub.existingRows = [{ id: 'row-y', stable_id: 'a6000003', child_id: 'c1' }];
+
+    await sync([p], { cdnUrls: new Map([[p, 'https://cdn/x.webp']]) });
+
+    expect(restStub.patched()[0].thumbnail_url).toBe('https://cdn/x.webp');
+  });
+
+  it('always clears both relation fields on a primary', async () => {
+    // A row synced by an earlier build may carry a stale parent_id or variant_of; an omitted
+    // field would leave it in place.
+    const p = `${SRC}/Asset __a6000004/OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.put(p, 'pdf');
+    await sync([p]);
+
+    expect(restStub.inserted()[0]).toMatchObject({ parent_id: null, variant_of: null });
+  });
+
+  it('counts an error and keeps going when a write fails', async () => {
+    restStub.failUrlMatching = /\/assets$/;      // fail inserts only
+    const p = `${SRC}/Asset __a6000005/OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.put(p, 'pdf');
+    const { result, logged } = await sync([p]);
+
+    expect(result.created).toBe(0);
+    expect(result.errors).toBe(1);
+    expect(logged('Stable insert failed')).toBe(true);
+  });
+
+  it('does not disconnect anything when the existing-rows read fails', async () => {
+    // If the read failed, "no row for this key" is unknown rather than false. Treating the empty
+    // result as truth would mark every asset disconnected.
+    restStub.fetchAllThrows = true;
+    const p = `${SRC}/Asset __a6000006/OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.put(p, 'pdf');
+    const { result, logged } = await sync([p]);
+
+    expect(result.disconnected).toBe(0);
+    expect(logged('Could not fetch existing stable-identity records')).toBe(true);
+  });
+
+  it('does nothing at all when there is nothing on disk', async () => {
+    const { result } = await sync([]);
+
+    expect(restStub.calls).toEqual([]);
+    expect(result).toMatchObject({ created: 0, updated: 0, disconnected: 0, errors: 0 });
+  });
+});

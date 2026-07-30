@@ -56,20 +56,13 @@ export function roleAtLeast(user: Role, min: Role): boolean {
   return ROLE_RANK[user] >= ROLE_RANK[min]
 }
 
-/** Normalize layout + packages from current or legacy fields. */
+/** Keep exportLayout and includePackages internally consistent. */
 export function resolveExportShape(raw: Record<string, unknown> | Partial<PortalDestination>): {
   exportLayout: DestExportLayout
   includePackages: boolean
 } {
-  const layoutRaw = (raw as { exportLayout?: unknown }).exportLayout
-  // Legacy exclusive "packages" mode → folders + include packages
-  if (layoutRaw === 'packages' || (raw as { exportPackages?: unknown }).exportPackages) {
-    return { exportLayout: 'folders', includePackages: true }
-  }
   const exportLayout: DestExportLayout =
-    layoutRaw === 'flat' || (raw as { flatExport?: unknown }).flatExport
-      ? 'flat'
-      : 'folders'
+    (raw as { exportLayout?: unknown }).exportLayout === 'flat' ? 'flat' : 'folders'
   const includePackages =
     exportLayout === 'folders' && Boolean((raw as { includePackages?: unknown }).includePackages)
   return { exportLayout, includePackages }
@@ -88,7 +81,7 @@ export function makePortalDestination(partial: Partial<PortalDestination> = {}):
     enabled: true,
     config: { type: 'gdrive', clientId: '', clientSecret: '', sharedDriveId: '', remotePath: '', token: null },
     ...partial,
-    // Always resolve layout from partial (maps legacy packages/flatExport).
+    // Always resolve layout from partial so the pair stays internally consistent.
     exportLayout: shape.exportLayout,
     includePackages: shape.includePackages,
   }
@@ -125,7 +118,7 @@ export async function fetchDestinations(clientId: string): Promise<PortalDestina
     .from('clients')
     .select('cloud_destinations')
     .eq('id', clientId)
-    .single()
+    .maybeSingle()
   if (error) throw new Error(error.message)
   const raw = (data as { cloud_destinations?: unknown } | null)?.cloud_destinations
   if (!Array.isArray(raw)) return []

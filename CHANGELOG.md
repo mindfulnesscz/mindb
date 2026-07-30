@@ -5,6 +5,68 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [3.0.0] — 2026-07-28
+
+Folder-based stable identity is now the only identity. The shortcode-matching path that
+predated it is gone, along with every one-time upgrade shim around it. Every asset package
+on disk already carried a `__<hash>` folder suffix and a `.dchub.json` manifest, so the old
+path had no remaining input — it only added ways to go wrong.
+
+**Apply `supabase/migrations/20260728120000_drop_legacy_identity.sql` before running this
+build.** It drops the constraint the build stops satisfying.
+
+### Removed
+
+- **Shortcode identity path** — the two-phase upsert keyed on `(client_id, shortcode)`, its
+  existing-row map, URL-preservation pass, and the hard-delete stale sweep (~330 lines).
+  Rows are matched on `(stable_id, child_id)` and written by row id; a vanished folder is
+  soft-disconnected, never deleted, so ratings, comments, approvals and events survive.
+- **`clients.identity_migrated`** and all its plumbing. There is nothing left to gate.
+- **Shortcode suffixes** — `assets.shortcode` no longer carries `__<hash>:c<N>`. That was a
+  duplicate of the row's own `stable_id`/`child_id` columns, glued on so the dropped unique
+  constraint would accept two assets rendering the same display text. `shortcode` is now
+  purely a display string; `stable_id` and `child_id` are `not null`.
+- **Filename-based CDN keys** — thumbnails and originals key only on stable identity. An
+  asset outside a hashed package folder is reported and skipped rather than uploaded under a
+  key that a rename would strand.
+- **CDN inventory pre-population** — parsed the old `thumbnails/{stem}-thumb.webp` key shape,
+  so it had already stopped matching anything. URL preservation is handled by omitting absent
+  URL fields from the PATCH.
+- **`legacy_aliases`** vocabulary aliasing, the `subtype`/`obsidian_tag` tag-shape migration,
+  the `clients.json` → DB client adoption (plus vocab-file re-key), the `clients.json`/
+  `auth-server.json` environment bootstrap, the `exportPackages`/`flatExport` destination
+  fields, the `dam:links_start` note-block stripper, the `'client'` → `'member'` role mapping,
+  `migrate-identity.ts`, and two unused bundled `vocabulary.json` seeds.
+
+### Changed
+
+- **Version history** is keyed `(stable_id, shortcode)` instead of shortcode alone. Display
+  text repeats across packages, so the old key silently merged two unrelated assets' history
+  into whichever was scanned last.
+- **Gallery parent slots** in `.dchub.json` are keyed by folder path only; the shared
+  `__gallery_parent__` key is gone (existing manifests were migrated in place).
+
+### Fixed
+
+- Gallery children synced with their folder path baked into name, shortcode and CDN lookup
+  key (`Gallery/(DC)(M5)(Gll) 03`), which failed the vocabulary parser and matched no
+  thumbnail — blank, untagged children in the portal. Regression from `abb496f`, which fixed
+  only the stable-identity branch.
+- The Obsidian step no longer scans the vault, so a vault nested inside a client's source
+  folder can't feed on its own notes — that recursion generated notes about notes, one
+  directory level deeper per run.
+- A scaffolded asset's reserved `c1` can now actually be claimed by the real file (or by a
+  gallery parent, when the deliverable turns out to be a folder of files). The extension
+  match against the extensionless placeholder never succeeded, so every scaffolded asset
+  minted `c2` and left its draft row behind as a phantom primary.
+- **Two packages holding a same-named file or gallery folder no longer collide.** Grouping
+  keyed its package-dir and file-path lookups by bare stem, so the second package overwrote
+  the first: one package's assets were skipped silently — no error, no log — and then
+  disconnected on the next run. Live on two clients (Mucha Family's two `Deda Energie`
+  packages sharing `plyn.pdf`/`elektrika.pdf`; four ESS packages each holding an `Old/`
+  gallery). Identity now travels on each item instead of through shared stem-keyed maps,
+  which also retires `IdentityContext`.
+
 ## [2.4.2] — 2026-07-24
 
 - Packages fixed: wiping target packages in export locations, and source folder instead of disconnecting (the reason is that these packages are deplatable).

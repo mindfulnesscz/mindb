@@ -1,6 +1,6 @@
 {
   "name": "@dc-hub/asset-library",
-  "version": "2.4.2",
+  "version": "3.0.0",
   "private": false,
   "type": "module",
   "main": "./src/index.ts",
@@ -8,12 +8,16 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "dependencies": {
+    "@dc-hub/database": "*"
+  },
   "peerDependencies": {
-    "react": "^18.0.0 || ^19.0.0"
+    "react": "^19.2.8"
   },
   "devDependencies": {
-    "@types/react": "^18.3.0",
-    "typescript": "^5.6.0"
+    "@types/react": "19.2.17",
+    "react": "19.2.8",
+    "typescript": "5.9.3"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

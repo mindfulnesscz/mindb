@@ -441,3 +441,72 @@ pub async fn onedrive_refresh_token(
         expires_in:    json.expires_in.unwrap_or(3600),
     })
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+//
+// The tenant fallback below decides which Microsoft login authority every OneDrive OAuth
+// call is aimed at. Getting it wrong sends a personal-account user to an organisation
+// endpoint (or the reverse) and the only symptom is an opaque AADSTS error at sign-in.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ms_authority_uses_the_configured_tenant() {
+        assert_eq!(ms_authority(&Some("contoso.onmicrosoft.com".into())), "contoso.onmicrosoft.com");
+        assert_eq!(
+            ms_authority(&Some("72f988bf-86f1-41af-91ab-2d7cd011db47".into())),
+            "72f988bf-86f1-41af-91ab-2d7cd011db47",
+        );
+    }
+
+    #[test]
+    fn ms_authority_falls_back_to_common_for_missing_or_blank_tenants() {
+        // "common" is the multi-tenant/personal-account authority — the right default for a
+        // user who never configured an Azure tenant.
+        assert_eq!(ms_authority(&None), "common");
+        assert_eq!(ms_authority(&Some(String::new())), "common");
+        assert_eq!(ms_authority(&Some("   ".into())), "common");
+        assert_eq!(ms_authority(&Some("\t\n".into())), "common");
+    }
+
+    #[test]
+    fn ms_authority_trims_a_padded_tenant_rather_than_building_a_broken_url() {
+        assert_eq!(ms_authority(&Some("  contoso  ".into())), "contoso");
+    }
+
+    #[test]
+    fn device_code_url_targets_the_v2_endpoint_for_the_resolved_authority() {
+        assert_eq!(
+            device_code_url(&Some("contoso".into())),
+            "https://login.microsoftonline.com/contoso/oauth2/v2.0/devicecode",
+        );
+        assert_eq!(
+            device_code_url(&None),
+            "https://login.microsoftonline.com/common/oauth2/v2.0/devicecode",
+        );
+    }
+
+    #[test]
+    fn token_url_targets_the_v2_endpoint_for_the_resolved_authority() {
+        assert_eq!(
+            token_url(&Some("contoso".into())),
+            "https://login.microsoftonline.com/contoso/oauth2/v2.0/token",
+        );
+        assert_eq!(
+            token_url(&None),
+            "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+        );
+    }
+
+    #[test]
+    fn device_code_and_token_urls_share_one_authority() {
+        // A device-code flow started on one authority cannot be completed on another, so
+        // these two must never diverge.
+        let tenant = Some("contoso".into());
+        let authority = |u: &str| u.split("/oauth2/").next().unwrap().to_string();
+        assert_eq!(authority(&device_code_url(&tenant)), authority(&token_url(&tenant)));
+        assert_eq!(authority(&device_code_url(&None)), authority(&token_url(&None)));
+    }
+}
