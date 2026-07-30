@@ -25,5 +25,30 @@ export default defineConfig({
     // Component tests opt into jsdom per file with `// @vitest-environment jsdom`, so the
     // pure-logic suites keep running in plain node (they are ~10x faster there).
     setupFiles: ['./vitest.setup.ts'],
+
+    /**
+     * A RATCHET, not an aspiration.
+     *
+     * The thresholds sit just below what the suite achieves today, so the gate's only job is to stop
+     * coverage going DOWN. A threshold set above the current number fails on day one, and a gate that
+     * is red on day one gets commented out within a week — at which point it protects nothing.
+     *
+     * Raise these deliberately, as a change with its own commit, when tests are added.
+     *
+     * `include` is explicit so untested files count as zero. Without it only files a test imported are
+     * measured, and deleting the last test for a module would make coverage go *up*.
+     */
+    coverage: {
+      provider: 'v8',
+      include: ['packages/*/src/**/*.ts'],
+      exclude: ['**/*.test.ts', '**/mock.ts', 'packages/database/src/database.types.ts'],
+      thresholds: {
+        // The shared rules both apps depend on — identity, naming, grouping. Highest bar in the repo,
+        // because every asset in every client passes through them.
+        'packages/domain/src/**': { lines: 85, statements: 80, branches: 70 },
+        // The one client projection: small, and the failure mode is silent, so it stays near-total.
+        'packages/database/src/clients.ts': { lines: 95, statements: 95, branches: 95 },
+      },
+    },
   },
 });

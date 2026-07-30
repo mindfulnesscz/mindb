@@ -189,7 +189,7 @@ fn find_stable_dir(dir: &Path, stable_id: &str, depth: u32) -> Option<PathBuf> {
     let manifest = dir.join(".dchub.json");
     if manifest.is_file() {
         if let Ok(text) = std::fs::read_to_string(&manifest) {
-            if text.contains(&format!("\"stable_id\"")) && text.contains(stable_id) {
+            if text.contains("\"stable_id\"") && text.contains(stable_id) {
                 // Prefer exact JSON match when possible
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
                     if v.get("stable_id").and_then(|x| x.as_str()) == Some(stable_id) {
@@ -215,6 +215,10 @@ fn find_stable_dir(dir: &Path, stable_id: &str, depth: u32) -> Option<PathBuf> {
     None
 }
 
+// The early `return`s are load-bearing across platforms, not needless: each cfg block must stop the
+// function, or a build for one OS would fall through into the next block's command. Clippy only ever
+// sees one configured branch, where the return looks like the tail expression it is not.
+#[allow(clippy::needless_return)]
 fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
     // Package dirs: open *inside* the folder. Files: select in the parent.
     #[cfg(target_os = "macos")]

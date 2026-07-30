@@ -19,7 +19,7 @@
     "build:web": "npm run build --workspace=web/apps/client-hub",
     "build:vercel": "node scripts/vercel-build.mjs",
     "build:docs": "npm --prefix docs run build",
-    "check": "npm run version:check && npm run toolchain:check && npm run db:types:check && npm run lint && npm run build:desktop && npm run check:web && npm run build:docs && npm run check:rust",
+    "check": "npm run version:check && npm run toolchain:check && npm run db:types:check && npm run lint && npm run build:desktop && npm run check:web && npm run build:docs && npm run lint:rust",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
@@ -47,12 +47,17 @@
     "test:packages": "vitest run",
     "test:desktop": "npm --prefix desktop run test",
     "toolchain:check": "node scripts/toolchain.mjs check",
-    "toolchain:set": "node scripts/toolchain.mjs"
+    "toolchain:set": "node scripts/toolchain.mjs",
+    "lint:rust": "cargo clippy --locked --manifest-path desktop/src-tauri/Cargo.toml --all-targets -- -D warnings",
+    "test:coverage": "npm run test:coverage:packages && npm run test:coverage:desktop",
+    "test:coverage:packages": "vitest run --coverage",
+    "test:coverage:desktop": "npm --prefix desktop run test:coverage"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@testing-library/jest-dom": "7.0.0",
     "@testing-library/react": "16.3.2",
+    "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^10.8.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-react-hooks": "^7.1.1",

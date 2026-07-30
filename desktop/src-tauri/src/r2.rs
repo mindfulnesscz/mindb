@@ -66,7 +66,7 @@ fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
 }
 
 fn is_leap(y: u64) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+    (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
 }
 
 // ── URI encoding ──────────────────────────────────────────────────────────────
@@ -89,6 +89,11 @@ fn uri_encode(s: &str, encode_slash: bool) -> String {
 // `extra_headers`: any headers beyond the fixed host/x-amz-content-sha256/x-amz-date base
 // (e.g. content-type, x-amz-meta-sha256) — order doesn't matter, this function sorts them.
 // SigV4 requires canonical headers sorted lexicographically by name.
+//
+// The parameter list is long because SigV4 signs exactly these inputs; grouping them into a struct
+// would restate the same fields one layer away and make the call sites harder to read against the
+// specification.
+#[allow(clippy::too_many_arguments)]
 fn sign(
     method:        &str,
     host:          &str,
@@ -226,6 +231,11 @@ async fn r2_object_meta_sha256(
 /// `known_sha256`: the content hash the caller last uploaded to this key (from its
 /// local cache) — if the file still hashes to it and the object hasn't vanished,
 /// skip without a HEAD.
+///
+/// The argument list is the command's wire format: Tauri deserialises these by name from the
+/// JavaScript call. A struct would move the same fields into a #[derive(Deserialize)] without
+/// reducing anything.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn upload_to_r2(
     file_path:     String,
@@ -341,7 +351,7 @@ pub async fn check_r2_connection(
     match res.status().as_u16() {
         200 => Ok("Connected".into()),
         403 => Err("Access denied — check Access Key ID and Secret.".into()),
-        404 => Err(format!("Bucket \"{bucket}\" not found.").into()),
+        404 => Err(format!("Bucket \"{bucket}\" not found.")),
         s   => {
             let body = res.text().await.unwrap_or_default();
             Err(format!("HTTP {s}: {body}"))

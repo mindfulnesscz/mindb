@@ -14,7 +14,7 @@ jobs:
         with:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
-      # Required for `cargo check` of the Tauri crate on Linux.
+      # Required for compiling the Tauri crate on Linux (clippy builds it).
       - name: Install Linux Tauri dependencies
         run: |
           sudo apt-get update
@@ -25,8 +25,16 @@ jobs:
       - name: Lint
         run: npm run lint
       - run: npm run check
-      # Root `test` runs the shared-package suites then the desktop suite.
-      - run: npm test
+      # Root `test` runs the shared-package suites then the desktop suite, with the coverage
+      # ratchet applied. The thresholds sit just under today's numbers, so this fails only when
+      # coverage goes DOWN — see the note in vitest.config.ts for why a red-on-day-one gate is
+      # worse than none.
+      - name: Tests + coverage ratchet
+        run: npm run test:coverage
       # Pure Rust helpers: SigV4 date math, URI encoding, OAuth authority resolution.
       - name: Rust tests
         run: npm run test:rust
+      # Explicit step so a clippy failure is attributable at a glance; `npm run check`
+      # runs it too, as the composite gate used locally.
+      - name: Rust lint
+        run: npm run lint:rust
