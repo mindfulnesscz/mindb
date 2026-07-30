@@ -7,7 +7,7 @@ export interface ParsedVersion {
 }
 
 const EXT_RE = /^\.[A-Za-z0-9]{1,8}$/;
-const VERSION_AT_END_RE = /[vV](\d+)(?:[.\-](\d+))?(?:[.\-](\d+))?$/;
+const VERSION_AT_END_RE = /[vV](\d+)(?:[.-](\d+))?(?:[.-](\d+))?$/;
 
 export function parseVersion(filename: string): ParsedVersion | null {
   let stem = filename;

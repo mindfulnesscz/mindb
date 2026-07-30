@@ -1,5 +1,5 @@
 {
-  "name": "@dc-hub/asset-library",
+  "name": "@dc-hub/domain",
   "version": "3.0.0",
   "private": false,
   "type": "module",
@@ -8,12 +8,7 @@
   "exports": {
     ".": "./src/index.ts"
   },
-  "peerDependencies": {
-    "react": "^19.2.8"
-  },
   "devDependencies": {
-    "@types/react": "19.2.17",
-    "react": "19.2.8",
     "typescript": "5.9.3"
   },
   "scripts": {
