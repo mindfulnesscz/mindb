@@ -25,6 +25,10 @@ jobs:
           version: latest
       - run: supabase db start
       - run: supabase db lint --level warning
+      # RLS tenant isolation (F-1) as a tested property, not a policy re-read.
+      # supabase/tests/*.test.sql — pgTAP, transactional, safe against seed data.
+      - name: RLS policy tests
+        run: supabase test db
 
   # Push to the staging branch: apply new migrations to STAGING.
   deploy-staging:

@@ -5,10 +5,11 @@
   "type": "module",
   "workspaces": [
     "packages/*",
-    "web/apps/*"
+    "web/apps/*",
+    "desktop"
   ],
   "scripts": {
-    "setup": "npm ci && npm ci --prefix desktop && npm ci --prefix docs",
+    "setup": "npm ci && npm ci --prefix docs",
     "dev": "node scripts/dev.mjs",
     "dev:desktop": "npm --prefix desktop run tauri dev",
     "dev:web": "npm run dev --workspace=web/apps/client-hub",
@@ -18,11 +19,17 @@
     "build:web": "npm run build --workspace=web/apps/client-hub",
     "build:vercel": "node scripts/vercel-build.mjs",
     "build:docs": "npm --prefix docs run build",
-    "check": "npm run version:check && npm run build:desktop && npm run check:web && npm run build:docs && npm run check:rust",
-    "typecheck": "npm run typecheck --workspace=packages/asset-library --workspace=packages/database --workspace=packages/auth --workspace=web/apps/client-hub",
+    "check": "npm run version:check && npm run toolchain:check && npm run lint && npm run build:desktop && npm run check:web && npm run build:docs && npm run check:rust",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "npm run typecheck --workspace=packages/domain --workspace=packages/asset-library --workspace=packages/database --workspace=packages/auth --workspace=web/apps/client-hub",
     "check:web": "npm run typecheck",
     "check:rust": "cargo check --locked --manifest-path desktop/src-tauri/Cargo.toml",
-    "test": "npm --prefix desktop run test",
+    "test": "npm run test:packages && npm run test:desktop",
+    "test:rust": "cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib",
+    "test:rls": "supabase test db",
     "db:start": "supabase start",
     "db:stop": "supabase stop",
     "db:reset": "supabase db reset",
@@ -35,6 +42,24 @@
     "version:set": "node scripts/version.mjs",
     "dev:web:staging": "npm run dev:staging --workspace=web/apps/client-hub",
     "dev:web:prod": "npm run dev:production --workspace=web/apps/client-hub",
-    "bootstrap:env": "node scripts/bootstrap-env.mjs"
+    "bootstrap:env": "node scripts/bootstrap-env.mjs",
+    "test:packages": "vitest run",
+    "test:desktop": "npm --prefix desktop run test",
+    "toolchain:check": "node scripts/toolchain.mjs check",
+    "toolchain:set": "node scripts/toolchain.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@testing-library/jest-dom": "7.0.0",
+    "@testing-library/react": "16.3.2",
+    "eslint": "^10.8.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.8.0",
+    "jsdom": "29.1.1",
+    "prettier": "^3.9.6",
+    "typescript": "5.9.3",
+    "typescript-eslint": "^8.65.0",
+    "vitest": "4.1.10"
   }
 }
