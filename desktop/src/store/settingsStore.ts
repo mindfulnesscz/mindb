@@ -19,6 +19,8 @@ export interface AppSettings {
   dryRun:            boolean;
   keepHighestVersion: boolean;
   preserveStructure:  boolean;
+  /** Opt out of the blast-radius tripwire for one run — see services/guardrail.ts. */
+  allowLargeDeletions: boolean;
 
   /* Folder patterns */
   packagePrefix: string;
@@ -48,6 +50,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dryRun:            false,
   keepHighestVersion: true,
   preserveStructure:  false,
+  allowLargeDeletions: false,
 
   packagePrefix: '[00] 📦',
   outFolder:     '[03] OUT',

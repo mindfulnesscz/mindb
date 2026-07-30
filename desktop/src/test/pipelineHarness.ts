@@ -31,6 +31,8 @@ export function makeSettings(over: Partial<AppSettings> = {}): AppSettings {
     dryRun: false,
     keepHighestVersion: true,
     preserveStructure: false,
+    // Off, so the tests exercise the guardrail rather than bypassing it.
+    allowLargeDeletions: false,
 
     packagePrefix: '[00] 📦',
     outFolder: '[03] OUT',

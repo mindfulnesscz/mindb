@@ -187,6 +187,13 @@ export function ConfigSidebar() {
             checked={settings.preserveStructure}
             onChange={v => setField('preserveStructure', v)}
           />
+          {/* Off by default and not sticky in spirit: it exists for the one run where a large
+              cleanup is genuinely correct. See services/guardrail.ts. */}
+          <TaskRow
+            label="Allow large deletions (override safety check)"
+            checked={settings.allowLargeDeletions}
+            onChange={v => setField('allowLargeDeletions', v)}
+          />
         </AccordionGroup>
       </div>
 

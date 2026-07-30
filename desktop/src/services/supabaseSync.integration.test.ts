@@ -128,7 +128,14 @@ describe.skipIf(!up)('exportAssetsToSupabase against a real database', () => {
     await fetch(`${API}/rest/v1/clients?id=eq.${CLIENT_ID}`, { method: 'DELETE', headers: auth });
   });
 
-  beforeEach(() => { textFiles.clear(); binFiles.clear(); });
+  // Start each test from an EMPTY tenant. The sweep in stage 4 is client-wide, so rows left by a
+  // previous test are rows this test would disconnect — which is how these tests used to pass while
+  // silently destroying each other's data, and what the blast-radius guardrail now refuses to do.
+  beforeEach(async () => {
+    textFiles.clear();
+    binFiles.clear();
+    await fetch(`${API}/rest/v1/assets?client_id=eq.${CLIENT_ID}`, { method: 'DELETE', headers: auth });
+  });
 
   it('writes one primary plus variant_of siblings for distinct files in a package', async () => {
     await wipe('aa001111');
@@ -211,6 +218,38 @@ describe.skipIf(!up)('exportAssetsToSupabase against a real database', () => {
     expect(rowA.shortcode).toBe('(PRD)(OVR) Same Name');
     expect(rowB.shortcode).toBe(rowA.shortcode);
     expect(rowA.id).not.toBe(rowB.id);
+  });
+
+  it('REFUSES to disconnect a tenant it barely wrote to — the F-9 guard, end to end', async () => {
+    // The exact shape of the incident: a small sync against a client that already owns a lot. The
+    // sweep is client-wide, so all twelve of these look stale to a run that wrote one row. They are
+    // seeded directly rather than through the pipeline — the point is what the tenant already holds.
+    const existing = Array.from({ length: 12 }, (_, i) => ({
+      client_id: CLIENT_ID,
+      shortcode: `(PRD)(SlD) Existing ${i}`,
+      name:      `Existing ${i}`,
+      stable_id: 'bb001111',
+      child_id:  `c${i + 1}`,
+      status:    'published',
+    }));
+    const seeded = await fetch(`${API}/rest/v1/assets`, {
+      method: 'POST',
+      headers: { ...auth, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify(existing),
+    });
+    expect(seeded.ok).toBe(true);
+
+    const dir = '/src/Decks/Unrelated __aa00bbbb/OUT';
+    const { logs } = await sync([file(`${dir}/(PRD)(SlD) Unrelated.pdf`, 1)]);
+
+    // Nothing was disconnected, and the log says so in a way an operator can act on.
+    const after = await rowsFor('bb001111');
+    expect(after).toHaveLength(12);
+    expect(after.every(r => r.status === 'published')).toBe(true);
+    expect(logs.join('\n')).toMatch(/REFUSING to remove 12 row\(s\)/);
+
+    // The run's own work still landed — the guardrail skips a stage, it does not abort the run.
+    expect((await rowsFor('aa00bbbb'))).toHaveLength(1);
   });
 
   it('disconnects a vanished file instead of deleting its row', async () => {

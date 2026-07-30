@@ -7,6 +7,7 @@
  */
 
 import { sbFetch, BATCH } from './rest';
+import { assessDestruction } from '../guardrail';
 import type { StableRow, SupabaseExportResult } from './exportTypes';
 
 export async function disconnectStaleRows(
@@ -16,11 +17,23 @@ export async function disconnectStaleRows(
   headers: Record<string, string>,
   result: SupabaseExportResult,
   appendLog: (type: string, msg: string) => void,
+  allowLargeDeletions = false,
 ): Promise<void> {
   const stale = [...existing.entries()]
     .filter(([key]) => !currentStableKeys.has(key))
     .map(([, row]) => row);
   if (!stale.length) return;
+
+  // This stage is client-wide: everything absent from THIS run is stale. That authority is correct
+  // and is also how a wrong-input run hides every asset a client owns (F-9), so the ratio is checked
+  // against what the run actually wrote before anything is marked.
+  const verdict = assessDestruction({
+    unit: 'row(s)', doomed: stale.length,
+    written: result.created + result.updated,
+    allowLarge: allowLargeDeletions,
+  });
+  appendLog(verdict.blocked ? 'error' : 'dim', verdict.message);
+  if (verdict.blocked) return;
 
   for (let i = 0; i < stale.length; i += BATCH) {
     const batch = stale.slice(i, i + BATCH);

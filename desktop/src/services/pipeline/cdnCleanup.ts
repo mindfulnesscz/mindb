@@ -8,6 +8,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import { assessDestruction } from '../guardrail';
 import type { RunContext, RunStats, R2Config } from './types';
 import { cdnStemKey } from '../supabaseService';
 import { storageKey } from './storageKey';
@@ -93,9 +94,23 @@ export async function deleteCdnObjects(
   r2:         R2Config,
   objectKeys: string[],
   appendLog:  (type: string, msg: string) => void,
+  written = 0,
+  allowLargeDeletions = false,
 ): Promise<void> {
   if (!objectKeys.length) return;
   appendLog('section', '━━━ CDN DELETE ━━━');
+
+  // Unlike a disconnected row, a deleted object is GONE — there is no soft form of this stage. The
+  // stale list comes from the same Supabase diff that drives the disconnect, so it inherits the same
+  // failure mode and gets the same tripwire.
+  const verdict = assessDestruction({
+    unit: 'CDN object(s)', doomed: objectKeys.length, written, allowLarge: allowLargeDeletions,
+  });
+  appendLog(verdict.blocked ? 'error' : 'dim', verdict.message);
+  if (verdict.blocked) {
+    appendLog('section', '━━━ CDN DELETE SKIPPED ━━━');
+    return;
+  }
   let removed = 0;
   let errors  = 0;
   for (const objectKey of objectKeys) {

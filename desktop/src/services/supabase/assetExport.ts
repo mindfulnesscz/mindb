@@ -40,6 +40,7 @@ export async function exportAssetsToSupabase(
   cloudUrls?:    Map<string, CloudUrlEntry[]>,
   galleries?:    GalleryGroup[],
   originalUrls?: Map<string, string>,
+  allowLargeDeletions = false,
 ): Promise<SupabaseExportResult> {
   const result: SupabaseExportResult = { created: 0, updated: 0, disconnected: 0, errors: 0, staleObjectKeys: [] };
   const base    = `${config.url}/rest/v1`;
@@ -106,7 +107,9 @@ export async function exportAssetsToSupabase(
     // Skipped when the read failed: "no row for this key" would then mean "unknown", not
     // "absent", and treating an empty result as truth would disconnect every asset.
     if (!readFailed) {
-      await disconnectStaleRows(existing, plan.currentStableKeys, base, headers, result, appendLog);
+      await disconnectStaleRows(
+        existing, plan.currentStableKeys, base, headers, result, appendLog, allowLargeDeletions,
+      );
     }
   }
 

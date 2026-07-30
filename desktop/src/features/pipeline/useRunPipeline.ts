@@ -149,6 +149,7 @@ async function syncRunToPortal(a: {
     const sbResult = await exportAssetsToSupabase(
       singles, a.clientId, a.vocabData, a.sbConfig, a.log,
       a.cdnUrls, a.cloudUrls, galleries, a.originalUrls,
+      a.effectiveSettings.allowLargeDeletions,
     );
     a.setSupabaseSync({
       created:      sbResult.created,
@@ -159,7 +160,11 @@ async function syncRunToPortal(a: {
 
     // Stale CDN objects come from the Supabase diff, so no R2 listing is needed.
     if (a.r2Config && sbResult.staleObjectKeys.length > 0) {
-      await deleteCdnObjects(a.r2Config, sbResult.staleObjectKeys, a.log);
+      // A deleted object is unrecoverable, so it is judged against the same write count.
+      await deleteCdnObjects(
+        a.r2Config, sbResult.staleObjectKeys, a.log,
+        sbResult.created + sbResult.updated, a.effectiveSettings.allowLargeDeletions,
+      );
     }
 
     await processRenameTasks(a.sbConfig, a.clientId, a.log);
