@@ -15,7 +15,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: desktop/package-lock.json
+          # One workspace, one lockfile — desktop/ has no lockfile of its own.
+          cache-dependency-path: package-lock.json
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:

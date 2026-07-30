@@ -9,10 +9,12 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:coverage:ci": "vitest run --coverage --exclude='**/supabaseSync.integration.test.ts'"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.110.2",
+    "@supabase/supabase-js": "2.110.8",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-fs": "^2.5.1",
@@ -22,18 +24,18 @@
     "@tauri-apps/plugin-store": "^2.4.3",
     "@tauri-apps/plugin-updater": "^2.9.0",
     "lucide-react": "^1.21.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
     "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
-    "@types/node": "^26.1.0",
-    "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
-    "@vitejs/plugin-react": "^4.6.0",
-    "typescript": "~5.8.3",
-    "vite": "^7.0.4",
-    "vitest": "^3.2.4"
+    "@types/node": "26.1.0",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "4.7.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.5",
+    "vitest": "4.1.10"
   }
 }

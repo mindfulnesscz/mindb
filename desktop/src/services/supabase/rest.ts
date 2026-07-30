@@ -1,5 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
-import { getCurrentAccessToken } from '../authService';
+import { getAccessToken } from '../authService';
+
+/** PostgREST write batch size. Large enough to keep round-trips low, small enough to stay
+ *  under URL/body limits when keys are inlined. */
+export const BATCH = 500;
 
 export interface SupabaseConfig {
   url:     string;
@@ -8,10 +12,20 @@ export interface SupabaseConfig {
 
 interface SbRustResponse { status: number; ok: boolean; body: string }
 
-/** Requests run as the signed-in user: the anon key identifies the project,
- * the session JWT authorizes — RLS staff policies are the write boundary. */
-export function makeHeaders(anonKey: string, extra?: Record<string, string>): Record<string, string> {
-  const token = getCurrentAccessToken();
+/**
+ * Requests run as the signed-in user: the anon key identifies the project, the session JWT
+ * authorizes — RLS staff policies are the write boundary.
+ *
+ * ASYNC on purpose. It asks auth for a token that is valid *now* rather than reading a cached
+ * string, because a Supabase access token lives one hour and a desktop session easily outlives
+ * that. Reading the cache is what made a second pipeline run fail with
+ * "Storage grant refused (401): Not authenticated".
+ */
+export async function makeHeaders(
+  anonKey: string,
+  extra?: Record<string, string>,
+): Promise<Record<string, string>> {
+  const token = await getAccessToken();
   if (!token) throw new Error('Not signed in — Supabase sync requires an active session.');
   return {
     apikey:         anonKey,
@@ -21,17 +35,41 @@ export function makeHeaders(anonKey: string, extra?: Record<string, string>): Re
   };
 }
 
-/** Proxy fetch through Rust — native networking, no webview CORS surface. */
-export async function sbFetch(
-  url:     string,
-  options: { method?: string; headers: Record<string, string>; body?: string },
-): Promise<{ ok: boolean; status: number; text(): Promise<string>; json<T>(): Promise<T> }> {
-  const r = await invoke<SbRustResponse>('supabase_request', {
+type SbOptions = { method?: string; headers: Record<string, string>; body?: string };
+
+async function rustRequest(url: string, options: SbOptions): Promise<SbRustResponse> {
+  return await invoke<SbRustResponse>('supabase_request', {
     url,
     method:  options.method ?? 'GET',
     headers: options.headers,
     body:    options.body,
   });
+}
+
+/**
+ * Proxy fetch through Rust — native networking, no webview CORS surface.
+ *
+ * Retries ONCE on 401 with a force-refreshed token. Headers are built once per operation while a
+ * pipeline run can take minutes, so a long run can cross the token's expiry mid-flight; without
+ * this, the requests after that moment fail while the ones before succeeded. The retry is bounded
+ * to a single attempt so a genuinely revoked session still surfaces as 401 rather than looping.
+ */
+export async function sbFetch(
+  url:     string,
+  options: SbOptions,
+): Promise<{ ok: boolean; status: number; text(): Promise<string>; json<T>(): Promise<T> }> {
+  let r = await rustRequest(url, options);
+
+  if (r.status === 401 && options.headers.Authorization) {
+    const fresh = await getAccessToken({ forceRefresh: true });
+    if (fresh) {
+      r = await rustRequest(url, {
+        ...options,
+        headers: { ...options.headers, Authorization: `Bearer ${fresh}` },
+      });
+    }
+  }
+
   return {
     ok:     r.ok,
     status: r.status,

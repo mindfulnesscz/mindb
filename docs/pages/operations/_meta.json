@@ -1,7 +1,8 @@
 {
-"runbook": "Publishing runbook",
-"troubleshooting": "Troubleshooting",
-"safe-reruns": "Retries and idempotency",
-"deployment": "Configuration and deployment",
-"database-environments": "Database environments"
+  "runbook": "Publishing runbook",
+  "troubleshooting": "Troubleshooting",
+  "safe-reruns": "Retries and idempotency",
+  "deployment": "Configuration and deployment",
+  "database-environments": "Database environments",
+  "error-reporting": "Error reporting"
 }

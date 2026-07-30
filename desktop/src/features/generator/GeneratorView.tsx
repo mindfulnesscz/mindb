@@ -4,7 +4,7 @@ import {
   type Slot, dimensionLabelForSlot, parentGroupsForSlot,
   buildFilenameCode, buildObsidianTags,
   type VocabTag,
-} from '../../domain/vocabulary';
+} from '@dc-hub/domain';
 import { useVocabularyStore } from '../../store/vocabularyStore';
 import { useClientStore } from '../../store/clientStore';
 import css from './GeneratorView.module.css';
@@ -29,7 +29,8 @@ export function GeneratorView() {
   function toggleTag(tag: VocabTag) {
     setSelected(prev => {
       const next = new Map(prev);
-      next.has(tag.shortcode) ? next.delete(tag.shortcode) : next.set(tag.shortcode, tag);
+      if (next.has(tag.shortcode)) next.delete(tag.shortcode);
+      else next.set(tag.shortcode, tag);
       return next;
     });
   }

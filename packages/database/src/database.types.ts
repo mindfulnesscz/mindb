@@ -73,6 +73,45 @@ export type Database = {
           },
         ]
       }
+      app_errors: {
+        Row: {
+          app_version: string | null
+          breadcrumbs: string[]
+          context: string
+          created_at: string
+          environment: string | null
+          id: string
+          message: string
+          source: string
+          stack: string | null
+          user_id: string | null
+        }
+        Insert: {
+          app_version?: string | null
+          breadcrumbs?: string[]
+          context: string
+          created_at?: string
+          environment?: string | null
+          id?: string
+          message: string
+          source: string
+          stack?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          app_version?: string | null
+          breadcrumbs?: string[]
+          context?: string
+          created_at?: string
+          environment?: string | null
+          id?: string
+          message?: string
+          source?: string
+          stack?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       approvals: {
         Row: {
           asset_id: string
@@ -414,6 +453,36 @@ export type Database = {
           },
         ]
       }
+      error_notifications: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          enabled: boolean
+          id: string
+          label: string
+          notify_all: boolean
+          webhook_url: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          enabled?: boolean
+          id?: string
+          label: string
+          notify_all?: boolean
+          webhook_url: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          enabled?: boolean
+          id?: string
+          label?: string
+          notify_all?: boolean
+          webhook_url?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           can_create_clients: boolean
@@ -671,7 +740,17 @@ export type Database = {
     }
     Functions: {
       can_create_clients: { Args: never; Returns: boolean }
+      can_see_asset: { Args: { p_asset_id: string }; Returns: boolean }
       check_email_auth: { Args: { p_email: string }; Returns: string }
+      error_digest: {
+        Args: { p_window?: string }
+        Returns: {
+          context: string
+          last_seen: string
+          message: string
+          occurrences: number
+        }[]
+      }
       get_all_profiles: {
         Args: never
         Returns: {
@@ -706,6 +785,17 @@ export type Database = {
       is_super_admin: { Args: never; Returns: boolean }
       my_client_id: { Args: never; Returns: string }
       my_member_client_ids: { Args: never; Returns: string[] }
+      new_error_signatures: {
+        Args: { p_window?: string }
+        Returns: {
+          context: string
+          first_seen: string
+          message: string
+          occurrences: number
+        }[]
+      }
+      send_error_digest: { Args: { p_window?: string }; Returns: number }
+      send_error_test: { Args: { p_id: string }; Returns: number }
       update_user_access: {
         Args: {
           p_can_create_clients?: boolean

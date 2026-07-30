@@ -7,13 +7,21 @@
    that two assets may render the same shortcode now that identity carries uniqueness, and
    that a file disappearing disconnects its row instead of deleting it.
 
-   Each test owns its own package hash — no shared rows, so tests don't depend on order. */
+   Each test owns its own package hash — no shared rows, so tests don't depend on order.
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+   ⚠ It runs against a THROWAWAY CLIENT of its own, created in beforeAll and deleted in afterAll,
+   NEVER the seeded dev client. That is not tidiness. Stage 4 of the sync is client-wide: it fetches
+   every non-archived row for the client and marks everything absent from THIS run `disconnected`.
+   Pointed at the client a developer is actually working with, a single `npm test` therefore hides
+   every one of their assets from the gallery. It did exactly that on 2026-07-30 (see §7b, F-9). */
+
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 
 const API = 'http://127.0.0.1:54321';
 const SERVICE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
-const CLIENT_ID = '00000000-0000-0000-0000-000000000001'; // Acme Studio, from seed.sql
+// This test's OWN client — not Acme Studio from seed.sql, and not anything a developer is using.
+// Deleting it cascades its assets away (assets_client_id_fkey is ON DELETE CASCADE).
+const CLIENT_ID = 'aaaaaaaa-1111-4aaa-8aaa-a00000000001';
 
 const up = await fetch(`${API}/rest/v1/`, { headers: { apikey: SERVICE_KEY } })
   .then(r => r.ok || r.status === 404)
@@ -45,10 +53,12 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 // Requests run as the signed-in user in the app; here the service role stands in so the test
 // exercises the write path itself rather than RLS.
-vi.mock('./authService', () => ({ getCurrentAccessToken: () => SERVICE_KEY }));
+// rest.ts now asks for a token that is valid *now* (getAccessToken), not the cached string —
+// see the F-8 note in REFACTOR_PLAN.md. The service role stands in for both here.
+vi.mock('./authService', () => ({ getAccessToken: async () => SERVICE_KEY }));
 
 const { exportAssetsToSupabase } = await import('./supabaseService');
-const { groupAssets } = await import('../domain/assetGrouping');
+const { groupAssets } = await import('@dc-hub/domain');
 
 const config = { url: API, anonKey: SERVICE_KEY };
 const vocab = {
@@ -102,7 +112,30 @@ function file(path: string, byte: number): string {
 }
 
 describe.skipIf(!up)('exportAssetsToSupabase against a real database', () => {
-  beforeEach(() => { textFiles.clear(); binFiles.clear(); });
+  beforeAll(async () => {
+    // Recreate from scratch: a client left behind by an aborted run would carry its rows with it.
+    await fetch(`${API}/rest/v1/clients?id=eq.${CLIENT_ID}`, { method: 'DELETE', headers: auth });
+    const res = await fetch(`${API}/rest/v1/clients`, {
+      method: 'POST',
+      headers: { ...auth, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify({ id: CLIENT_ID, name: 'Integration Fixture (safe to delete)' }),
+    });
+    if (!res.ok) throw new Error(`could not create the fixture client: ${await res.text()}`);
+  });
+
+  // Leave the developer's database as it was found — no fixture rows, nothing disconnected.
+  afterAll(async () => {
+    await fetch(`${API}/rest/v1/clients?id=eq.${CLIENT_ID}`, { method: 'DELETE', headers: auth });
+  });
+
+  // Start each test from an EMPTY tenant. The sweep in stage 4 is client-wide, so rows left by a
+  // previous test are rows this test would disconnect — which is how these tests used to pass while
+  // silently destroying each other's data, and what the blast-radius guardrail now refuses to do.
+  beforeEach(async () => {
+    textFiles.clear();
+    binFiles.clear();
+    await fetch(`${API}/rest/v1/assets?client_id=eq.${CLIENT_ID}`, { method: 'DELETE', headers: auth });
+  });
 
   it('writes one primary plus variant_of siblings for distinct files in a package', async () => {
     await wipe('aa001111');
@@ -185,6 +218,38 @@ describe.skipIf(!up)('exportAssetsToSupabase against a real database', () => {
     expect(rowA.shortcode).toBe('(PRD)(OVR) Same Name');
     expect(rowB.shortcode).toBe(rowA.shortcode);
     expect(rowA.id).not.toBe(rowB.id);
+  });
+
+  it('REFUSES to disconnect a tenant it barely wrote to — the F-9 guard, end to end', async () => {
+    // The exact shape of the incident: a small sync against a client that already owns a lot. The
+    // sweep is client-wide, so all twelve of these look stale to a run that wrote one row. They are
+    // seeded directly rather than through the pipeline — the point is what the tenant already holds.
+    const existing = Array.from({ length: 12 }, (_, i) => ({
+      client_id: CLIENT_ID,
+      shortcode: `(PRD)(SlD) Existing ${i}`,
+      name:      `Existing ${i}`,
+      stable_id: 'bb001111',
+      child_id:  `c${i + 1}`,
+      status:    'published',
+    }));
+    const seeded = await fetch(`${API}/rest/v1/assets`, {
+      method: 'POST',
+      headers: { ...auth, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify(existing),
+    });
+    expect(seeded.ok).toBe(true);
+
+    const dir = '/src/Decks/Unrelated __aa00bbbb/OUT';
+    const { logs } = await sync([file(`${dir}/(PRD)(SlD) Unrelated.pdf`, 1)]);
+
+    // Nothing was disconnected, and the log says so in a way an operator can act on.
+    const after = await rowsFor('bb001111');
+    expect(after).toHaveLength(12);
+    expect(after.every(r => r.status === 'published')).toBe(true);
+    expect(logs.join('\n')).toMatch(/REFUSING to remove 12 row\(s\)/);
+
+    // The run's own work still landed — the guardrail skips a stage, it does not abort the run.
+    expect((await rowsFor('aa00bbbb'))).toHaveLength(1);
   });
 
   it('disconnects a vanished file instead of deleting its row', async () => {

@@ -14,12 +14,52 @@ jobs:
         with:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
-      # Required for `cargo check` of the Tauri crate on Linux.
+      # Required for compiling the Tauri crate on Linux (clippy builds it).
       - name: Install Linux Tauri dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
       - run: npm run setup
+      # Explicit step so a lint failure is obvious in the job summary; `npm run
+      # check` runs it again as part of the composite gate used locally.
+      - name: Lint
+        run: npm run lint
       - run: npm run check
-      - run: npm test
-        working-directory: desktop
+      # Root `test` runs the shared-package suites then the desktop suite, with the coverage
+      # ratchet applied. The thresholds sit just under today's numbers, so this fails only when
+      # coverage goes DOWN — see the note in vitest.config.ts for why a red-on-day-one gate is
+      # worse than none.
+      - name: Tests + coverage ratchet
+        run: npm run test:coverage
+      # Pure Rust helpers: SigV4 date math, URI encoding, OAuth authority resolution.
+      - name: Rust tests
+        run: npm run test:rust
+      # Explicit step so a clippy failure is attributable at a glance; `npm run check`
+      # runs it too, as the composite gate used locally.
+      - name: Rust lint
+        run: npm run lint:rust
+
+  # Separate job: it needs a database and a browser, and the main gate should stay fast.
+  # The suite creates its own tenant and deletes it afterwards, so it can run against a
+  # stack seeded from the migrations without depending on what the seed happens to contain.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - run: supabase db start
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Portal smoke
+        run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-trace
+          path: test-results/
+          retention-days: 7

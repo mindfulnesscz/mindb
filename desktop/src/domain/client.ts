@@ -1,4 +1,8 @@
-/* Client domain — client config, cloud destinations, OAuth token types */
+/* Client domain — the portal's client identity, this machine's config, cloud destinations,
+   and OAuth token types. */
+
+import { DEFAULT_DIMENSION_LABELS } from '@dc-hub/database';
+import type { ClientIdentity } from '@dc-hub/database';
 
 export type DestType = 'local' | 'dropbox' | 'onedrive' | 'gdrive';
 export type DestRole = 'internal' | 'client';
@@ -83,12 +87,14 @@ export function resolveExportShape(
   };
 }
 
-export interface Client {
-  id:                string;
-  name:              string;
-  slug?:             string;
-  logoUrl?:          string | null;
-  brandColor:        string;
+/**
+ * The portal's identity for a client, plus what only this machine knows.
+ *
+ * `ClientIdentity` is shared with the portal (@dc-hub/database) rather than redeclared, so a field
+ * added to a client cannot exist on one side only. Everything below it is machine-local and is never
+ * written to the database: folder paths, per-machine destination toggles, OAuth tokens.
+ */
+export interface Client extends ClientIdentity {
   sourceFolder:      string;
   targetFolder:      string;
   vaultFolder:       string;
@@ -96,15 +102,14 @@ export interface Client {
   supabaseUrl:        string;
   supabaseAnonKey:    string;
   lastCreationFolder: string;
-  dimensionLabels?:  { entity: string; angle: string; format: string };
 }
 
 export function makeClient(partial: Partial<Client> = {}): Client {
   return {
     id:                crypto.randomUUID(),
     name:              '',
-    logoUrl:           null,
-    brandColor:        '#161616',
+    accent:            '#161616',
+    initials:          '',
     sourceFolder:      '',
     targetFolder:      '',
     vaultFolder:       '',
@@ -112,7 +117,7 @@ export function makeClient(partial: Partial<Client> = {}): Client {
     supabaseUrl:        '',
     supabaseAnonKey:    '',
     lastCreationFolder: '',
-    dimensionLabels:   { entity: 'Entity', angle: 'Angle', format: 'Format' },
+    dimensionLabels:   { ...DEFAULT_DIMENSION_LABELS },
     ...partial,
   };
 }

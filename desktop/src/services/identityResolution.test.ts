@@ -2,7 +2,10 @@
    placeholder reserves child_id 'c1', and the first real file must claim that id rather
    than mint a new one (which would strand the draft DB row as a phantom primary) — while a
    set of format variants sharing one base must still get distinct ids. Exercised through
-   resolveCdnIdentity, the exported entry point into resolveChildId. */
+   resolveCdnIdentity, the exported entry point into resolveChildId.
+
+   Lookups are by ABSOLUTE PATH: the map used to be filename-keyed, which collided across
+   packages holding the same filename (F-5). */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -42,9 +45,10 @@ describe('scaffold placeholder adoption', () => {
     scaffoldManifest('(Brnd)(SlD) Launch Deck v1-0-0');
     bytes.set(`${PKG}/OUT/(Brnd)(SlD) Launch Deck v1-0-0.pdf`, new Uint8Array([9, 9]));
 
-    const ids = await resolveCdnIdentity([`${PKG}/OUT/(Brnd)(SlD) Launch Deck v1-0-0.pdf`], 'OUT');
+    const pdf = `${PKG}/OUT/(Brnd)(SlD) Launch Deck v1-0-0.pdf`;
+    const ids = await resolveCdnIdentity([pdf], 'OUT');
 
-    expect(ids.get('(Brnd)(SlD) Launch Deck v1-0-0.pdf')).toEqual({ stableId: 'a1b2c3d4', childId: 'c1' });
+    expect(ids.get(pdf)).toEqual({ stableId: 'a1b2c3d4', childId: 'c1' });
     expect(Object.keys(manifestChildren())).toEqual(['(Brnd)(SlD) Launch Deck v1-0-0.pdf']);
   });
 
@@ -57,8 +61,8 @@ describe('scaffold placeholder adoption', () => {
 
     const ids = await resolveCdnIdentity([pdf, png], 'OUT');
 
-    const a = ids.get('(Brnd)(SlD) Launch Deck v1-0-0.pdf')!.childId;
-    const b = ids.get('(Brnd)(SlD) Launch Deck v1-0-0.png')!.childId;
+    const a = ids.get(pdf)!.childId;
+    const b = ids.get(png)!.childId;
     expect(a).not.toEqual(b);
     expect(new Set([a, b])).toEqual(new Set(['c1', 'c2']));
   });
@@ -73,7 +77,7 @@ describe('scaffold placeholder adoption', () => {
     bytes.set(v2, new Uint8Array([7]));
     const ids = await resolveCdnIdentity([v2], 'OUT');
 
-    expect(ids.get('(Brnd)(SlD) Launch Deck v1-1-0.pdf')!.childId).toBe('c1');
+    expect(ids.get(v2)!.childId).toBe('c1');
   });
 
   it('does not let an unrelated file claim the placeholder', async () => {
@@ -83,7 +87,7 @@ describe('scaffold placeholder adoption', () => {
 
     const ids = await resolveCdnIdentity([other], 'OUT');
 
-    expect(ids.get('(Brnd)(Img) Something Else v1-0-0.png')!.childId).toBe('c2');
+    expect(ids.get(other)!.childId).toBe('c2');
     expect(manifestChildren()['(Brnd)(SlD) Launch Deck v1-0-0'].child_id).toBe('c1');
   });
 });

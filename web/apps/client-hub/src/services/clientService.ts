@@ -1,26 +1,14 @@
 import { supabase } from '../lib/supabase'
 import type { Client } from '@dc-hub/asset-library'
-import type { ClientRow, TablesUpdate } from '../lib/database.types'
+import { toClientIdentity as toClient, dimensionLabelsToJson, DEFAULT_DIMENSION_LABELS } from '@dc-hub/database'
+import type { ClientRow, TablesUpdate } from '@dc-hub/database'
 
-export function toClient(row: ClientRow): Client {
-  const labels = (row as ClientRow & { dimension_labels?: { entity?: string; angle?: string; format?: string } | null }).dimension_labels
-  return {
-    id:              row.id,
-    name:            row.name,
-    slug:            row.slug ?? undefined,
-    accent:          row.accent,
-    initials:        row.initials,
-    logoUrl:         row.logo_url ?? undefined,
-    website:         row.website ?? undefined,
-    portalBg:        row.portal_bg ?? undefined,
-    domainWhitelist: row.domain_whitelist,
-    dimensionLabels: labels ? {
-      entity: labels.entity ?? 'Entity',
-      angle:  labels.angle  ?? 'Angle',
-      format: labels.format ?? 'Format',
-    } : undefined,
-  }
-}
+/**
+ * Row → domain. The projection itself lives in @dc-hub/database, beside the generated row type, so
+ * desktop reads a client exactly the way the portal does. Kept as a named re-export because it is
+ * part of this service's surface.
+ */
+export { toClient }
 
 export async function fetchClients(): Promise<Client[]> {
   if (!supabase) throw new Error('Supabase not configured')
@@ -48,7 +36,7 @@ export async function createClient(input: Omit<Client, 'id'>): Promise<Client> {
       website:          input.website ?? null,
       portal_bg:        input.portalBg ?? null,
       domain_whitelist: input.domainWhitelist ?? [],
-      dimension_labels: input.dimensionLabels ?? { entity: 'Entity', angle: 'Angle', format: 'Format' },
+      dimension_labels: dimensionLabelsToJson(input.dimensionLabels ?? DEFAULT_DIMENSION_LABELS),
     })
     .select()
     .single()
@@ -69,8 +57,7 @@ export async function updateClient(id: string, input: Partial<Omit<Client, 'id'>
   if (input.website   !== undefined) patch.website          = input.website || null
   if (input.portalBg  !== undefined) patch.portal_bg        = input.portalBg || null
   if (input.domainWhitelist !== undefined) patch.domain_whitelist = input.domainWhitelist
-  const dim = (input as Client & { dimensionLabels?: Client['dimensionLabels'] }).dimensionLabels
-  if (dim !== undefined) patch.dimension_labels = dim
+  if (input.dimensionLabels !== undefined) patch.dimension_labels = dimensionLabelsToJson(input.dimensionLabels)
 
   const { data, error } = await supabase
     .from('clients')

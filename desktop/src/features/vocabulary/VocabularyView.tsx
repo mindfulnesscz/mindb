@@ -1,76 +1,50 @@
+/* Vocabulary — three tag columns and the generator that turns a selection into an asset.
+ *
+ *   ./useVocabSync          publish local leaf edits / reload from the portal
+ *   ./useAssetGenerator     the selection, the generated shortcode, the seeded folder
+ *   ./createAssetFolder     the folder-seeding itself — where a stable_id is minted
+ *   ./panels/DimColumn      one dimension column
+ *   ./panels/GeneratorPanel the right-hand panel
+ *
+ * The columns and the generator share one selection, which is why it lives here rather than in either.
+ */
+
 import { useState } from 'react';
-import { ChevronRight, Pencil, Trash2, Check, Plus, Search, X, FolderOpen, RefreshCw } from 'lucide-react';
-import { mkdir, writeTextFile } from '@tauri-apps/plugin-fs';
-import { revealItemInDir } from '@tauri-apps/plugin-opener';
-import {
-  type Slot, type VocabTag,
-  dimensionLabelForSlot, parentGroupsForSlot,
-  buildFilenameCode, buildObsidianTags,
-} from '../../domain/vocabulary';
-import { generateStableId, appendStableId } from '../../domain/stableId';
+import { Search, X, RefreshCw } from 'lucide-react';
+import { type Slot, dimensionLabelForSlot } from '@dc-hub/domain';
 import { useVocabularyStore } from '../../store/vocabularyStore';
 import { useClientStore } from '../../store/clientStore';
-import { saveClients } from '../../services/clientService';
-import { createDraftAsset, fetchExistingStableIds, syncTagsFromVocabulary } from '../../services/supabaseService';
-import { loadVocabulary } from '../../services/vocabService';
-import { writeReadme, README_FILENAME } from '../../services/readmeService';
-import { FolderTargetPicker } from '../../components/FolderTargetPicker';
 import { TagModal } from './TagModal';
+import { DimColumn } from './panels/DimColumn';
+import { GeneratorPanel } from './panels/GeneratorPanel';
+import { useVocabSync } from './useVocabSync';
+import { useAssetGenerator } from './useAssetGenerator';
 import css from './VocabularyView.module.css';
 
 const SLOTS: Slot[] = ['entity', 'angle', 'format'];
 
-interface VersionState { major: string; minor: string; patch: string }
-
-// SHA-256 of an empty byte array — a well-known constant, no need to compute it. The
-// placeholder file seeded into OUT starts empty, so this is its correct manifest hash
-// until the real deliverable replaces it.
-const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
-
 export function VocabularyView() {
-  const { data, deleteTag, setData, markClean } = useVocabularyStore();
+  const { data, deleteTag } = useVocabularyStore();
   const allTags = data?.tags ?? [];
-  const dirty = useVocabularyStore(s => s.dirty);
+  const dirty   = useVocabularyStore(s => s.dirty);
 
-  const { clients, activeClientId, updateClient } = useClientStore();
+  const { clients, activeClientId } = useClientStore();
   const activeClient = clients.find(c => c.id === activeClientId) ?? null;
 
-  /* Vocabulary state */
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-  const [modalOpen,  setModalOpen]  = useState(false);
-  const [modalSlot,  setModalSlot]  = useState<Slot>('entity');
-  const [editIndex,  setEditIndex]  = useState<number | undefined>(undefined);
-  const [search,     setSearch]     = useState('');
-  const [syncing,    setSyncing]    = useState(false);
-  const [syncMsg,    setSyncMsg]    = useState<string | null>(null);
-  const [syncError,  setSyncError]  = useState<string | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalSlot, setModalSlot] = useState<Slot>('entity');
+  const [editIndex, setEditIndex] = useState<number | undefined>(undefined);
+  const [search, setSearch]       = useState('');
 
-  /* Generator state */
-  const [selected,     setSelected]     = useState<Map<string, VocabTag>>(new Map());
-  const [description,  setDescription]  = useState('');
-  const [version,      setVersion]      = useState<VersionState>({ major: '', minor: '', patch: '' });
-  const [copied,       setCopied]        = useState(false);
-
-  /* Seed-folder state */
-  const [folderName,     setFolderName]     = useState('');
-  const [targetFolder,   setTargetFolder]   = useState(activeClient?.lastCreationFolder ?? '');
-  const [creating,       setCreating]       = useState(false);
-  const [createError,    setCreateError]    = useState<string | null>(null);
-  const [createSuccess,  setCreateSuccess]  = useState<string | null>(null);
-  const [createdDir,     setCreatedDir]     = useState<string | null>(null);
+  const sync = useVocabSync(activeClient);
+  const gen  = useAssetGenerator(activeClient, allTags);
 
   function toggleGroup(key: string) {
     setCollapsedGroups(prev => {
       const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
-      return next;
-    });
-  }
-
-  function toggleTag(tag: VocabTag) {
-    setSelected(prev => {
-      const next = new Map(prev);
-      next.has(tag.shortcode) ? next.delete(tag.shortcode) : next.set(tag.shortcode, tag);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }
@@ -92,159 +66,12 @@ export function VocabularyView() {
     if (!tag) return;
     if (confirm(`Delete "${tag.shortcode} — ${tag.label}"?\nThis cannot be undone.`)) {
       deleteTag(globalIdx);
-      setSelected(prev => { const next = new Map(prev); next.delete(tag.shortcode); return next; });
-    }
-  }
-
-  function clearGenerator() {
-    setSelected(new Map());
-    setDescription('');
-    setVersion({ major: '', minor: '', patch: '' });
-  }
-
-  async function handleSync() {
-    if (!activeClientId || !activeClient) return;
-    if (!activeClient.supabaseUrl || !activeClient.supabaseAnonKey) {
-      setSyncError('Client has no Supabase connection.');
-      return;
-    }
-    if (!data) return;
-
-    const willPublish = dirty;
-    if (willPublish && !window.confirm(
-      `Sync with portal for "${activeClient.name}"?\n\n` +
-      'Local leaf changes will be published, then vocabulary is reloaded from the database.',
-    )) return;
-    if (!willPublish && !window.confirm(
-      `Reload vocabulary from portal for "${activeClient.name}"?`,
-    )) return;
-
-    setSyncing(true);
-    setSyncMsg(null);
-    setSyncError(null);
-    const lines: string[] = [];
-    try {
-      if (willPublish) {
-        const result = await syncTagsFromVocabulary(
-          data,
-          activeClient.id,
-          { url: activeClient.supabaseUrl, anonKey: activeClient.supabaseAnonKey },
-          (_type, msg) => { lines.push(msg); },
-        );
-        markClean();
-        lines.push(`Published: ${result.created} created · ${result.updated} updated · ${result.deleted} deleted`);
-      }
-      const fresh = await loadVocabulary(activeClientId, { forceFromDb: true });
-      setData(fresh, { dirty: false });
-      setSyncMsg(
-        willPublish
-          ? `Synced — ${fresh.tags.length} leaf tag(s), ${fresh.parentGroups?.length ?? 0} group(s) from portal`
-          : `Reloaded ${fresh.tags.length} leaf tag(s) from portal`,
-      );
-    } catch (e) {
-      setSyncError(e instanceof Error ? e.message : String(e));
-      if (lines.length) console.warn(lines.join('\n'));
-    } finally {
-      setSyncing(false);
+      // Drop it from the generator too, or the next shortcode carries a tag that no longer exists.
+      gen.deselect(tag.shortcode);
     }
   }
 
   const q = search.trim().toLowerCase();
-
-  const orderedSelected = SLOTS.flatMap(slot =>
-    allTags.filter(t => t.slot === slot && selected.has(t.shortcode))
-  );
-  const generatedCode  = orderedSelected.length ? buildFilenameCode(orderedSelected, description, version) : '';
-  const obsidianResult = buildObsidianTags(orderedSelected);
-
-  async function handleCopy() {
-    if (!generatedCode) return;
-    await navigator.clipboard.writeText(generatedCode);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1800);
-  }
-
-  const canCreate = !creating && !!generatedCode && !!folderName.trim() && !!targetFolder
-    && !!activeClient?.supabaseUrl && !!activeClient?.supabaseAnonKey;
-
-  async function handleCreateFolder() {
-    if (!canCreate || !activeClient) return;
-    setCreating(true);
-    setCreateError(null);
-    setCreateSuccess(null);
-    setCreatedDir(null);
-
-    try {
-      const stem = generatedCode;
-      const byLabel = (slot: Slot) => orderedSelected.filter(t => t.slot === slot).map(t => t.label);
-      const name    = [...orderedSelected.map(t => t.label), description.trim()].filter(Boolean).join(' ');
-      const versionStr = version.major !== ''
-        ? `${version.major || '1'}-${version.minor || '0'}-${version.patch || '0'}`
-        : '0-1-0';
-
-      const config = { url: activeClient.supabaseUrl, anonKey: activeClient.supabaseAnonKey };
-      const clientId = activeClient.id; // DB-first: the picked client IS the DB row
-
-      // Collision-check against every stable_id this client already has — same approach
-      // migrate-identity.ts uses, so a fresh asset can never clash with an existing folder.
-      const taken      = await fetchExistingStableIds(clientId, config);
-      const stableId   = generateStableId(taken);
-      // Folder identifier is the short, user-typed folder name — never the long tag-derived
-      // name, and never the bracket-coded file stem (folder names can't contain parentheses).
-      const folder     = appendStableId(folderName.trim(), stableId);
-      const packageDir = `${targetFolder}/${folder}`;
-
-      await mkdir(packageDir, { recursive: true });
-      await mkdir(`${packageDir}/IN`, { recursive: true });
-      await mkdir(`${packageDir}/WRK`, { recursive: true });
-      await mkdir(`${packageDir}/OUT`, { recursive: true });
-
-      // Seed an empty placeholder named after the generated shortcode — no extension, so
-      // the pipeline scanner (isPublishableFile requires a dot) ignores it until you
-      // replace it with the real file. Manifest reserves child_id 'c1' for it up front,
-      // so the first real sync updates this row instead of creating a duplicate.
-      await writeTextFile(`${packageDir}/OUT/${stem}`, '');
-      await writeTextFile(
-        `${packageDir}/.dchub.json`,
-        JSON.stringify({
-          stable_id: stableId,
-          children: { [stem]: { child_id: 'c1', sha256: EMPTY_SHA256 } },
-          updated_at: new Date().toISOString(),
-        }, null, 2),
-      );
-      await writeReadme(packageDir, {
-        name: name || stem, stableId, status: 'draft', version: versionStr, perm: 'internal',
-        tags: orderedSelected, stats: null,
-      });
-
-      try {
-        await createDraftAsset({
-          clientId, stableId, name: name || stem,
-          entities: byLabel('entity'), angles: byLabel('angle'), formats: byLabel('format'),
-          tags: orderedSelected.map(t => t.label),
-          // No primary-tag concept in this flow — see conversation history if that
-          // changes; the columns stay nullable for whenever that's revisited.
-          primaryEntityId: null, primaryAngleId: null, primaryFormatId: null,
-        }, config);
-      } catch (e) {
-        throw new Error(`Folder + ${README_FILENAME} were created, but the Supabase draft row failed: ${e instanceof Error ? e.message : e}`);
-      }
-
-      updateClient(activeClient.id, { lastCreationFolder: targetFolder });
-      saveClients({ clients: useClientStore.getState().clients, activeClientId }).catch(console.error);
-
-      setCreatedDir(packageDir);
-      setCreateSuccess(`Created "${folder}" — placeholder seeded in OUT, draft asset ready.`);
-      setFolderName('');
-      setSelected(new Map());
-      setDescription('');
-      setVersion({ major: '', minor: '', patch: '' });
-    } catch (e) {
-      setCreateError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setCreating(false);
-    }
-  }
 
   return (
     <div className={css.root}>
@@ -268,21 +95,21 @@ export function VocabularyView() {
           </div>
           <button
             className={css.btnPublish}
-            onClick={handleSync}
-            disabled={syncing || !activeClient?.supabaseUrl}
+            onClick={sync.sync}
+            disabled={sync.syncing || !activeClient?.supabaseUrl}
             title={dirty
               ? 'Publish local leaf changes, then reload from portal'
               : 'Reload vocabulary from portal'}
           >
             <RefreshCw size={13} />
-            {syncing ? 'Syncing…' : dirty ? 'Sync*' : 'Sync'}
+            {sync.syncing ? 'Syncing…' : dirty ? 'Sync*' : 'Sync'}
           </button>
         </div>
       </div>
-      {(syncMsg || syncError) && (
-        <div className={`${css.syncBanner}${syncError ? ` ${css.syncBannerError}` : ''}`}>
-          {syncError ?? syncMsg}
-          <button className={css.syncBannerDismiss} onClick={() => { setSyncMsg(null); setSyncError(null); }}>
+      {(sync.syncMsg || sync.syncError) && (
+        <div className={`${css.syncBanner}${sync.syncError ? ` ${css.syncBannerError}` : ''}`}>
+          {sync.syncError ?? sync.syncMsg}
+          <button className={css.syncBannerDismiss} onClick={sync.dismiss}>
             <X size={12} />
           </button>
         </div>
@@ -296,209 +123,23 @@ export function VocabularyView() {
             slot={slot}
             dimLabel={dimensionLabelForSlot(activeClient, slot)}
             allTags={allTags}
-            selected={selected}
+            selected={gen.selected}
             searchQuery={q}
             collapsedGroups={collapsedGroups}
             onToggleGroup={toggleGroup}
-            onToggleTag={toggleTag}
+            onToggleTag={gen.toggleTag}
             onAdd={() => openAdd(slot)}
             onEdit={idx => openEdit(idx, slot)}
             onDelete={handleDelete}
           />
         ))}
 
-        {/* ── Generator panel ── */}
-        <aside className={css.genPanel}>
-          <div className={css.resultBlock}>
-            <div className={css.resultLabel}>Generated shortcode</div>
-            <div className={css.resultCode}>
-              {generatedCode
-                ? generatedCode
-                : <span className={css.resultEmpty}>Select tags to build a filename</span>
-              }
-            </div>
-            <button className={css.btnCopy} onClick={handleCopy} disabled={!generatedCode}>
-              {copied ? '✓ Copied' : 'Copy'}
-            </button>
-            <hr className={css.obsDivider} />
-            <div className={css.resultLabel} style={{ marginTop: 12 }}>Obsidian tags</div>
-            {obsidianResult.length > 0
-              ? <div className={css.obsTags}>
-                  {obsidianResult.map(t => <span key={t} className={css.obsTag}>#{t}</span>)}
-                </div>
-              : <span className={css.obsEmpty}>—</span>
-            }
-          </div>
-
-          <div>
-            <div className={css.genLabel}>Description</div>
-            <input
-              className={css.descInput}
-              placeholder="Optional description"
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-            />
-          </div>
-
-          <div>
-            <div className={css.genLabel}>Version</div>
-            <div className={css.versionRow}>
-              <span className={css.verSep}>v</span>
-              <input className={css.verInput} type="number" min={0} placeholder="1"
-                value={version.major} onChange={e => setVersion(v => ({ ...v, major: e.target.value }))} />
-              <span className={css.verSep}>-</span>
-              <input className={css.verInput} type="number" min={0} placeholder="0"
-                value={version.minor} onChange={e => setVersion(v => ({ ...v, minor: e.target.value }))} />
-              <span className={css.verSep}>-</span>
-              <input className={css.verInput} type="number" min={0} placeholder="0"
-                value={version.patch} onChange={e => setVersion(v => ({ ...v, patch: e.target.value }))} />
-            </div>
-          </div>
-
-          {selected.size > 0 && (
-            <button className={css.btnClear} onClick={clearGenerator}>Clear selection</button>
-          )}
-
-          <hr className={css.obsDivider} />
-
-          <div>
-            <div className={css.genLabel}>Folder name</div>
-            <input
-              className={css.descInput}
-              placeholder="Sealing overview"
-              value={folderName}
-              onChange={e => setFolderName(e.target.value)}
-            />
-          </div>
-
-          <FolderTargetPicker label="Target parent folder" value={targetFolder} onChange={setTargetFolder} />
-
-          {createError   && <p className={css.errorText}>{createError}</p>}
-          {createSuccess && <p className={css.successText}>{createSuccess}</p>}
-
-          <button className={css.btnCopy} onClick={handleCreateFolder} disabled={!canCreate}>
-            {creating ? 'Creating…' : 'Create asset folder'}
-          </button>
-
-          {createdDir && (
-            <button className={css.btnClear} onClick={() => revealItemInDir(createdDir)}>
-              <FolderOpen size={13} style={{ marginRight: 6, verticalAlign: -2 }} />
-              Reveal in Finder
-            </button>
-          )}
-        </aside>
+        <GeneratorPanel gen={gen} />
       </div>
 
       {modalOpen && (
         <TagModal slot={modalSlot} editIndex={editIndex} onClose={() => setModalOpen(false)} />
       )}
-    </div>
-  );
-}
-
-/* ── Dimension column ─────────────────────────────────────────────────────── */
-
-interface DimColProps {
-  slot:            Slot;
-  dimLabel:        string;
-  allTags:         VocabTag[];
-  selected:        Map<string, VocabTag>;
-  searchQuery:     string;
-  collapsedGroups: Set<string>;
-  onToggleGroup:   (key: string) => void;
-  onToggleTag:     (tag: VocabTag) => void;
-  onAdd:           () => void;
-  onEdit:          (globalIdx: number) => void;
-  onDelete:        (globalIdx: number) => void;
-}
-
-function DimColumn({
-  slot, dimLabel, allTags, selected, searchQuery, collapsedGroups,
-  onToggleGroup, onToggleTag, onAdd, onEdit, onDelete,
-}: DimColProps) {
-  const portalGroups = useVocabularyStore(s => s.data?.parentGroups);
-  const slotTags  = allTags.filter(t => t.slot === slot);
-  const searching = searchQuery.length > 0;
-
-  const matches = (tag: VocabTag) =>
-    !searching ||
-    tag.label.toLowerCase().includes(searchQuery) ||
-    tag.shortcode.toLowerCase().includes(searchQuery);
-
-  const groupNames = parentGroupsForSlot(slotTags, slot, portalGroups);
-
-  return (
-    <div className={css.dimCol}>
-      <div className={css.dimColHead}>
-        <span className={css.dimColLabel}>{dimLabel}</span>
-        <button className={css.btnAddCol} onClick={onAdd} title={`Add ${slot} tag`}>
-          <Plus size={13} />
-        </button>
-      </div>
-
-      <div className={css.dimColScroll}>
-        {groupNames.map(groupName => {
-          const group = slotTags.filter(t =>
-            matches(t) &&
-            (groupName === 'Ungrouped' ? !t.parentGroup : t.parentGroup === groupName)
-          );
-          const isPortalGroup = groupName !== 'Ungrouped'
-            && (portalGroups ?? []).some(g => g.slot === slot && g.name === groupName);
-          if (!group.length && !isPortalGroup) return null;
-          if (!group.length && searching) return null;
-
-          const groupKey = `${slot}-${groupName}`;
-          const isOpen   = searching || !collapsedGroups.has(groupKey);
-
-          return (
-            <div key={groupKey}>
-              <div className={css.subtypeHead} onClick={() => onToggleGroup(groupKey)}>
-                <ChevronRight
-                  size={11}
-                  className={`${css.subtypeCaret}${isOpen ? ` ${css.open}` : ''}`}
-                />
-                <span className={css.subtypeLabel}>{groupName}</span>
-                <span className={css.subtypeCount}>{group.length}</span>
-              </div>
-
-              {isOpen && group.map(tag => {
-                const globalIdx = allTags.indexOf(tag);
-                const isSel     = selected.has(tag.shortcode);
-                return (
-                  <div
-                    key={tag.shortcode}
-                    className={`${css.tagRow}${isSel ? ` ${css.tagRowSel}` : ''}`}
-                    onClick={() => onToggleTag(tag)}
-                  >
-                    <div className={css.tagCheck}>
-                      {isSel && <Check size={9} strokeWidth={3} />}
-                    </div>
-                    {tag.icon && <span className={css.tagIcon}>{tag.icon}</span>}
-                    <span className={css.tagLabel}>{tag.label}</span>
-                    <span className={css.tagCode}>{tag.shortcode}</span>
-                    <div className={css.tagActions} onClick={e => e.stopPropagation()}>
-                      <button
-                        className={css.tagActionBtn}
-                        onClick={() => onEdit(globalIdx)}
-                        title="Edit"
-                      >
-                        <Pencil size={11} />
-                      </button>
-                      <button
-                        className={`${css.tagActionBtn} ${css.tagActionDelete}`}
-                        onClick={() => onDelete(globalIdx)}
-                        title="Delete"
-                      >
-                        <Trash2 size={11} />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }

@@ -2,7 +2,8 @@
   "compilerOptions": {
     "target": "ES2020",
     "useDefineForClassFields": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    // ES2022 lib (not target) for `new Error(msg, { cause })` — see tsconfig.base.json.
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "skipLibCheck": true,
 
@@ -18,7 +19,8 @@
        Paths resolve relative to this tsconfig (no baseUrl needed on TS 5+). */
     "paths": {
       "@dc-hub/auth": ["../packages/auth/src/index.ts"],
-      "@dc-hub/database": ["../packages/database/src/index.ts"]
+      "@dc-hub/database": ["../packages/database/src/index.ts"],
+      "@dc-hub/domain": ["../packages/domain/src/index.ts"]
     },
 
     /* Linting */

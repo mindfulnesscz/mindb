@@ -13,8 +13,7 @@ async function getSettingsPath(): Promise<string> {
 
 export async function loadSettings(): Promise<AppSettings> {
   const path = await getSettingsPath();
-  let fileExists = false;
-  try { fileExists = await exists(path); } catch { fileExists = false; }
+  const fileExists = await exists(path).catch(() => false);
 
   if (!fileExists) return { ...DEFAULT_SETTINGS };
 
@@ -50,8 +49,6 @@ function mapRawToSettings(raw: Record<string, unknown>): Partial<AppSettings> {
   if (str(raw.package_prefix)) m.packagePrefix = str(raw.package_prefix)!;
   if (str(raw.out_folder))     m.outFolder      = str(raw.out_folder)!;
   if (str(raw.exclude_mark))   m.excludeMark    = str(raw.exclude_mark)!;
-  if (str(raw.include_mark))   m.includeMark    = str(raw.include_mark)!;
-  if (str(raw.filter_mode))    m.filterMode     = str(raw.filter_mode) as AppSettings['filterMode'];
   if (str(raw.thumb_width))    m.thumbWidth     = str(raw.thumb_width)!;
   if (str(raw.thumb_quality))  m.thumbQuality   = str(raw.thumb_quality)!;
   if (str(raw.dam_depth))      m.damDepth       = str(raw.dam_depth)!;

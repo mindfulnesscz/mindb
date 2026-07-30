@@ -1,6 +1,6 @@
 import { supabase } from '../lib/supabase'
 import type { Asset, FilterState, Role, AssetStatus, AssetPerm } from '@dc-hub/asset-library'
-import type { AssetRow, AssetStats } from '../lib/database.types'
+import type { AssetRow, AssetStats } from '@dc-hub/database'
 
 type AssetRowWithStats = AssetRow & { stats: AssetStats | AssetStats[] | null }
 
@@ -237,7 +237,7 @@ export async function updateAssetStatus(
   status: Asset['status'],
 ): Promise<void> {
   if (!supabase) throw new Error('Supabase not configured')
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const { error } = await (supabase as any).from('assets').update({ status }).eq('id', id)
   if (error) throw new Error(error.message)
 }
@@ -247,14 +247,14 @@ export async function updateAssetPerm(
   perm: Asset['perm'],
 ): Promise<void> {
   if (!supabase) throw new Error('Supabase not configured')
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const { error } = await (supabase as any).from('assets').update({ perm }).eq('id', id)
   if (error) throw new Error(error.message)
 }
 
 export async function deleteAsset(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase not configured')
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const { error } = await (supabase as any).from('assets').delete().eq('id', id)
   if (error) throw new Error(error.message)
 }
