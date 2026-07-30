@@ -73,6 +73,45 @@ export type Database = {
           },
         ]
       }
+      app_errors: {
+        Row: {
+          app_version: string | null
+          breadcrumbs: string[]
+          context: string
+          created_at: string
+          environment: string | null
+          id: string
+          message: string
+          source: string
+          stack: string | null
+          user_id: string | null
+        }
+        Insert: {
+          app_version?: string | null
+          breadcrumbs?: string[]
+          context: string
+          created_at?: string
+          environment?: string | null
+          id?: string
+          message: string
+          source: string
+          stack?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          app_version?: string | null
+          breadcrumbs?: string[]
+          context?: string
+          created_at?: string
+          environment?: string | null
+          id?: string
+          message?: string
+          source?: string
+          stack?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       approvals: {
         Row: {
           asset_id: string
@@ -673,6 +712,15 @@ export type Database = {
       can_create_clients: { Args: never; Returns: boolean }
       can_see_asset: { Args: { p_asset_id: string }; Returns: boolean }
       check_email_auth: { Args: { p_email: string }; Returns: string }
+      error_digest: {
+        Args: { p_window?: string }
+        Returns: {
+          context: string
+          last_seen: string
+          message: string
+          occurrences: number
+        }[]
+      }
       get_all_profiles: {
         Args: never
         Returns: {

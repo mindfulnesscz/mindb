@@ -30,6 +30,8 @@ export const LOG_FILE = 'errors.log';
 /** Keeps the log bounded on a machine that runs the pipeline daily. */
 const MAX_LOG_BYTES = 256 * 1024;
 
+const SOURCE = 'desktop';
+
 const breadcrumbs: string[] = [];
 
 /**
@@ -56,7 +58,61 @@ export function reportError(context: string, err: unknown): void {
   const message = toMessage(err);
   console.error(`[${context}] ${message}`, err);
   void appendToLogFile(formatEntry(context, message));
+  void sendToSink(context, message, err instanceof Error ? err.stack : undefined);
 }
+
+/* ── The remote sink ──────────────────────────────────────────────────────────
+ * Configured rather than imported. `reportError` is called from stores and services that are
+ * themselves imported by the modules holding the Supabase config, so importing that config here would
+ * risk a cycle — and the sink has to work before a backend is even chosen. So the app hands it in once
+ * it knows, and until then reporting is local only.
+ *
+ * Never awaited, never throws, and never reports its OWN failure: a sink that recurses when the
+ * network is down turns one error into a loop.                                                       */
+
+interface ErrorSink {
+  url:         string;
+  anonKey:     string;
+  environment: string;
+  appVersion:  string;
+  /** The signed-in user, when there is one. RLS refuses a report attributed to anybody else. */
+  userId?:     string | null;
+}
+
+let sink: ErrorSink | null = null;
+
+export function configureErrorSink(next: ErrorSink | null): void {
+  sink = next;
+}
+
+async function sendToSink(context: string, message: string, stack: string | undefined): Promise<void> {
+  if (!sink) return;
+  try {
+    await fetch(`${sink.url}/rest/v1/app_errors`, {
+      method: 'POST',
+      headers: {
+        apikey: sink.anonKey,
+        Authorization: `Bearer ${sink.anonKey}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({
+        context,
+        message,
+        stack: stack ?? null,
+        breadcrumbs: recentBreadcrumbs(),
+        source: SOURCE,
+        app_version: sink.appVersion,
+        environment: sink.environment,
+        user_id: sink.userId ?? null,
+      }),
+    });
+  } catch {
+    // Offline, or the backend is the thing that broke. The console line and the local log already went
+    // out; a failed report must not become a second error.
+  }
+}
+
 
 /** One line per error: sortable, greppable, and carrying the trail that explains it. */
 export function formatEntry(context: string, message: string, at = new Date()): string {

@@ -16,11 +16,13 @@ import { loadClientsForEnvironment, saveLocalClient, pullCloudDestinations } fro
 import { loadEnvironments } from './services/environmentService';
 import { useEnvironmentStore } from './store/environmentStore';
 import { switchAuthClient, getSession, loadProfile, DESKTOP_ROLES } from './services/authService';
-import { reportError } from './services/reportError';
+import { reportError, configureErrorSink } from './services/reportError';
 import './styles/tokens.css';
 import './styles/global.css';
 import css from './App.module.css';
 import { ViewErrorBoundary } from './app/ViewErrorBoundary';
+
+const APP_VERSION = __APP_VERSION__;
 
 export default function App() {
   const active = useAppStore(s => s.active);
@@ -65,6 +67,13 @@ export default function App() {
     const env = useEnvironmentStore.getState().environments.find(e => e.id === activeEnvId) ?? null;
     if (!env || !env.supabaseUrl || !env.anonKey) { setAuthStatus('unconfigured'); return; }
 
+    // Errors report to whichever backend is active, so a staging failure lands in staging. Set before
+    // the auth attempt, because a failure to sign in is exactly the error worth capturing.
+    configureErrorSink({
+      url: env.supabaseUrl, anonKey: env.anonKey,
+      environment: env.name, appVersion: APP_VERSION, userId: null,
+    });
+
     const runId = ++authRunId.current;
     (async () => {
       setAuthStatus('booting');
@@ -82,6 +91,10 @@ export default function App() {
         if (authRunId.current !== runId) return;
         if (!DESKTOP_ROLES.includes(profile.role)) { setAuthStatus('denied'); return; }
         setProfile(profile);
+        configureErrorSink({
+          url: env.supabaseUrl, anonKey: env.anonKey,
+          environment: env.name, appVersion: APP_VERSION, userId: profile.id,
+        });
         setAuthStatus('signedIn');
       } catch (e) {
         if (authRunId.current !== runId) return;
