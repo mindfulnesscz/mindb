@@ -27,3 +27,10 @@ export interface AssetStats {
   rating_count: number
   comment_count: number
 }
+
+/* The `clients` row projected into the shape both apps use — see clients.ts for why it is shared. */
+export {
+  toClientIdentity, toDimensionLabels, dimensionLabelsToJson,
+  CLIENT_IDENTITY_SELECT, DEFAULT_DIMENSION_LABELS,
+} from './clients.js'
+export type { ClientIdentity, DimensionLabels } from './clients.js'

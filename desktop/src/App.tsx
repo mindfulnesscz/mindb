@@ -119,7 +119,7 @@ export default function App() {
   useEffect(() => {
     const client = clients.find(c => c.id === activeClientId) ?? null;
     if (client) {
-      document.documentElement.style.setProperty('--client-accent', client.brandColor);
+      document.documentElement.style.setProperty('--client-accent', client.accent);
       setField('sourceFolder', client.sourceFolder);
       setField('targetFolder', client.targetFolder);
       setField('vaultFolder',  client.vaultFolder);

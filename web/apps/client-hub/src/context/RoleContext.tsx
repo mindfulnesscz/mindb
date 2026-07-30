@@ -3,7 +3,7 @@ import type { Role, Client } from '@dc-hub/asset-library'
 import { MOCK_CLIENTS } from '@dc-hub/asset-library'
 import { supabase, isConfigured } from '../lib/supabase'
 import { toClient } from '../services/clientService'
-import type { ClientRow } from '../lib/database.types'
+import type { ClientRow } from '@dc-hub/database'
 import { asRole } from '../services/userService'
 import { useAuth } from './AuthContext'
 

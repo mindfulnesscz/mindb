@@ -109,9 +109,9 @@ describe('normalizeDestination', () => {
 
 describe('makeClient', () => {
   it('fills defaults and lets the partial override them', () => {
-    const c = makeClient({ name: 'ESS', brandColor: '#ff0000' });
+    const c = makeClient({ name: 'ESS', accent: '#ff0000' });
     expect(c.name).toBe('ESS');
-    expect(c.brandColor).toBe('#ff0000');
+    expect(c.accent).toBe('#ff0000');
     expect(c.cloudDestinations).toEqual([]);
     expect(c.dimensionLabels).toEqual({ entity: 'Entity', angle: 'Angle', format: 'Format' });
   });

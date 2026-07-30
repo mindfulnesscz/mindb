@@ -1,6 +1,6 @@
 import { supabase } from '../lib/supabase'
 import type { Asset, FilterState, Role, AssetStatus, AssetPerm } from '@dc-hub/asset-library'
-import type { AssetRow, AssetStats } from '../lib/database.types'
+import type { AssetRow, AssetStats } from '@dc-hub/database'
 
 type AssetRowWithStats = AssetRow & { stats: AssetStats | AssetStats[] | null }
 

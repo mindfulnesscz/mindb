@@ -853,12 +853,97 @@ filenames that nobody can edit or delete. One test asserts every leaf lands in *
 
 ---
 
-### Phase 3 — Unify the data layer (1–2 weeks)
+### Phase 3 — Unify the data layer ✅ (done 2026-07-30)
 
 - **Create `packages/core`** (or extend `web/packages/database`) holding: `ID_SUFFIX_PATTERN` + identity, naming/taxonomy, generated Supabase types (single source), and typed data-access functions.
 - **Generate `database.types.ts` from Supabase** in CI (`supabase gen types`) so types can never drift from the schema; delete hand-maintained copies.
 - **Consume `core` from both desktop and web.** Desktop's `supabaseService` and web's services become thin adapters over shared functions.
 - _Exit criteria:_ one identity regex, one type source, one client-service implementation; desktop imports `@dc-hub/core`.
+
+#### What was already true
+
+Surveying first changed the shape of this phase. Two of the three exit criteria were **already met** by
+Phase 2: `ID_SUFFIX_PATTERN` has exactly one definition (`packages/domain/src/stableId.ts`), and
+`@dc-hub/database` was already the single type source, with the portal's `lib/database.types.ts` down
+to a two-line deprecated re-export. So this was not a consolidation job. It was a **drift** job.
+
+#### `packages/core` was NOT created — deliberately
+
+Four shared packages already exist with clear remits: `domain` (platform-free rules), `database`
+(generated types), `auth`, `asset-library`. A fifth named `core` would have been a name, not a
+boundary — and "core" is the name things accumulate in. Each piece went to the package that already
+owned its concern. The exit criteria are about duplication, and they are met; the package name in the
+original plan was a means, not the goal.
+
+#### The types HAD drifted, silently
+
+`supabase gen types typescript --local` against a schema replayed from the migrations differed from the
+committed file by one line: `can_see_asset`, the function added by the F-4 ratings migration, was
+missing. Nothing failed, because **a missing type is not a type error** — code calling that RPC was
+simply untyped, and would have stayed that way.
+
+So generation is now a command and agreement is a gate: `scripts/db-types.mjs write|check`, wired into
+`npm run check` and into the `db.yml` validate job, which already boots a database from the migrations.
+`check` **skips** when the local stack is down so `npm run check` still works offline; CI's run is the
+enforcing one, and is the stronger check anyway — it compares the committed types against a schema
+replayed from zero. On drift it prints which type lines differ, not a 900-line diff.
+
+The old `db:types` script was a shell redirect, which would have written the CLI's error output into
+the types file on failure. The script validates the output before writing.
+
+#### The real duplication: one row, two implementations
+
+Both apps read the `clients` row and both projected it into a domain object, separately:
+
+| | desktop (before) | portal (before) |
+| --- | --- | --- |
+| row type | hand-written `DbClientRow` | generated `ClientRow` |
+| columns read | 5 (`id,name,accent,slug,logo_url`) | all |
+| `dimension_labels` | defaulted inline | defaulted inline, again |
+| the accent column | called **`brandColor`** | called `accent` |
+
+Every row of that table is a way for the two to disagree, and the third one is the sharp edge: a field
+added for the portal was simply **absent on desktop, with nothing to say so**. A hand-written row type
+cannot drift loudly.
+
+Now there is one projection — `packages/database/src/clients.ts`:
+
+- `ClientIdentity` — the portal-owned facts. Desktop's `Client` **extends** it and adds only what is
+  machine-local (folder paths, per-machine destination toggles, OAuth tokens); the portal's `Client` in
+  `@dc-hub/asset-library` **is** it, re-exported under the old name so no consumer changed. That is the
+  standing goal in miniature: the portal as a slightly limited desktop, not a parallel implementation.
+- `CLIENT_IDENTITY_SELECT` — one column list, so the two apps cannot read different subsets.
+- `toDimensionLabels` — the defaulting, once. It defaults **each label independently**, because a client
+  who renamed one dimension and left the others must keep that rename; all-or-nothing defaulting
+  discards it. There were **four** copies of the `{ entity: 'Entity', … }` literals; now there is one.
+- `dimensionLabelsToJson` — the one cast needed on the way back into a `Json` column, in one place
+  instead of spelled differently at each write site.
+
+`brandColor` → `accent`, so one column has one name. Safe without an on-disk migration, and checked
+before doing it: `LocalClientConfig` never persisted it — it is re-derived from the row on every load.
+
+`dimensionLabels` also became **required** on the shared type, since the projection always populates it.
+That is what removes the fallbacks at the use sites rather than merely centralising them, and the
+compiler found all four places that had been constructing a client without labels.
+
+**14 tests** cover the projection, aimed at what the database actually hands over: `Json` that may be
+any shape at all, nullable columns becoming `undefined` rather than leaking `null`, partial label
+objects, and that `CLIENT_IDENTITY_SELECT` names every column the projection reads.
+
+#### Two smaller drift removals
+
+- `PortalClient` in `ClientPortalPage` was a hand-written mirror of `get_client_portal`'s return table;
+  it now derives from the generated RPC type, so it is covered by the drift gate. Its nullability is
+  restored explicitly — the generator reports function return columns as non-null, and `logo_url` /
+  `portal_bg` are nullable on the table.
+- The portal's deprecated `lib/database.types.ts` shim is deleted; its five importers now name
+  `@dc-hub/database` directly.
+
+⚠ **Left alone, with cause:** `get_client_portal` is executable by `anon` and returns six columns on
+purpose, so the public portal page cannot read a client's renamed dimension labels. It defaults them.
+Widening an unauthenticated surface for cosmetics is a security decision, not a refactor step — worth
+raising separately if the labels matter on that page. `brandingService`'s `{ logo_url: string }` stays
+hand-written: it is an edge-function HTTP response, not a row.
 
 ### Phase 4 — Observability & resilience (1 week)
 
@@ -1025,7 +1110,7 @@ the tenant it writes to; sharing a seeded one makes `npm test` a destructive com
 | 2c-1 | ~~Characterize + split `assetExport`~~ ✅ 489 → 156 | Med               | M      | 2     |
 | A1 | ~~One workspace: desktop joined, 1 lockfile~~ ✅   | High (structural)   | M      | 2     |
 | 7  | Rate-limit `asset_events` (F-2 partly done)       | Med                 | S      | 4     |
-| 10 | `packages/core` + CI-generated DB types           | High                | M      | 3     |
+| 10 | ~~CI-generated DB types + one client projection~~ ✅ | High             | M      | 3     |
 | 11 | Telemetry + error boundaries + op guardrails      | High                | M      | 4     |
 | 12 | e2e smoke + clippy + coverage gate                | Med                 | M      | 5     |
 | 13 | Docs: Nextra 2→4 (unblocks React 19 + workspace)  | Low                 | M      | 5     |

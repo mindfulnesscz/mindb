@@ -671,6 +671,7 @@ export type Database = {
     }
     Functions: {
       can_create_clients: { Args: never; Returns: boolean }
+      can_see_asset: { Args: { p_asset_id: string }; Returns: boolean }
       check_email_auth: { Args: { p_email: string }; Returns: string }
       get_all_profiles: {
         Args: never

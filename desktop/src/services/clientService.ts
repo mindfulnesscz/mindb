@@ -11,6 +11,8 @@ import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-f
 import { appDataDir, join } from '@tauri-apps/api/path';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { makeClient, normalizeDestination } from '../domain/client';
+import { toClientIdentity, CLIENT_IDENTITY_SELECT } from '@dc-hub/database';
+import type { ClientRow } from '@dc-hub/database';
 import type { Client, CloudDestination } from '../domain/client';
 import { type VocabularyData } from '@dc-hub/domain';
 import type { Environment } from './environmentService';
@@ -86,14 +88,11 @@ function pickLocalFields(c: Partial<Client>): LocalClientConfig {
 
 /* ── DB clients ──────────────────────────────────────────────────────────── */
 
-interface DbClientRow {
-  id:                 string;
-  name:               string;
-  accent:             string | null;
-  slug:               string | null;
-  logo_url:           string | null;
-  dimension_labels:   { entity?: string; angle?: string; format?: string } | null;
-}
+/* The row shape comes from the generated types — this used to be a hand-written interface, which
+   means the schema could change without any type error appearing here. */
+type DbClientRow = Pick<
+  ClientRow, 'id' | 'name' | 'accent' | 'initials' | 'slug' | 'logo_url' | 'dimension_labels'
+> & Partial<Pick<ClientRow, 'website' | 'portal_bg' | 'domain_whitelist'>>;
 
 /** Fetches the clients this user may operate in the ACTIVE environment, using
  * the signed-in session (never the service key). Admins see all clients;
@@ -102,8 +101,11 @@ interface DbClientRow {
 async function fetchDbClients(role: string): Promise<DbClientRow[]> {
   const auth = getAuthClient();
   if (!auth) throw new Error('Not signed in');
-  const baseSelect = 'id,name,accent,slug,logo_url';
-  const fullSelect = `${baseSelect},dimension_labels`;
+  // The full column list is shared with the portal (CLIENT_IDENTITY_SELECT) so the two cannot read
+  // different subsets of the same row. The narrow fallback exists only for a backend that has not yet
+  // applied the dimension_labels migration.
+  const baseSelect = 'id,name,accent,initials,slug,logo_url';
+  const fullSelect = CLIENT_IDENTITY_SELECT;
   const timeout = (p: PromiseLike<{ data: unknown; error: { message: string } | null }>, label: string) =>
     withTimeout(Promise.resolve(p), 12_000, label);
 
@@ -136,19 +138,15 @@ async function fetchDbClients(role: string): Promise<DbClientRow[]> {
   }
 }
 
+/**
+ * A client is the portal's identity plus this machine's own state. The identity half is projected by
+ * @dc-hub/database exactly as the portal projects it — same column list, same label defaulting — so
+ * the two apps cannot disagree about what a client is. The local half is spread last: machine state
+ * wins over anything the row happens to carry.
+ */
 function mergeClient(env: Environment, row: DbClientRow, local: LocalClientConfig): Client {
-  const labels = row.dimension_labels ?? {};
   return makeClient({
-    id:                 row.id,
-    name:               row.name,
-    slug:               row.slug ?? undefined,
-    logoUrl:            row.logo_url,
-    brandColor:         row.accent || '#161616',
-    dimensionLabels:    {
-      entity: labels.entity ?? 'Entity',
-      angle:  labels.angle  ?? 'Angle',
-      format: labels.format ?? 'Format',
-    },
+    ...toClientIdentity(row as ClientRow),
     supabaseUrl:        env.supabaseUrl,
     supabaseAnonKey:    env.anonKey,
     ...local,

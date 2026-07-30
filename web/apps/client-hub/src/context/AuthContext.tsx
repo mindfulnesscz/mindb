@@ -9,7 +9,7 @@ import {
   type OAuthProvider,
 } from '@dc-hub/auth'
 import { supabase, isConfigured } from '../lib/supabase'
-import type { ProfileRow } from '../lib/database.types'
+import type { ProfileRow } from '@dc-hub/database'
 
 // Auth logic + types now live in the shared @dc-hub/auth package. Re-export the
 // types so existing importers (e.g. SignInModal) keep resolving them from here.

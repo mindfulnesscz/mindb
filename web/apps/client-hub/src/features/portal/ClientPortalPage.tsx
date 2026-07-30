@@ -9,15 +9,19 @@ import type { Client } from '@dc-hub/asset-library'
 import SignInModal from '../auth/SignInModal'
 import CompleteProfile from '../auth/CompleteProfile'
 import GalleryView from '../gallery/GalleryView'
+import { DEFAULT_DIMENSION_LABELS } from '@dc-hub/database'
+import type { Database } from '@dc-hub/database'
 
-interface PortalClient {
-  id: string
-  name: string
-  accent: string
-  initials: string
-  logo_url: string | null
-  portal_bg: string | null
-}
+/**
+ * The anon-visible slice of a client, taken from the generated RPC types so it cannot drift from
+ * `get_client_portal` — this used to be a hand-written mirror of that function's return table.
+ *
+ * The generator reports function return columns as non-null; `logo_url` and `portal_bg` are nullable
+ * on the table, so their nullability is restored here rather than trusted.
+ */
+type PortalClient =
+  Omit<Database['public']['Functions']['get_client_portal']['Returns'][number], 'logo_url' | 'portal_bg'>
+  & { logo_url: string | null; portal_bg: string | null }
 
 // ── DC-branded 404 ────────────────────────────────────────────
 
@@ -248,6 +252,10 @@ export default function ClientPortalPage() {
       initials: client.initials,
       logoUrl:  client.logo_url  ?? undefined,
       portalBg: client.portal_bg ?? undefined,
+      // `get_client_portal` is executable by `anon` and returns six columns on purpose, so the
+      // renamed dimension labels are not available on this path. Defaults, rather than widening an
+      // unauthenticated surface for cosmetics.
+      dimensionLabels: DEFAULT_DIMENSION_LABELS,
     }
     setActiveClient(roleClient)
   }, [client?.id])

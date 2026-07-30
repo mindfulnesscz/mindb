@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest'
 import { getInitials, toSlug, emptyForm, clientToForm } from './clientForm'
 import { assignableRoles, ROLE_OPTIONS, ROLE_LABELS } from './roles'
 import type { Client } from '@dc-hub/asset-library'
+import { DEFAULT_DIMENSION_LABELS } from '@dc-hub/database'
 
 describe('getInitials', () => {
   it('takes the first letter of the first two words, uppercased', () => {
@@ -75,7 +76,8 @@ describe('emptyForm', () => {
 
 describe('clientToForm', () => {
   const client = (over: Partial<Client> = {}): Client => ({
-    id: 'c1', name: 'Acme', accent: '#111', initials: 'AC', ...over,
+    id: 'c1', name: 'Acme', accent: '#111', initials: 'AC',
+    dimensionLabels: DEFAULT_DIMENSION_LABELS, ...over,
   })
 
   it('maps a full client across', () => {

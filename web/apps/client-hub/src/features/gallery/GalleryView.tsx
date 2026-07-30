@@ -15,6 +15,7 @@ import { AssetCard } from './AssetCard'
 import { CardSkeleton, EmptyState, type EmptyReason } from './GalleryStates'
 import { FiltersRail } from './FiltersRail'
 import { STATUS_KEYS_STAFF, STATUS_KEYS_CLIENT } from './statusLabels'
+import { DEFAULT_DIMENSION_LABELS } from '@dc-hub/database'
 
 export default function GalleryView() {
   const { role, activeClient } = useRole()
@@ -56,11 +57,9 @@ export default function GalleryView() {
     groups: tags.groups,
   }
 
-  const dimensionLabels = {
-    entity: activeClient?.dimensionLabels?.entity ?? 'Entity',
-    format: activeClient?.dimensionLabels?.format ?? 'Format',
-    angle:  activeClient?.dimensionLabels?.angle  ?? 'Angle',
-  }
+  // Always fully populated once a client came through `toClientIdentity`; the fallback covers
+  // "no client selected yet".
+  const dimensionLabels = activeClient?.dimensionLabels ?? DEFAULT_DIMENSION_LABELS
 
   const hasFiltersApplied =
     (filters.status?.length ?? 0) > 0 ||
