@@ -463,3 +463,300 @@ pub async fn delete_r2_object(
         Err(format!("R2 delete failed ({status}): {body}"))
     }
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+//
+// Everything below is pure: date arithmetic, URI encoding, XML scraping and the SigV4
+// signer. All of it is hand-rolled (see the deferral note at the top of this file), and all
+// of it sits on the request path — a wrong `x-amz-date` or a mis-encoded key makes every
+// upload fail authentication, which surfaces to a user as "the CDN is broken" with no clue
+// why. Cheap to test, expensive to get wrong.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /* ── Leap-year rules ──────────────────────────────────────────────────── */
+
+    #[test]
+    fn leap_years_follow_the_full_gregorian_rule() {
+        assert!(is_leap(2024), "divisible by 4");
+        assert!(!is_leap(2023), "not divisible by 4");
+        assert!(is_leap(2000), "divisible by 400 — the rule a naive %4 check gets right by luck");
+        assert!(!is_leap(1900), "divisible by 100 but not 400 — the rule a naive %4 check gets WRONG");
+        assert!(!is_leap(2100), "the next century that is not a leap year");
+        assert!(is_leap(2400));
+    }
+
+    /* ── Epoch → UTC date/time ────────────────────────────────────────────── */
+
+    #[test]
+    fn epoch_zero_is_the_unix_epoch() {
+        assert_eq!(epoch_to_utc(0), ("19700101".into(), "000000".into()));
+    }
+
+    #[test]
+    fn epoch_converts_a_known_timestamp() {
+        // 2001-09-09T01:46:40Z — the widely-quoted 1e9 epoch.
+        assert_eq!(epoch_to_utc(1_000_000_000), ("20010909".into(), "014640".into()));
+    }
+
+    #[test]
+    fn epoch_handles_the_32_bit_rollover_moment() {
+        // 2038-01-19T03:14:07Z. u64 arithmetic must not care, but assert it anyway.
+        assert_eq!(epoch_to_utc(2_147_483_647), ("20380119".into(), "031407".into()));
+    }
+
+    #[test]
+    fn epoch_lands_on_february_29_in_a_leap_year() {
+        assert_eq!(epoch_to_utc(1_709_164_800).0, "20240229");
+    }
+
+    #[test]
+    fn epoch_skips_february_29_in_a_common_year() {
+        // 2025 is not a leap year: Feb 1 + 28 days is March 1, not Feb 29.
+        assert_eq!(epoch_to_utc(1_740_787_200).0, "20250301");
+    }
+
+    #[test]
+    fn epoch_honours_the_400_year_leap_exception() {
+        // 2000-02-29 exists only because of the %400 rule.
+        assert_eq!(epoch_to_utc(951_782_400).0, "20000229");
+    }
+
+    #[test]
+    fn epoch_honours_the_100_year_leap_exception() {
+        // 2100-02-29 does NOT exist, so Feb 1 + 28 days is March 1.
+        assert_eq!(epoch_to_utc(4_107_542_400).0, "21000301");
+    }
+
+    #[test]
+    fn epoch_keeps_time_of_day_zero_padded() {
+        // 1970-01-01T01:02:03Z — a naive formatter would emit "123".
+        assert_eq!(epoch_to_utc(3723), ("19700101".into(), "010203".into()));
+    }
+
+    #[test]
+    fn epoch_rolls_over_the_last_second_of_a_year() {
+        assert_eq!(epoch_to_utc(1_735_689_599), ("20241231".into(), "235959".into()));
+        assert_eq!(epoch_to_utc(1_735_689_600), ("20250101".into(), "000000".into()));
+    }
+
+    #[test]
+    fn days_to_ymd_is_one_indexed_for_month_and_day() {
+        // Day 0 must be January 1st, not month 0 / day 0.
+        assert_eq!(days_to_ymd(0), (1970, 1, 1));
+        assert_eq!(days_to_ymd(31), (1970, 2, 1));
+        assert_eq!(days_to_ymd(364), (1970, 12, 31));
+        assert_eq!(days_to_ymd(365), (1971, 1, 1));
+    }
+
+    #[test]
+    fn utc_now_returns_a_matching_datetime_and_date_pair() {
+        // The signer passes both to `sign`; if they ever disagree the request is rejected
+        // with an opaque SignatureDoesNotMatch.
+        let (datetime, date) = utc_now();
+        assert_eq!(datetime.len(), 16, "YYYYMMDDTHHMMSSZ");
+        assert!(datetime.starts_with(&date));
+        assert!(datetime.ends_with('Z'));
+        assert_eq!(&datetime[8..9], "T");
+    }
+
+    /* ── URI encoding (S3 canonical form) ─────────────────────────────────── */
+
+    #[test]
+    fn uri_encode_leaves_unreserved_characters_alone() {
+        assert_eq!(uri_encode("AZaz09-_.~", true), "AZaz09-_.~");
+    }
+
+    #[test]
+    fn uri_encode_keeps_slashes_in_a_path_but_escapes_them_in_a_query() {
+        let key = "thumbnails/a1b2c3d4/c1.webp";
+        assert_eq!(uri_encode(key, false), key);
+        assert_eq!(uri_encode(key, true), "thumbnails%2Fa1b2c3d4%2Fc1.webp");
+    }
+
+    #[test]
+    fn uri_encode_escapes_spaces_as_percent_20_not_plus() {
+        // A '+' here would be silently interpreted as a space by some servers and as a
+        // literal plus by S3 — the classic canonical-request mismatch.
+        assert_eq!(uri_encode("Product Slides Deck.pdf", false), "Product%20Slides%20Deck.pdf");
+    }
+
+    #[test]
+    fn uri_encode_escapes_a_literal_plus() {
+        assert_eq!(uri_encode("a+b", false), "a%2Bb");
+    }
+
+    #[test]
+    fn uri_encode_escapes_the_bracket_tags_real_filenames_carry() {
+        // Translated deliverables routinely look like "(PRD)(SlD) Deck v2.pdf".
+        assert_eq!(
+            uri_encode("(PRD)(SlD) Deck v2.pdf", false),
+            "%28PRD%29%28SlD%29%20Deck%20v2.pdf",
+        );
+    }
+
+    #[test]
+    fn uri_encode_escapes_multibyte_utf8_per_byte() {
+        // Client folder names contain accented characters ("Deda Energie", "Mucha Family"
+        // are tame; "Šumava" is not). Each UTF-8 byte gets its own %XX.
+        assert_eq!(uri_encode("ü", false), "%C3%BC");
+        assert_eq!(uri_encode("é", false), "%C3%A9");
+        assert_eq!(uri_encode("🚫", false), "%F0%9F%9A%AB");
+    }
+
+    #[test]
+    fn uri_encode_uses_uppercase_hex() {
+        // Lowercase hex is a valid URL but a DIFFERENT canonical request, so the signature
+        // would not match what S3 recomputes.
+        assert_eq!(uri_encode("~!", false), "~%21");
+        assert!(!uri_encode("ü", false).contains("c3"));
+    }
+
+    #[test]
+    fn uri_encode_handles_the_empty_string() {
+        assert_eq!(uri_encode("", true), "");
+    }
+
+    /* ── Endpoint host extraction ─────────────────────────────────────────── */
+
+    #[test]
+    fn host_from_strips_either_scheme() {
+        assert_eq!(host_from("https://acct.r2.cloudflarestorage.com"), "acct.r2.cloudflarestorage.com");
+        assert_eq!(host_from("http://localhost:9000"), "localhost:9000");
+    }
+
+    #[test]
+    fn host_from_passes_through_a_bare_host() {
+        assert_eq!(host_from("acct.r2.cloudflarestorage.com"), "acct.r2.cloudflarestorage.com");
+    }
+
+    /* ── XML scraping ─────────────────────────────────────────────────────── */
+
+    #[test]
+    fn extract_xml_text_reads_every_occurrence_in_order() {
+        let xml = "<ListBucketResult><Contents><Key>a/1.webp</Key></Contents>\
+                   <Contents><Key>a/2.webp</Key></Contents></ListBucketResult>";
+        assert_eq!(extract_xml_text(xml, "Key"), vec!["a/1.webp", "a/2.webp"]);
+    }
+
+    #[test]
+    fn extract_xml_text_returns_empty_when_the_tag_is_absent() {
+        assert_eq!(extract_xml_text("<ListBucketResult/>", "Key"), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn extract_xml_text_stops_at_an_unclosed_tag_instead_of_looping() {
+        // A truncated response must terminate, not spin or panic.
+        assert_eq!(extract_xml_text("<Key>a</Key><Key>truncated", "Key"), vec!["a"]);
+    }
+
+    #[test]
+    fn extract_xml_text_yields_an_empty_string_for_an_empty_element() {
+        assert_eq!(extract_xml_text("<Key></Key>", "Key"), vec![""]);
+    }
+
+    /* ── Session-token headers ────────────────────────────────────────────── */
+
+    #[test]
+    fn token_headers_are_present_only_for_temporary_credentials() {
+        // R2 Control API grants are temporary and MUST sign x-amz-security-token; permanent
+        // keys must NOT send it, or the request is rejected.
+        assert_eq!(token_headers(Some("tok")), vec![("x-amz-security-token", "tok")]);
+        assert!(token_headers(None).is_empty());
+    }
+
+    /* ── Hashing and key derivation ───────────────────────────────────────── */
+
+    #[test]
+    fn sha256_of_empty_input_matches_the_empty_hash_constant() {
+        // EMPTY_HASH is hardcoded and used as the body hash of every GET/DELETE.
+        assert_eq!(sha256_hex(b""), EMPTY_HASH);
+    }
+
+    #[test]
+    fn sha256_hex_is_lowercase_hex_of_the_right_length() {
+        let h = sha256_hex(b"dc-hub");
+        assert_eq!(h.len(), 64);
+        assert!(h.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
+    }
+
+    #[test]
+    fn derive_signing_key_matches_the_published_aws_test_vector() {
+        // From the AWS SigV4 documentation's worked example. This pins the whole
+        // HMAC chain (AWS4 prefix → date → region → service → aws4_request).
+        let key = derive_signing_key(
+            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+            "20150830",
+            "us-east-1",
+            "iam",
+        );
+        assert_eq!(
+            hex::encode(key),
+            "c4afb1cc5771d871763a393e44b703571b55cc28424d1a5e86da6ed3c154a4b9",
+        );
+    }
+
+    /* ── The signer ───────────────────────────────────────────────────────── */
+
+    fn sign_fixture(extra: &[(&str, &str)], body_hash: &str) -> String {
+        sign(
+            "PUT", "acct.r2.cloudflarestorage.com", "/bucket/thumbnails/a1b2c3d4/c1.webp", "",
+            body_hash, extra, "20260729T101112Z", "20260729", "AKIDEXAMPLE", "secret",
+        )
+    }
+
+    #[test]
+    fn sign_produces_a_credential_scope_for_r2s_auto_region() {
+        let auth = sign_fixture(&[], EMPTY_HASH);
+        assert!(auth.starts_with("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20260729/auto/s3/aws4_request"));
+    }
+
+    #[test]
+    fn sign_lists_signed_headers_sorted_and_lowercase() {
+        // SigV4 requires the SignedHeaders list to be sorted; `sign` must sort whatever
+        // order the caller passed its extra headers in.
+        let auth = sign_fixture(&[("x-amz-meta-sha256", "abc"), ("content-type", "image/webp")], EMPTY_HASH);
+        let signed = auth
+            .split("SignedHeaders=").nth(1).unwrap()
+            .split(',').next().unwrap();
+        assert_eq!(signed, "content-type;host;x-amz-content-sha256;x-amz-date;x-amz-meta-sha256");
+    }
+
+    #[test]
+    fn sign_is_order_independent_for_extra_headers() {
+        let a = sign_fixture(&[("content-type", "image/webp"), ("x-amz-meta-sha256", "abc")], EMPTY_HASH);
+        let b = sign_fixture(&[("x-amz-meta-sha256", "abc"), ("content-type", "image/webp")], EMPTY_HASH);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn sign_is_deterministic_for_identical_input() {
+        assert_eq!(sign_fixture(&[], EMPTY_HASH), sign_fixture(&[], EMPTY_HASH));
+    }
+
+    #[test]
+    fn sign_changes_when_the_body_hash_changes() {
+        // The body hash is part of the canonical request; a signature that ignored it would
+        // let a tampered payload through.
+        let a = sign_fixture(&[], EMPTY_HASH);
+        let b = sign_fixture(&[], &sha256_hex(b"different content"));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn sign_includes_the_security_token_in_signed_headers_when_present() {
+        let auth = sign_fixture(&token_headers(Some("session-token")), EMPTY_HASH);
+        assert!(auth.contains("x-amz-security-token"));
+        assert!(!sign_fixture(&[], EMPTY_HASH).contains("x-amz-security-token"));
+    }
+
+    #[test]
+    fn sign_emits_a_64_hex_character_signature() {
+        let auth = sign_fixture(&[], EMPTY_HASH);
+        let sig = auth.split("Signature=").nth(1).unwrap();
+        assert_eq!(sig.len(), 64);
+        assert!(sig.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+}

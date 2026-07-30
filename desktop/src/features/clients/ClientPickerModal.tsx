@@ -10,6 +10,7 @@ import {
   saveActiveClient, loadClientsForEnvironment, exportClientBundle, importClientBundle,
 } from '../../services/clientService';
 import { loadVocabulary, saveVocabulary } from '../../services/vocabService';
+import { reportError } from '../../services/reportError';
 import { clientInitials, type Client } from '../../domain/client';
 import css from './ClientPickerModal.module.css';
 
@@ -34,7 +35,8 @@ export function ClientPickerModal({ onClose }: Props) {
     setField('targetFolder', client.targetFolder);
     setField('vaultFolder',  client.vaultFolder);
     document.documentElement.style.setProperty('--client-accent', client.brandColor);
-    if (activeEnvId) saveActiveClient(activeEnvId, client.id).catch(console.error);
+    if (activeEnvId) saveActiveClient(activeEnvId, client.id)
+      .catch(e => reportError('ClientPickerModal.saveActiveClient', e));
     onClose();
   }
 

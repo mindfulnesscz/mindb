@@ -1,0 +1,180 @@
+/* The run itself: everything that happens between the Run button and the completion notification.
+ *
+ * Three things happen around `runPipeline` that are easy to mistake for part of it:
+ *
+ *   BEFORE  the portal vocabulary is refreshed (the portal owns tag LABELS, so a stale local cache
+ *           would name files with the old label), and a short-lived, client-scoped R2 grant is
+ *           requested — no permanent storage credentials exist on this machine;
+ *   AFTER   the assets are synced to Supabase, the CDN objects the sync reports as stale are deleted
+ *           (a targeted diff, not an R2 listing), and version history is rebuilt.
+ *
+ * A failed grant DEGRADES the run — the CDN stages are skipped and logged — rather than aborting it,
+ * because the local and cloud exports are still useful to the operator.
+ */
+
+import { useSettingsStore } from '../../store/settingsStore';
+import { usePipelineStore } from '../../store/pipelineStore';
+import { useVocabularyStore } from '../../store/vocabularyStore';
+import { useClientStore } from '../../store/clientStore';
+import { resolveExportShape } from '../../domain/client';
+import type { CloudDestination } from '../../domain/client';
+import { runPipeline, scanVersionMap, deleteCdnObjects, type RunContext } from '../../services/pipelineService';
+import type { CloudUrlEntry } from '../../services/pipelineService';
+import {
+  exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary, requestR2Grant, processRenameTasks,
+} from '../../services/supabaseService';
+import { loadVocabulary } from '../../services/vocabService';
+import { notifyRunComplete } from '../../services/notifyService';
+import { groupAssets, type VocabularyData } from '@dc-hub/domain';
+import { resolveRunPlan } from './runPlan';
+
+export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise<void> {
+  const settings = useSettingsStore(s => s.settings);
+  const vocab    = useVocabularyStore(s => s.data);
+  const { startRun, appendLog, addIssue, finishRun, setProgress, setSupabaseSync } = usePipelineStore();
+  const { clients, activeClientId } = useClientStore();
+  const activeClient = clients.find(c => c.id === activeClientId) ?? null;
+
+  return async function handleRun() {
+    startRun();
+    const { effectiveSettings, localDest: runLocalDest, cloudDests } = resolveRunPlan(settings, selectedDests);
+
+    const collectedAssets: string[] = [];
+    const cdnUrls      = new Map<string, string>();
+    const originalUrls = new Map<string, string>();
+    const cloudUrls    = new Map<string, CloudUrlEntry[]>();
+
+    /* ── Pre-run: vocabulary, then the storage grant ─────────────────────────── */
+    // The client IS a DB row — its id is the identity, no name resolution. Sync runs as the
+    // signed-in user under the RLS staff policies; no service key is present.
+    const sbEnabled = !!(activeClient?.supabaseUrl && activeClient?.supabaseAnonKey);
+    const sbConfig  = sbEnabled ? {
+      url:     activeClient!.supabaseUrl!,
+      anonKey: activeClient!.supabaseAnonKey!,
+    } : null;
+    const clientId: string | null = sbConfig ? activeClient!.id : null;
+    const log = appendLog as (type: string, msg: string) => void;
+
+    // Portal tags are the source of truth for labels, so refresh before the run: asset names and
+    // export translation must pick up hub renames (Handover → Handout). Local UNPUBLISHED edits win
+    // instead — those get published after the sync below.
+    const vocabDirty =
+      useVocabularyStore.getState().dirty || !!useVocabularyStore.getState().data?._unpublished;
+    let vocabData = vocab ?? { _schema_version: '2.1.0', _comment: '', tags: [] };
+    if (clientId && !vocabDirty) {
+      try {
+        const fresh = await loadVocabulary(clientId, { forceFromDb: true });
+        vocabData = fresh;
+        useVocabularyStore.getState().setData(fresh, { dirty: false });
+        log('dim', '  Vocabulary refreshed from portal');
+      } catch (e) {
+        log('warn', `  Vocabulary refresh skipped — using cached labels (${e})`);
+      }
+    } else if (vocabDirty) {
+      log('dim', '  Using local unpublished vocabulary (will publish leaves after sync)');
+    }
+
+    let r2Config: RunContext['r2'];
+    if (sbConfig && clientId && (settings.doThumbnails || settings.doCdnOriginals)) {
+      try {
+        const grant = await requestR2Grant(sbConfig, clientId);
+        r2Config = {
+          endpoint:     grant.endpoint,
+          accessKeyId:  grant.accessKeyId,
+          secretKey:    grant.secretAccessKey,
+          sessionToken: grant.sessionToken,
+          bucket:       grant.bucket,
+          publicDomain: grant.publicDomain,
+          keyPrefix:    grant.keyPrefix,
+        };
+        log('dim', `  Storage grant issued for "${activeClient!.name}" (bucket ${grant.bucket}, expires ${new Date(grant.expiresAt).toLocaleTimeString()})`);
+      } catch (e) {
+        log('error', `  ✕  CDN steps disabled — ${e}`);
+      }
+    }
+
+    /* ── The pipeline ────────────────────────────────────────────────────────── */
+    const stats = await runPipeline({
+      settings: effectiveSettings,
+      vocab:    vocabData,
+      appendLog, addIssue, setProgress, finishRun,
+      collectedAssets,
+      cdnUrls,
+      originalUrls,
+      cloudUrls,
+      cloudDestinations: cloudDests,
+      localExportLayout:    resolveExportShape(runLocalDest ?? {}).exportLayout,
+      localIncludePackages: resolveExportShape(runLocalDest ?? {}).includePackages,
+      r2: r2Config,
+    });
+
+    /* ── Post-run: Supabase sync, targeted CDN cleanup, version history ──────── */
+    if (sbConfig && clientId) {
+      await syncRunToPortal({
+        effectiveSettings, collectedAssets, clientId, sbConfig, vocabData, vocabDirty,
+        cdnUrls, cloudUrls, originalUrls, r2Config, log, appendLog, setSupabaseSync,
+      });
+    }
+
+    notifyRunComplete(stats, stats.errors > 0 || stats.skipped > 0);
+  };
+}
+
+/* Extracted so the run reads as pre-run → pipeline → sync, rather than as one 130-line scroll. */
+async function syncRunToPortal(a: {
+  effectiveSettings: ReturnType<typeof resolveRunPlan>['effectiveSettings'];
+  collectedAssets: string[];
+  clientId: string;
+  sbConfig: { url: string; anonKey: string };
+  vocabData: VocabularyData;
+  vocabDirty: boolean;
+  cdnUrls: Map<string, string>;
+  cloudUrls: Map<string, CloudUrlEntry[]>;
+  originalUrls: Map<string, string>;
+  r2Config: RunContext['r2'];
+  log: (type: string, msg: string) => void;
+  appendLog: ReturnType<typeof usePipelineStore.getState>['appendLog'];
+  setSupabaseSync: ReturnType<typeof usePipelineStore.getState>['setSupabaseSync'];
+}): Promise<void> {
+  const outFolder = a.effectiveSettings.outFolder ?? 'OUT';
+  const { singles, galleries, unpackaged } = groupAssets(a.collectedAssets, outFolder);
+
+  for (const path of unpackaged) {
+    a.log('error', `  ✕  "${path.split('/').pop()}" has no ${outFolder} folder above it — not an asset package. Skipped.`);
+  }
+
+  if (!singles.length && !galleries.length) {
+    a.appendLog('info', 'Supabase: no assets found in source — skipping export.');
+  } else {
+    const sbResult = await exportAssetsToSupabase(
+      singles, a.clientId, a.vocabData, a.sbConfig, a.log,
+      a.cdnUrls, a.cloudUrls, galleries, a.originalUrls,
+    );
+    a.setSupabaseSync({
+      created:      sbResult.created,
+      updated:      sbResult.updated,
+      disconnected: sbResult.disconnected,
+      errors:       sbResult.errors,
+    });
+
+    // Stale CDN objects come from the Supabase diff, so no R2 listing is needed.
+    if (a.r2Config && sbResult.staleObjectKeys.length > 0) {
+      await deleteCdnObjects(a.r2Config, sbResult.staleObjectKeys, a.log);
+    }
+
+    await processRenameTasks(a.sbConfig, a.clientId, a.log);
+    // Only push leaves when desktop has unpublished edits — otherwise portal renames (the label
+    // source of truth) would be overwritten by a stale local cache.
+    if (a.vocabDirty) {
+      await syncTagsFromVocabulary(a.vocabData, a.clientId, a.sbConfig, a.log);
+      useVocabularyStore.getState().markClean();
+    } else {
+      a.log('dim', '  Tag sync skipped — portal vocabulary is already authoritative');
+    }
+  }
+
+  if (a.effectiveSettings.sourceFolder) {
+    const versionMap = await scanVersionMap(a.effectiveSettings.sourceFolder, a.vocabData, a.effectiveSettings);
+    await syncVersionHistory(versionMap, a.clientId, a.vocabData, a.sbConfig, a.log);
+  }
+}

@@ -43,7 +43,7 @@ export default function App() {
 
   /* Localhost reveal bridge for the web portal ("Reveal in Finder"). */
   useEffect(() => {
-    invoke('start_reveal_bridge').catch(console.error);
+    invoke('start_reveal_bridge').catch(e => reportError('App.startRevealBridge', e));
   }, []);
 
   /* Keep bridge clientId → sourceFolder map in sync with the active client. */
@@ -53,7 +53,7 @@ export default function App() {
     invoke('set_reveal_client_root', {
       clientId: client.id,
       sourceFolder: client.sourceFolder ?? '',
-    }).catch(console.error);
+    }).catch(e => reportError('App.setRevealClientRoot', e));
   }, [activeClientId, clients]);
 
   /* The gate: authenticate against the ACTIVE environment. Re-runs on
@@ -92,7 +92,7 @@ export default function App() {
 
   /* Boot: settings are auth-independent */
   useEffect(() => {
-    loadSettings().then(s => { setSettings(s); markClean(); }).catch(console.error);
+    loadSettings().then(s => { setSettings(s); markClean(); }).catch(e => reportError('App.loadSettings', e));
   }, []);
 
   /* Clients are DB-first: fetched per environment once signed in, filtered by
@@ -133,13 +133,14 @@ export default function App() {
       const prevId = vocabClientRef.current;
       // Flush dirty edits for the client we're leaving before switching.
       if (prevDirty && prevId && useVocabularyStore.getState().data) {
-        saveVocabulary(useVocabularyStore.getState().data!, prevId).catch(console.error);
+        saveVocabulary(useVocabularyStore.getState().data!, prevId)
+          .catch(e => reportError('App.flushVocabularyOnClientSwitch', e));
       }
       vocabClientRef.current = activeClientId;
       // Default: DB. Unpublished local cache (_unpublished) is kept by loadVocabulary.
       loadVocabulary(activeClientId)
         .then(d => setVocab(d, { dirty: !!d._unpublished }))
-        .catch(console.error);
+        .catch(e => reportError('App.loadVocabulary', e));
     }
   }, [activeClientId, clients]);
 
@@ -157,7 +158,7 @@ export default function App() {
       updateClient(client.id, { cloudDestinations: merged });
       const updated = useClientStore.getState().clients.find(c => c.id === client.id);
       if (updated && activeEnvId) return saveLocalClient(activeEnvId, updated);
-    }).catch(console.error);
+    }).catch(e => reportError('App.pullCloudDestinations', e));
   }, [activeClientId]);
 
   /* Persist vocabulary on change — only when dirty (user edits), never overwrite
@@ -166,7 +167,8 @@ export default function App() {
   const vocabDirty = useVocabularyStore(s => s.dirty);
   useEffect(() => {
     if (vocabDirty && vocabData && vocabClientRef.current) {
-      saveVocabulary({ ...vocabData, _unpublished: true }, vocabClientRef.current).catch(console.error);
+      saveVocabulary({ ...vocabData, _unpublished: true }, vocabClientRef.current)
+        .catch(e => reportError('App.saveVocabulary', e));
     }
   }, [vocabData, vocabDirty]);
 
@@ -174,7 +176,7 @@ export default function App() {
   const settings = useSettingsStore(s => s.settings);
   const dirty    = useSettingsStore(s => s.dirty);
   useEffect(() => {
-    if (dirty) saveSettings(settings).then(markClean).catch(console.error);
+    if (dirty) saveSettings(settings).then(markClean).catch(e => reportError('App.saveSettings', e));
   }, [settings, dirty]);
 
   /* The gate: nothing operational renders without a staff session. A visible

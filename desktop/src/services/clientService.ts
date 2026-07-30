@@ -12,7 +12,7 @@ import { appDataDir, join } from '@tauri-apps/api/path';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { makeClient, normalizeDestination } from '../domain/client';
 import type { Client, CloudDestination } from '../domain/client';
-import type { VocabularyData } from '../domain/vocabulary';
+import { type VocabularyData } from '@dc-hub/domain';
 import type { Environment } from './environmentService';
 import { useEnvironmentStore } from '../store/environmentStore';
 import { getAuthClient, withTimeout } from './authService';

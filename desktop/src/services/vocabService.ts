@@ -1,6 +1,6 @@
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { appDataDir, join } from '@tauri-apps/api/path';
-import type { VocabularyData, VocabTag, Slot } from '../domain/vocabulary';
+import { type VocabularyData, type VocabTag, type Slot } from '@dc-hub/domain';
 import { activeEnvironment } from '../store/environmentStore';
 import { makeHeaders, sbFetch } from './supabase/rest';
 
@@ -99,7 +99,7 @@ async function fetchTagsFromDb(clientId: string): Promise<VocabularyData | null>
   if (!env?.supabaseUrl || !env.anonKey) return null;
 
   try {
-    const headers = makeHeaders(env.anonKey);
+    const headers = await makeHeaders(env.anonKey);
     const base =
       `${env.supabaseUrl.replace(/\/+$/, '')}/rest/v1/tags` +
       `?client_id=eq.${clientId}&order=sort_order.asc`;

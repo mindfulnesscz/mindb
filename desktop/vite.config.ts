@@ -17,6 +17,7 @@ export default defineConfig(async () => ({
       // TS source (Vite transpiles it; type-only imports are erased at build).
       "@dc-hub/auth": fromHere("../packages/auth/src/index.ts"),
       "@dc-hub/database": fromHere("../packages/database/src/index.ts"),
+      "@dc-hub/domain": fromHere("../packages/domain/src/index.ts"),
     },
   },
 

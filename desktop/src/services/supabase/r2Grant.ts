@@ -15,7 +15,7 @@ export interface R2Grant {
 export async function requestR2Grant(config: SupabaseConfig, clientId: string): Promise<R2Grant> {
   const res = await sbFetch(`${config.url}/functions/v1/r2-grant`, {
     method:  'POST',
-    headers: makeHeaders(config.anonKey),
+    headers: await makeHeaders(config.anonKey),
     body:    JSON.stringify({ client_id: clientId }),
   });
   if (!res.ok) {

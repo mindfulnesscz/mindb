@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import type { FilterMode } from '../domain/naming';
 
 export interface AppSettings {
   /* Paths */
@@ -25,8 +24,6 @@ export interface AppSettings {
   packagePrefix: string;
   outFolder:     string;
   excludeMark:   string;
-  includeMark:   string;
-  filterMode:    FilterMode;
 
   /* Thumbnails & DAM */
   thumbWidth:   string;
@@ -55,8 +52,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   packagePrefix: '[00] 📦',
   outFolder:     '[03] OUT',
   excludeMark:   '⦰',
-  includeMark:   '🏁',
-  filterMode:    'blacklist',
 
   thumbWidth:   '640',
   thumbQuality: '70',
