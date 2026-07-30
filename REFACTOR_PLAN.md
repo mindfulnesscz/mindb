@@ -945,12 +945,105 @@ Widening an unauthenticated surface for cosmetics is a security decision, not a 
 raising separately if the labels matter on that page. `brandingService`'s `{ logo_url: string }` stays
 hand-written: it is an edge-function HTTP response, not a row.
 
-### Phase 4 — Observability & resilience (1 week)
+### Phase 4 — Observability & resilience ✅ (done 2026-07-30)
 
 - Route `reportError` (from Phase 0) to a real sink (Sentry or Supabase table) with breadcrumbs on pipeline stages.
 - React **error boundaries** around portal routes and desktop views; user-facing error states instead of blank screens.
 - **Guardrails on destructive ops**: dry-run + explicit confirm + summary before any mirror wipe / R2 delete (align with the "surface stale for confirmation" decision already made).
 - _Exit criteria:_ a failed publish produces a diagnosable event and a clear user message; no destructive op runs without confirmation.
+
+#### Guardrails — one invariant instead of a confirmation habit
+
+**A run must not destroy more than it touched.** Every bulk-destructive stage is driven by a diff
+("these rows are not in what I just synced, so they are stale"), and a diff is only as good as the set
+it diffs against. When that set is wrong the diff is not slightly wrong, it is **inverted** — and the
+stage destroys everything. F-9 was exactly that shape; so was the `readFailed` case in `assetExport`,
+which is gated by *cause*. This gates by *shape*, which catches the causes nobody predicted.
+
+`services/guardrail.ts` refuses when the doomed count exceeds `max(10, rows written)`. Both
+bulk-destructive stages consult it: the client-wide soft-disconnect, and the CDN object delete — which
+has no soft form, since a deleted object is gone.
+
+- A blocked stage **skips and reports**; the run's useful work stands. The message names the plausible
+  causes (empty or partly readable source, wrong client active), states plainly that nothing was
+  removed, and says how to proceed.
+- The **floor** matters as much as the ratio: a package losing its last two files legitimately
+  disconnects two rows while writing none. Small numbers always pass. This is a tripwire for
+  catastrophes, not a review of every run.
+- Deliberately **not a confirmation dialog**. The pipeline runs headless inside services, and a modal
+  three layers down is how a "just click OK" habit forms — which is worse than no dialog, because it
+  launders the dangerous case through the same muscle memory as the safe one. The operator opts in
+  ahead of time per run via the **"Allow large deletions"** run option, and an override says so in the
+  log so it cannot be mistaken for a clean run.
+
+It found a real problem on its first run: the sync integration tests were relying on the client-wide
+sweep to disconnect **each other's** rows — passing while destroying data, the same defect as F-9 one
+scope smaller. Each test now starts from an empty tenant, which is what the file's header already
+claimed. 16 unit tests on the policy, plus an end-to-end one: twelve seeded rows, a one-row sync, and
+the assertion that all twelve survive while the run's own write lands.
+
+#### `reportError` — a sink that exists where the console does not
+
+Desktop's now does three things: logs as before, attaches **breadcrumbs**, and appends to a rolling
+`errors.log` in the app data directory. The last matters because **the console does not exist in a
+packaged binary** — no devtools, no scrollback, so "check the console" is not an instruction an
+operator can follow.
+
+The breadcrumbs are the diagnostic value. "Storage grant refused" is not diagnosable; "after:
+COLLECTING → THUMBNAILS → CDN UPLOAD" is. A run touches the filesystem, three cloud providers, R2 and
+Postgres, so the useful question is almost always *where in the run*. `pipelineStore.appendLog` feeds
+stage headings only — a trail of individual file copies would push out the stage that matters.
+
+Constraints the implementation had to respect: it never throws and never returns a promise, because
+nearly every caller is a `.catch()` on a fire-and-forget write, and a reporting failure must not
+replace the error being reported. The trail is bounded (12) — it is appended to on every stage of every
+run for the life of the process. The file truncates rather than rotates: this is a diagnostic tail, not
+an audit trail. 17 tests.
+
+⚠ **Not done, and it is the user's call:** a *remote* sink. Sentry means an account and a cost; a
+Supabase `errors` table means a migration, RLS, and a decision about what an unauthenticated failure
+may write. Both are choices about money and PII, not refactoring steps. The seam is one function call
+from either. The portal's `reportError` is therefore still console-only.
+
+#### Error boundaries — shared logic, per-app chrome
+
+A React render error unmounts the whole tree by default: a blank white page, with the error only in a
+console the user cannot open. `@dc-hub/asset-library` now exports one `ErrorBoundary` — catch, report
+through the app's own sink **with the component stack** (the part that makes a minified error locatable
+at all), and offer a way out.
+
+The chrome is per app, because the audiences differ. The portal's fallback is client-facing: plain
+words, "nothing has been lost", a retry and a way home, and **no stack on screen** — a client reading a
+minified trace learns nothing and loses confidence. Desktop's is staff-facing mid-run: the message
+verbatim, the breadcrumb trail, and where the log file is.
+
+`resetKey` is what stops it being a dead end — keyed on the route in the portal and on the active view
+on desktop, so navigating away recovers without a reload. Desktop's boundary sits **inside** the shell
+so the nav rail stays usable. 7 tests.
+
+⚠ Writing those tests surfaced a latent gap in the harness: **no DOM cleanup was registered**, so every
+`render()` left its tree in the document. React Testing Library registers cleanup automatically only
+with Vitest globals enabled, which this config deliberately does not use. A test could therefore pass
+by finding a node an *earlier* test rendered. Fixed in `vitest.setup.ts` for every component suite.
+
+#### `asset_events` rate limiting (backlog 7 — the rest of F-2)
+
+Phase 0 closed event **impersonation**. What stayed open was **volume**: `anon` may insert, share links
+are public, and a loop against one link writes rows without limit. The damage is not a crashed database
+but a quietly false one — `asset_events` is what tells a client how often their deliverable was viewed,
+and an inflated count is worse than a missing one because it is believed.
+
+The cap is **per asset**, not per caller, because RLS has no identifier for an anonymous caller: no IP,
+no session, nothing to count against. A unique index would not work either — for anonymous events
+`user_id` is null, and null is distinct from null in a unique index, so every forged row is accepted as
+new. For the abuse that matters (hammering one public link) the asset *is* the shared identifier.
+
+It **drops rather than raises**: a `before insert` trigger returning null. The client fires these off
+and ignores the result, so raising would turn a rate limit into a visible error on a legitimate page
+view during a busy minute. Past the ceiling these are telemetry we choose to lose, and nothing
+references the rows by id. 120/asset/minute — comfortably above a whole team opening an asset at once,
+far below a script. Undercounting real traffic is the failure this must not cause. 8 pgTAP tests,
+including that the window slides (a fixed budget would lock a once-busy asset out forever).
 
 ### Phase 5 — Hardening & polish (ongoing)
 
@@ -1109,9 +1202,9 @@ the tenant it writes to; sharing a seeded one makes `npm test` a destructive com
 | 2d-2 | Extract AssetDetail's JSX panels (622 → <400)     | Low                 | S      | 2     |
 | 2c-1 | ~~Characterize + split `assetExport`~~ ✅ 489 → 156 | Med               | M      | 2     |
 | A1 | ~~One workspace: desktop joined, 1 lockfile~~ ✅   | High (structural)   | M      | 2     |
-| 7  | Rate-limit `asset_events` (F-2 partly done)       | Med                 | S      | 4     |
+| 7  | ~~Rate-limit `asset_events` (F-2 remainder)~~ ✅   | Med                 | S      | 4     |
 | 10 | ~~CI-generated DB types + one client projection~~ ✅ | High             | M      | 3     |
-| 11 | Telemetry + error boundaries + op guardrails      | High                | M      | 4     |
+| 11 | ~~Error log + breadcrumbs + boundaries + guardrails~~ ✅ | High          | M      | 4     |
 | 12 | e2e smoke + clippy + coverage gate                | Med                 | M      | 5     |
 | 13 | Docs: Nextra 2→4 (unblocks React 19 + workspace)  | Low                 | M      | 5     |
 

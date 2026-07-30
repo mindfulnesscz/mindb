@@ -6,6 +6,7 @@ import AssetDetailPage from './features/gallery/AssetDetailPage'
 import AdminLandingPage from './features/admin/AdminLandingPage'
 import ClientPortalPage from './features/portal/ClientPortalPage'
 import SettingsView from './features/settings/SettingsView'
+import { RouteErrorBoundary } from './components/RouteErrorBoundary'
 
 // ── Standalone settings page ──────────────────────────────────
 
@@ -85,7 +86,10 @@ export default function App() {
   }
 
   return (
-    <Routes>
+    // One boundary around the route tree, keyed on the path: a page that throws no longer blanks the
+    // app, and navigating away recovers without a reload.
+    <RouteErrorBoundary>
+      <Routes>
       {/* DC admin portal */}
       <Route index element={<AdminLandingPage />} />
 
@@ -97,6 +101,7 @@ export default function App() {
 
       {/* Client portals — branded page, DC 404, or gallery after login */}
       <Route path=":slug" element={<ClientPortalPage />} />
-    </Routes>
+      </Routes>
+    </RouteErrorBoundary>
   )
 }

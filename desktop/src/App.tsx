@@ -20,6 +20,7 @@ import { reportError } from './services/reportError';
 import './styles/tokens.css';
 import './styles/global.css';
 import css from './App.module.css';
+import { ViewErrorBoundary } from './app/ViewErrorBoundary';
 
 export default function App() {
   const active = useAppStore(s => s.active);
@@ -198,10 +199,14 @@ export default function App() {
   return (
     <div className={css.shell}>
       <NavRail />
+      {/* Inside the shell, so a broken view never strands the operator — the nav rail stays usable
+          and switching views resets the boundary. */}
       <main className={css.main}>
-        {active === 'pipeline'   && <PipelineView />}
-        {active === 'vocabulary' && <VocabularyView />}
-        {active === 'settings'   && <SettingsView />}
+        <ViewErrorBoundary view={active}>
+          {active === 'pipeline'   && <PipelineView />}
+          {active === 'vocabulary' && <VocabularyView />}
+          {active === 'settings'   && <SettingsView />}
+        </ViewErrorBoundary>
       </main>
     </div>
   );
