@@ -22,7 +22,7 @@ export function useAssetComments(assetId: string, userId: string | null, role: R
     if (!canReadComments(role)) return
     if (isConfigured()) {
       fetchComments(assetId).then(setComments)
-        .catch(e => reportError('AssetDetail.fetchComments', e))
+        .catch(e => reportError('feedback.AssetDetail.fetchComments', e))
     } else {
       const mock = MOCK_COMMENTS.filter(c => c.assetId === assetId)
       setComments(mock.map(c => ({
@@ -55,7 +55,7 @@ export function useAssetComments(assetId: string, userId: string | null, role: R
       if (thanksTimerRef.current) clearTimeout(thanksTimerRef.current)
       thanksTimerRef.current = setTimeout(() => setCommentThanks(false), 3000)
     } catch (err) {
-      reportError('AssetDetail.addComment', err)
+      reportError('feedback.AssetDetail.addComment', err)
     } finally {
       setCommentBusy(false)
     }
@@ -66,7 +66,7 @@ export function useAssetComments(assetId: string, userId: string | null, role: R
       await deleteComment(id)
       setComments(prev => prev.filter(c => c.id !== id))
     } catch (err) {
-      reportError('AssetDetail.deleteComment', err)
+      reportError('feedback.AssetDetail.deleteComment', err)
     }
   }
 

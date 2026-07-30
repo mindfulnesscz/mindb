@@ -24,7 +24,7 @@ export async function fetchComments(assetId: string): Promise<RealComment[]> {
     .order('created_at', { ascending: true })
 
   if (error) {
-    reportError('commentService.fetchComments', error)
+    reportError('feedback.commentService.fetchComments', error)
     return []
   }
 

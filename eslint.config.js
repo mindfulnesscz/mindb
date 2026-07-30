@@ -70,6 +70,34 @@ export default tseslint.config(
      `@tauri-apps/*` import would make it desktop-only; one React import would make it
      unusable outside a component tree. A comment cannot hold that line, so CI does.
      Shared UI belongs in @dc-hub/asset-library, which may depend on React. */
+  /* Error contexts are sorted by CONCERN, not by file.
+   *
+   * `errors.log` is the only diagnostic once the app is a packaged binary, and the question it has to
+   * answer is "where are the flaws — auth, syncing, display?". A context named after the function it
+   * sits in cannot answer that, so every one carries a domain prefix and the location after it:
+   *
+   *     reportError('config.PipelineView.saveClients', e)
+   *
+   * which makes the log sortable:  cut -d'[' -f2 errors.log | cut -d. -f1 | sort | uniq -c
+   *
+   * Enforced here rather than documented, because a convention that only some call sites follow makes
+   * the histogram lie. Add a domain to the list below when a genuinely new concern appears. */
+  {
+    files: ['desktop/src/**/*.{ts,tsx}', 'web/apps/*/src/**/*.{ts,tsx}'],
+    ignores: ['**/*.test.{ts,tsx}'],
+    rules: {
+      'no-restricted-syntax': ['error', {
+        selector:
+          "CallExpression[callee.name='reportError'] > Literal:first-child" +
+          ":not([value=/^(auth|env|config|vocab|sync|os|feedback|asset|pipeline|cdn|ui)\\./])",
+        message:
+          'reportError context must start with a concern: auth. env. config. vocab. sync. os. ' +
+          'feedback. asset. pipeline. cdn. ui. — e.g. reportError("config.PipelineView.saveClients", e). ' +
+          'See eslint.config.js for why.',
+      }],
+    },
+  },
+
   {
     files: ['packages/domain/src/**/*.ts'],
     rules: {

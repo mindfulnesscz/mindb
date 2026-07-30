@@ -10,7 +10,26 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { addBreadcrumb, recentBreadcrumbs, clearBreadcrumbs, formatEntry, reportError, toMessage } from './reportError';
+
+/* The sink is mocked at the plugin boundary rather than skipped. It swallows its own failures by
+   design, so without these tests a packaged build could silently never write the log — and a log you
+   believe in but that does not exist is worse than no log at all. */
+const files = new Map<string, string>();
+vi.mock('@tauri-apps/api/path', () => ({
+  appDataDir: async () => '/app-data',
+  join: async (...parts: string[]) => parts.join('/'),
+}));
+vi.mock('@tauri-apps/plugin-fs', () => ({
+  exists:        async (p: string) => files.has(p),
+  readTextFile:  async (p: string) => files.get(p) ?? '',
+  writeTextFile: async (p: string, c: string) => { files.set(p, c); },
+}));
+
+const { addBreadcrumb, recentBreadcrumbs, clearBreadcrumbs, formatEntry, reportError, toMessage } =
+  await import('./reportError');
+
+const LOG = '/app-data/errors.log';
+const log = () => files.get(LOG) ?? '';
 
 // Held as a spy handle rather than asserted through `console.error`: the no-console gate is what keeps
 // raw console calls out of the codebase, and a test should not need it relaxed.
@@ -18,6 +37,7 @@ let errorSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   clearBreadcrumbs();
+  files.clear();
   errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 afterEach(() => vi.restoreAllMocks());
@@ -103,6 +123,51 @@ describe('reportError', () => {
     const err = new Error('original failure');
     reportError('pipeline.cdn', err);
     expect(errorSpy).toHaveBeenCalledWith('[pipeline.cdn] original failure', err);
+  });
+});
+
+describe('the log file', () => {
+  it('writes the entry to errors.log in the app data directory', async () => {
+    reportError('pipeline.cdn', new Error('Storage grant refused'));
+
+    await vi.waitFor(() => expect(log()).toContain('Storage grant refused'));
+    expect(log()).toContain('[pipeline.cdn]');
+    expect(log().endsWith('\n')).toBe(true);
+  });
+
+  it('APPENDS rather than replacing — the previous errors are the context', async () => {
+    reportError('first', new Error('one'));
+    await vi.waitFor(() => expect(log()).toContain('one'));
+    reportError('second', new Error('two'));
+    await vi.waitFor(() => expect(log()).toContain('two'));
+
+    expect(log().trimEnd().split('\n')).toHaveLength(2);
+    expect(log()).toContain('one');
+  });
+
+  it('carries the breadcrumb trail into the file, not just the console', async () => {
+    addBreadcrumb('━━━ CDN UPLOAD ━━━');
+    reportError('pipeline.cdn', new Error('boom'));
+
+    await vi.waitFor(() => expect(log()).toContain('after: CDN UPLOAD'));
+  });
+
+  it('TRUNCATES instead of growing without bound', async () => {
+    // A machine that runs the pipeline daily would otherwise accumulate a file nobody can open.
+    files.set(LOG, `${'x'.repeat(300_000)}\nkeep-me\n`);
+    reportError('ctx', new Error('newest'));
+
+    await vi.waitFor(() => expect(log()).toContain('newest'));
+    expect(log().length).toBeLessThan(200_000);
+  });
+
+  it('leaves the truncated file starting at a whole entry', async () => {
+    // Half a line at the top would make the log unparseable by anything that reads it line by line.
+    files.set(LOG, `${'x'.repeat(300_000)}\nsecond-line\nthird-line\n`);
+    reportError('ctx', new Error('newest'));
+
+    await vi.waitFor(() => expect(log()).toContain('newest'));
+    expect(log().startsWith('x')).toBe(false);
   });
 });
 

@@ -115,7 +115,7 @@ function EnvironmentSettings() {
     useClientStore.getState().setClients([]);
     useClientStore.getState().setActiveClientId(null);
     await saveEnvironments({ activeId: envId, list: environments })
-      .catch(e => reportError('SettingsView.activateEnvironment', e));
+      .catch(e => reportError('env.SettingsView.activateEnvironment', e));
   }
 
   async function addEnvironment() {
@@ -123,7 +123,7 @@ function EnvironmentSettings() {
     const list = [...environments, env];
     setEnvironments(list);
     await saveEnvironments({ activeId: activeEnvId, list })
-      .catch(e => reportError('SettingsView.addEnvironment', e));
+      .catch(e => reportError('env.SettingsView.addEnvironment', e));
   }
 
   async function removeEnvironment(envId: string) {
@@ -133,7 +133,7 @@ function EnvironmentSettings() {
     const list = environments.filter(e => e.id !== envId);
     setEnvironments(list);
     await saveEnvironments({ activeId: activeEnvId, list })
-      .catch(e => reportError('SettingsView.removeEnvironment', e));
+      .catch(e => reportError('env.SettingsView.removeEnvironment', e));
   }
 
   const [name,    setName]    = useState(activeEnv?.name        ?? '');
@@ -159,7 +159,7 @@ function EnvironmentSettings() {
       : e);
     setEnvironments(updated);
     await saveEnvironments({ activeId: activeEnvId, list: updated })
-      .catch(e => reportError('SettingsView.saveEnvironmentFields', e));
+      .catch(e => reportError('env.SettingsView.saveEnvironmentFields', e));
   }
 
   async function checkConnection() {

@@ -13,7 +13,7 @@ export async function fetchMyRating(assetId: string, userId: string): Promise<nu
     .maybeSingle()
 
   if (error) {
-    reportError('ratingService.fetchMyRating', error)
+    reportError('feedback.ratingService.fetchMyRating', error)
     return 0
   }
 

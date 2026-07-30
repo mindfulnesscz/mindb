@@ -36,7 +36,7 @@ export function ClientPickerModal({ onClose }: Props) {
     setField('vaultFolder',  client.vaultFolder);
     document.documentElement.style.setProperty('--client-accent', client.accent);
     if (activeEnvId) saveActiveClient(activeEnvId, client.id)
-      .catch(e => reportError('ClientPickerModal.saveActiveClient', e));
+      .catch(e => reportError('config.ClientPickerModal.saveActiveClient', e));
     onClose();
   }
 

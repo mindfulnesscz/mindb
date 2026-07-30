@@ -18,7 +18,7 @@ export function useAssetEvents(assetId: string, userId: string | null, role: Rol
     if (!isConfigured()) return
     trackEvent(assetId, 'view', userId, role).catch(() => {})
     if (isStaff) fetchEventCounts(assetId).then(setEventCounts)
-      .catch(e => reportError('AssetDetail.fetchEventCounts', e))
+      .catch(e => reportError('feedback.AssetDetail.fetchEventCounts', e))
      
   }, [assetId])
 

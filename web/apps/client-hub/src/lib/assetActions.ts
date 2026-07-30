@@ -28,7 +28,7 @@ export const webAssetActions: AssetActions = {
     } catch (err) {
       // No CORS or network failure — hand the URL to the browser directly so the
       // user still gets the file, just without a forced save dialog.
-      reportError('assetActions.download(blob)', err)
+      reportError('asset.assetActions.download(blob)', err)
       window.open(url, '_blank', 'noopener')
     }
   },

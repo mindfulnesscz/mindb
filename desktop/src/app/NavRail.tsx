@@ -23,7 +23,7 @@ export function NavRail() {
   const activeClient = clients.find(c => c.id === activeClientId) ?? null;
 
   async function handleSignOut() {
-    await signOut().catch(e => reportError('NavRail.signOut', e));
+    await signOut().catch(e => reportError('auth.NavRail.signOut', e));
     setProfile(null);
     setStatus('signedOut');
   }

@@ -20,7 +20,7 @@ export function useAssetRating(assetId: string, userId: string | null, role: Rol
     if (!userId || !canRate(role)) return
     if (!isConfigured()) return
     fetchMyRating(assetId, userId).then(setMyRating)
-      .catch(e => reportError('AssetDetail.fetchMyRating', e))
+      .catch(e => reportError('feedback.AssetDetail.fetchMyRating', e))
   }, [assetId, userId, role])
 
   async function changeRating(value: number) {
@@ -31,7 +31,7 @@ export function useAssetRating(assetId: string, userId: string | null, role: Rol
       setRatingSaved(true)
       setTimeout(() => setRatingSaved(false), 2000)
     } catch (err) {
-      reportError('AssetDetail.saveRating', err)
+      reportError('feedback.AssetDetail.saveRating', err)
     }
   }
 

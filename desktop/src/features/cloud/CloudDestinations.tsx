@@ -41,11 +41,11 @@ export function CloudDestinations() {
     const updatedClients = clients.map(c => c.id === activeClientId
       ? { ...c, cloudDestinations: updated } : c);
     saveClients({ clients: updatedClients, activeClientId })
-      .catch(e => reportError('CloudDestinations.saveClients', e));
+      .catch(e => reportError('config.CloudDestinations.saveClients', e));
     if (activeEnvId) {
       const next = updatedClients.find(c => c.id === activeClient.id);
       if (next) saveLocalClient(activeEnvId, next)
-        .catch(e => reportError('CloudDestinations.saveLocalClient', e));
+        .catch(e => reportError('config.CloudDestinations.saveLocalClient', e));
     }
   }
 

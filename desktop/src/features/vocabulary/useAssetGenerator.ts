@@ -87,7 +87,7 @@ export function useAssetGenerator(activeClient: Client | null, allTags: VocabTag
       // Remember where the operator files this client's work, so the next asset defaults to it.
       updateClient(activeClient.id, { lastCreationFolder: targetFolder });
       saveClients({ clients: useClientStore.getState().clients, activeClientId: activeClient.id })
-        .catch(e => reportError('VocabularyView.saveClients', e));
+        .catch(e => reportError('config.VocabularyView.saveClients', e));
 
       setCreatedDir(packageDir);
       setCreateSuccess(`Created "${folder}" — placeholder seeded in OUT, draft asset ready.`);

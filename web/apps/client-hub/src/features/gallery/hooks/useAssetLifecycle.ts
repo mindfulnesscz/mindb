@@ -58,7 +58,7 @@ export function useAssetLifecycle(
       await updateAssetPerm(asset.id, newPerm)
       setCurrentPerm(newPerm)
     } catch (err) {
-      reportError('AssetDetail.updatePerm', err)
+      reportError('feedback.AssetDetail.updatePerm', err)
     } finally {
       setPermBusy(false)
     }

@@ -56,7 +56,7 @@ export function ConfigSidebar() {
       );
       updateClient(activeClient.id, { cloudDestinations: updatedDestinations });
       saveClients({ clients: useClientStore.getState().clients, activeClientId: activeClient.id })
-        .catch(e => reportError('PipelineView.saveClients', e));
+        .catch(e => reportError('config.PipelineView.saveClients', e));
       // enabled is machine/pipeline preference — portal owns destination structure.
     }
   }
@@ -94,7 +94,7 @@ export function ConfigSidebar() {
               if (activeClientId) {
                 updateClient(activeClientId, { sourceFolder: v });
                 saveClients({ clients: useClientStore.getState().clients, activeClientId })
-                  .catch(e => reportError('PipelineView.saveClients', e));
+                  .catch(e => reportError('config.PipelineView.saveClients', e));
               }
             }}
           />
@@ -106,7 +106,7 @@ export function ConfigSidebar() {
               if (activeClientId) {
                 updateClient(activeClientId, { vaultFolder: v });
                 saveClients({ clients: useClientStore.getState().clients, activeClientId })
-                  .catch(e => reportError('PipelineView.saveClients', e));
+                  .catch(e => reportError('config.PipelineView.saveClients', e));
               }
             }}
           />
