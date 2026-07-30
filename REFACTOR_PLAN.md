@@ -1264,6 +1264,35 @@ transient disk change cannot destroy an asset's history. The hazard is that an i
 shares a client inherits that client-wide authority. A test that writes to a real database must own
 the tenant it writes to; sharing a seeded one makes `npm test` a destructive command.
 
+### F-10 — the app_errors rate limit never fired for anonymous callers (fixed 2026-07-30)
+
+Found by generating sample reports through the real REST path, minutes after the table shipped.
+
+**Symptom.** 25 reports of one context posted as `anon` inside a minute. All 25 stored, against a
+ceiling of 20.
+
+**Cause.** `app_errors_rate_limit()` was `security invoker`, so its `select count(*)` ran under the
+**caller's** RLS. Reads on `app_errors` are super-admin-only — deliberately, since messages quote asset
+names and paths — so for `anon` the count was always 0 and the ceiling was unreachable. The limit
+worked for exactly the callers who did not need limiting.
+
+`asset_events_rate_limit()` has the same shape and is **not** affected: that table is world-readable,
+so its counter sees the rows. The bug is the combination of a restricted read and an invoker-rights
+trigger, not the pattern.
+
+**Why the test missed it.** The pgTAP case ran with `reset role` — as superuser, which bypasses RLS
+entirely. It proved the trigger works for the one caller who will never hit it. It now runs as `anon`.
+
+**Fix.** `security definer`, search_path pinned. The distinction that makes this safe is the one the
+F-4 migration turned the other way: `can_see_asset()` is a **predicate**, and definer there would have
+made it more permissive than the policies it mirrors. This is a **counter** — it decides how many rows
+exist, never who may see them, and returns only null-or-new. Definer is wrong for "may this caller see
+X" and right for "how many rows are there".
+
+**A second defect, same discovery.** The suite's counts were over the whole table, so it passed only
+against an empty database; the first real rows broke it. Counts are now scoped to the suite's own
+contexts. Both defects share a root: a test that never ran in the conditions the code actually runs in.
+
 ---
 
 ## 8. Prioritized backlog (quick reference)

@@ -9,6 +9,9 @@
 -- Plus: it must never make an error worse. An over-limit insert is dropped, not raised, because
 -- reportError is called from `.catch()` handlers where a throw would replace the original failure.
 
+-- Counts are scoped to this suite's own contexts. An earlier version counted the whole table and so
+-- passed only against an empty database — the first real dev data broke it.
+
 begin;
 create extension if not exists pgtap;
 
@@ -30,14 +33,14 @@ set local role anon;
 
 select lives_ok(
   $$insert into public.app_errors (context, message, source)
-    values ('auth.AdminSignIn.submit', 'Invalid login credentials', 'web')$$,
+    values ('auth.PgTap.signIn', 'Invalid login credentials', 'web')$$,
   'A signed-OUT visitor can report — otherwise every auth failure goes unrecorded');
 
 -- Verified with the role reset, because `anon` deliberately cannot read back what it just wrote —
 -- that is asserted a few lines below.
 reset role;
 select is(
-  (select count(*) from public.app_errors where context = 'auth.AdminSignIn.submit'),
+  (select count(*) from public.app_errors where context = 'auth.PgTap.signIn'),
   1::bigint,
   'The anonymous report is stored');
 set local role anon;
@@ -68,7 +71,7 @@ select is(
 
 select lives_ok(
   $$insert into public.app_errors (context, message, source, user_id)
-    values ('feedback.AssetDetail.saveRating', 'boom', 'web', '99999999-0000-0000-0000-0000000000b1')$$,
+    values ('feedback.PgTap.saveRating', 'boom', 'web', '99999999-0000-0000-0000-0000000000b1')$$,
   'A member can report an error attributed to themselves');
 
 /* ── A plain ADMIN is not a maintainer ───────────────────────────────────── */
@@ -84,7 +87,9 @@ select is(
 set local request.jwt.claims = '{"sub":"99999999-0000-0000-0000-0000000000a1","role":"authenticated"}';
 
 select is(
-  (select count(*) from public.app_errors), 2::bigint,
+  (select count(*) from public.app_errors
+    where context in ('auth.PgTap.signIn', 'feedback.PgTap.saveRating')),
+  2::bigint,
   'A super admin reads every report, from every user and from anonymous visitors');
 
 /* ── Notification destinations are super-admin only ──────────────────────── */
@@ -109,23 +114,28 @@ select is(
 
 /* ── The rate limit drops, and never raises ──────────────────────────────── */
 
-reset role;
+-- As ANON, not as superuser. The first version of this test used `reset role`, which bypasses RLS —
+-- so it proved the trigger works for the one caller who never inserts, and missed that the counter
+-- saw nothing under a restricted read policy. Every report in production arrives as anon.
+set local role anon;
 
 insert into public.app_errors (context, message, source)
-select 'ui.LoopingScreen.render', 'render exploded', 'web' from generate_series(1, 20);
+select 'ui.PgTap.render', 'render exploded', 'web' from generate_series(1, 20);
+
+reset role;
 
 select is(
-  (select count(*) from public.app_errors where context = 'ui.LoopingScreen.render'),
+  (select count(*) from public.app_errors where context = 'ui.PgTap.render'),
   20::bigint,
   '20 reports of one context in a minute are kept');
 
 select lives_ok(
   $$insert into public.app_errors (context, message, source)
-    values ('ui.LoopingScreen.render', 'render exploded', 'web')$$,
+    values ('ui.PgTap.render', 'render exploded', 'web')$$,
   'The 21st does NOT raise — reportError runs inside catch handlers and must not throw');
 
 select is(
-  (select count(*) from public.app_errors where context = 'ui.LoopingScreen.render'),
+  (select count(*) from public.app_errors where context = 'ui.PgTap.render'),
   20::bigint,
   'The over-limit report is dropped, so one looping screen cannot crowd out every other error');
 
@@ -133,7 +143,7 @@ select is(
 
 select is(
   (select occurrences from public.error_digest('24 hours')
-    where context = 'ui.LoopingScreen.render'),
+    where context = 'ui.PgTap.render'),
   20::bigint,
   'error_digest collapses a repeated failure into one row with a count');
 
@@ -141,18 +151,18 @@ select is(
 
 select is(
   (select occurrences from public.new_error_signatures('24 hours')
-    where context = 'ui.LoopingScreen.render'),
+    where context = 'ui.PgTap.render'),
   20::bigint,
   'A signature first seen inside the window counts as new');
 
 -- Age one occurrence out of the window: the signature now has history, so it is no longer news.
 update public.app_errors set created_at = now() - interval '3 days'
-  where context = 'ui.LoopingScreen.render'
-    and id = (select id from public.app_errors where context = 'ui.LoopingScreen.render' limit 1);
+  where context = 'ui.PgTap.render'
+    and id = (select id from public.app_errors where context = 'ui.PgTap.render' limit 1);
 
 select is(
   (select count(*) from public.new_error_signatures('24 hours')
-    where context = 'ui.LoopingScreen.render'),
+    where context = 'ui.PgTap.render'),
   0::bigint,
   'A signature seen BEFORE the window is not new — this is what stops a looping component alerting daily');
 
