@@ -43,8 +43,8 @@ function makeClient(): DcHubClient | null {
   return createAuthClient({ url, anonKey }, { detectSessionInUrl: true })
 }
 
-// Singleton — recreated on page reload after config save
-export let supabase = makeClient()
+// Singleton — never reassigned; a config save reloads the page, which rebuilds it.
+export const supabase = makeClient()
 
 export function isConfigured(): boolean {
   const { url, anonKey } = getConfig()

@@ -1,4 +1,5 @@
 import type { AssetActions, Asset } from '@dc-hub/asset-library'
+import { reportError } from './reportError'
 
 export const webAssetActions: AssetActions = {
   download: async (asset: Asset) => {
@@ -27,7 +28,7 @@ export const webAssetActions: AssetActions = {
     } catch (err) {
       // No CORS or network failure — hand the URL to the browser directly so the
       // user still gets the file, just without a forced save dialog.
-      console.error('Blob download failed, opening directly:', err)
+      reportError('assetActions.download(blob)', err)
       window.open(url, '_blank', 'noopener')
     }
   },

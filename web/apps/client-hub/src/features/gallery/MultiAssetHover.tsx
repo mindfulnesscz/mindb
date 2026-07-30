@@ -69,7 +69,7 @@ function ShimmerBlock() {
   return (
     <div className="absolute inset-0 overflow-hidden rounded-[2px] bg-black/20">
       <motion.div
-        className="absolute inset-y-0 w-1/2 bg-gradient-to-r from-transparent via-white/25 to-transparent"
+        className="absolute inset-y-0 w-1/2 bg-linear-to-r from-transparent via-white/25 to-transparent"
         initial={{ x: '-120%' }}
         animate={{ x: '220%' }}
         transition={{ duration: 1.1, repeat: Infinity, ease: 'linear' }}
@@ -125,71 +125,75 @@ export function MultiAssetHoverGrid({
 
       {/* Grid shell stays mounted so per-tile exit scales can finish. */}
       <div
-        className={`absolute inset-0 z-[11] flex items-center justify-center p-2 ${open ? '' : 'pointer-events-none'}`}
+        className={`absolute inset-0 z-11 flex items-center justify-center p-2 ${open ? '' : 'pointer-events-none'}`}
         onClick={e => e.stopPropagation()}
       >
-        <div className={`grid ${cols} gap-[2px] w-full ${n === 2 ? 'items-center' : ''}`}>
+        <div className={`grid ${cols} gap-0.5 w-full ${n === 2 ? 'items-center' : ''}`}>
           <AnimatePresence>
-            {open && showShimmer && Array.from({ length: 4 }).map((_, i) => (
-              <motion.div
-                key={`shimmer-${i}`}
-                className="relative aspect-square w-full rounded-[2px] overflow-hidden bg-cosmos-black/40 origin-center"
-                initial={reduceMotion ? false : { opacity: 0, scale: tileStart }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: tileStart, transition: tOut }}
-                transition={tIn}
-              >
-                <ShimmerBlock />
-              </motion.div>
-            ))}
-            {open && !showShimmer && visible.map((s, i) => {
-              const isLastOverflow = overflow > 0 && i === visible.length - 1
-              return (
-                <motion.button
-                  type="button"
-                  key={s.id}
-                  className="relative aspect-square rounded-[2px] overflow-hidden cursor-pointer ring-1 ring-black/10 text-left group/tile shadow-[0_6px_16px_rgba(0,0,0,0.22)] origin-center"
+            {open &&
+              showShimmer &&
+              Array.from({ length: 4 }).map((_, i) => (
+                <motion.div
+                  key={`shimmer-${i}`}
+                  className="relative aspect-square w-full rounded-[2px] overflow-hidden bg-cosmos-black/40 origin-center"
                   initial={reduceMotion ? false : { opacity: 0, scale: tileStart }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: tileStart, transition: tOut }}
                   transition={tIn}
-                  title={s.name}
-                  onClick={e => {
-                    e.stopPropagation()
-                    onSelect?.(s)
-                  }}
                 >
-                  {loading && !s.thumbnailUrl ? (
-                    <ShimmerBlock />
-                  ) : s.thumbnailUrl ? (
-                    <img
-                      referrerPolicy="no-referrer"
-                      src={s.thumbnailUrl}
-                      alt={s.name}
-                      className="w-full h-full object-cover pointer-events-none"
-                      draggable={false}
+                  <ShimmerBlock />
+                </motion.div>
+              ))}
+            {open &&
+              !showShimmer &&
+              visible.map((s, i) => {
+                const isLastOverflow = overflow > 0 && i === visible.length - 1
+                return (
+                  <motion.button
+                    type="button"
+                    key={s.id}
+                    className="relative aspect-square rounded-[2px] overflow-hidden cursor-pointer ring-1 ring-black/10 text-left group/tile shadow-[0_6px_16px_rgba(0,0,0,0.22)] origin-center"
+                    initial={reduceMotion ? false : { opacity: 0, scale: tileStart }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: tileStart, transition: tOut }}
+                    transition={tIn}
+                    title={s.name}
+                    onClick={e => {
+                      e.stopPropagation()
+                      onSelect?.(s)
+                    }}
+                  >
+                    {loading && !s.thumbnailUrl ? (
+                      <ShimmerBlock />
+                    ) : s.thumbnailUrl ? (
+                      <img
+                        referrerPolicy="no-referrer"
+                        src={s.thumbnailUrl}
+                        alt={s.name}
+                        className="w-full h-full object-cover pointer-events-none"
+                        draggable={false}
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-[10px] font-sans text-clear-white/70 bg-cosmos-black/40">
+                        {i + 1}
+                      </div>
+                    )}
+
+                    <span
+                      aria-hidden
+                      className="pointer-events-none absolute inset-0 box-border border-2 border-transparent group-hover/tile:border-clear-white transition-colors duration-150"
                     />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-[10px] font-sans text-clear-white/70 bg-cosmos-black/40">
-                      {i + 1}
-                    </div>
-                  )}
 
-                  <span
-                    aria-hidden
-                    className="pointer-events-none absolute inset-0 box-border border-2 border-transparent group-hover/tile:border-clear-white transition-colors duration-150"
-                  />
-
-                  {isLastOverflow && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-cosmos-black/55">
-                      <span className="text-sm font-sans font-semibold text-clear-white">
-                        +{overflow}
-                      </span>
-                    </div>
-                  )}
-                </motion.button>
-              )
-            })}
+                    {isLastOverflow && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-cosmos-black/55">
+                        <span className="text-sm font-sans font-semibold text-clear-white">
+                          +{overflow}
+                        </span>
+                      </div>
+                    )}
+                  </motion.button>
+                )
+              })}
           </AnimatePresence>
         </div>
       </div>
@@ -200,7 +204,12 @@ export function MultiAssetHoverGrid({
 /** Prefetch sibling previews when a multi-asset card is hovered (after a short open delay). */
 export function useSiblingPreviews(primary: Asset, enabled: boolean) {
   const [siblings, setSiblings] = useState<SiblingPreview[]>([
-    { id: primary.id, name: primary.name, thumbnailUrl: primary.thumbnailUrl, downloadUrl: primary.downloadUrl },
+    {
+      id: primary.id,
+      name: primary.name,
+      thumbnailUrl: primary.thumbnailUrl,
+      downloadUrl: primary.downloadUrl,
+    },
   ])
   const [loading, setLoading] = useState(false)
   const [loadedFor, setLoadedFor] = useState<string | null>(null)
@@ -220,7 +229,9 @@ export function useSiblingPreviews(primary: Asset, enabled: boolean) {
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [enabled, primary.id, loadedFor])
 
   return { siblings, loading }

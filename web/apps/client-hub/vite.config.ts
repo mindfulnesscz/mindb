@@ -14,6 +14,7 @@ export default defineConfig({
     alias: {
       '@dc-hub/asset-library': resolve(__dirname, '../../../packages/asset-library/src/index.ts'),
       '@dc-hub/auth': resolve(__dirname, '../../../packages/auth/src/index.ts'),
+      '@dc-hub/domain': resolve(__dirname, '../../../packages/domain/src/index.ts'),
     },
   },
 })

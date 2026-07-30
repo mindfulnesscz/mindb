@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase'
+import { reportError } from '../lib/reportError'
 
 export async function fetchMyRating(assetId: string, userId: string): Promise<number> {
   if (!supabase) return 0
@@ -12,7 +13,7 @@ export async function fetchMyRating(assetId: string, userId: string): Promise<nu
     .maybeSingle()
 
   if (error) {
-    console.error('fetchMyRating error:', error.message)
+    reportError('ratingService.fetchMyRating', error)
     return 0
   }
 
