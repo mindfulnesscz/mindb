@@ -453,6 +453,36 @@ export type Database = {
           },
         ]
       }
+      error_notifications: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          enabled: boolean
+          id: string
+          label: string
+          notify_all: boolean
+          webhook_url: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          enabled?: boolean
+          id?: string
+          label: string
+          notify_all?: boolean
+          webhook_url: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          enabled?: boolean
+          id?: string
+          label?: string
+          notify_all?: boolean
+          webhook_url?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           can_create_clients: boolean
@@ -755,6 +785,15 @@ export type Database = {
       is_super_admin: { Args: never; Returns: boolean }
       my_client_id: { Args: never; Returns: string }
       my_member_client_ids: { Args: never; Returns: string[] }
+      new_error_signatures: {
+        Args: { p_window?: string }
+        Returns: {
+          context: string
+          first_seen: string
+          message: string
+          occurrences: number
+        }[]
+      }
       update_user_access: {
         Args: {
           p_can_create_clients?: boolean

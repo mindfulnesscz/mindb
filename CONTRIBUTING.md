@@ -146,8 +146,11 @@ the flaws" rather than "which function threw".
 Where reports go:
 
 - **`public.app_errors`** in whichever backend the app is pointed at, so a staging failure lands in
-  staging. Anyone may report (a failed sign-in is exactly the error worth capturing); only staff may
-  read, because messages quote asset names and paths. Rate-limited per context like `asset_events`.
+  staging. Anyone may report (a failed sign-in is exactly the error worth capturing); only
+  **super admins** may read, because messages quote asset names and paths and this is maintainer data
+  rather than client data. Rate-limited per context like `asset_events`.
+- **Portal → Admin → Errors** (super admin only) groups them by concern, flags first-time signatures,
+  and manages the Slack destinations.
 - **`errors.log`** on desktop as well, under the app data directory, reachable from Settings →
   Diagnostics. A packaged binary has no console for an operator to open, and the file works offline.
 - Query with `select * from error_digest('24 hours')`; the migration has a `pg_cron` snippet for a

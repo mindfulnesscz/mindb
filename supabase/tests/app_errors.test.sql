@@ -12,13 +12,15 @@
 begin;
 create extension if not exists pgtap;
 
-select plan(11);
+select plan(17);
 
 insert into public.clients (id, name) values ('99999999-0000-0000-0000-000000000001', 'Errors');
 insert into auth.users (id, email) values
   ('99999999-0000-0000-0000-0000000000a1', 'staff@dc.test'),
   ('99999999-0000-0000-0000-0000000000b1', 'member@acme.test');
-update public.profiles set role = 'admin'  where id = '99999999-0000-0000-0000-0000000000a1';
+update public.profiles set role = 'super_admin' where id = '99999999-0000-0000-0000-0000000000a1';
+insert into auth.users (id, email) values ('99999999-0000-0000-0000-0000000000c1', 'admin@dc.test');
+update public.profiles set role = 'admin' where id = '99999999-0000-0000-0000-0000000000c1';
 update public.profiles set role = 'member', client_id = '99999999-0000-0000-0000-000000000001'
   where id = '99999999-0000-0000-0000-0000000000b1';
 
@@ -69,13 +71,41 @@ select lives_ok(
     values ('feedback.AssetDetail.saveRating', 'boom', 'web', '99999999-0000-0000-0000-0000000000b1')$$,
   'A member can report an error attributed to themselves');
 
-/* ── Staff can read everything ───────────────────────────────────────────── */
+/* ── A plain ADMIN is not a maintainer ───────────────────────────────────── */
+
+set local request.jwt.claims = '{"sub":"99999999-0000-0000-0000-0000000000c1","role":"authenticated"}';
+
+select is(
+  (select count(*) from public.app_errors), 0::bigint,
+  'An ADMIN cannot read errors — messages quote asset names and paths, and this is maintainer data');
+
+/* ── Super admins can read everything ────────────────────────────────────── */
 
 set local request.jwt.claims = '{"sub":"99999999-0000-0000-0000-0000000000a1","role":"authenticated"}';
 
 select is(
   (select count(*) from public.app_errors), 2::bigint,
-  'Staff read every report, from every user and from anonymous visitors');
+  'A super admin reads every report, from every user and from anonymous visitors');
+
+/* ── Notification destinations are super-admin only ──────────────────────── */
+
+select lives_ok(
+  $$insert into public.error_notifications (label, webhook_url)
+    values ('#dev-alerts', 'https://hooks.slack.com/services/T0/B0/xxx')$$,
+  'A super admin can add a Slack destination');
+
+select throws_ok(
+  $$insert into public.error_notifications (label, webhook_url)
+    values ('not slack', 'https://evil.test/collect')$$,
+  '23514',
+  null,
+  'A non-Slack URL is refused — the column is a webhook, not an arbitrary exfiltration target');
+
+set local request.jwt.claims = '{"sub":"99999999-0000-0000-0000-0000000000c1","role":"authenticated"}';
+
+select is(
+  (select count(*) from public.error_notifications), 0::bigint,
+  'An ADMIN cannot even see the destinations — the webhook URL IS the credential');
 
 /* ── The rate limit drops, and never raises ──────────────────────────────── */
 
@@ -106,6 +136,25 @@ select is(
     where context = 'ui.LoopingScreen.render'),
   20::bigint,
   'error_digest collapses a repeated failure into one row with a count');
+
+/* ── "New" means new, not merely present ─────────────────────────────────── */
+
+select is(
+  (select occurrences from public.new_error_signatures('24 hours')
+    where context = 'ui.LoopingScreen.render'),
+  20::bigint,
+  'A signature first seen inside the window counts as new');
+
+-- Age one occurrence out of the window: the signature now has history, so it is no longer news.
+update public.app_errors set created_at = now() - interval '3 days'
+  where context = 'ui.LoopingScreen.render'
+    and id = (select id from public.app_errors where context = 'ui.LoopingScreen.render' limit 1);
+
+select is(
+  (select count(*) from public.new_error_signatures('24 hours')
+    where context = 'ui.LoopingScreen.render'),
+  0::bigint,
+  'A signature seen BEFORE the window is not new — this is what stops a looping component alerting daily');
 
 select * from finish();
 rollback;

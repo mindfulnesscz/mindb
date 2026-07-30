@@ -16,12 +16,13 @@ import { AdminClientCard } from './AdminClientCard'
 import { ClientDrawer } from './ClientDrawer'
 import { UsersView } from './UsersView'
 import { DCMark } from './DCMark'
+import { ErrorsView } from './errors/ErrorsView'
 
 function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
   const { profile, signOut } = useAuth()
   const navigate = useNavigate()
   const { clients, loading, error, usingMock, reload } = useClients()
-  const [tab, setTab] = useState<'clients' | 'users'>('clients')
+  const [tab, setTab] = useState<'clients' | 'users' | 'errors'>('clients')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [editingClient, setEditingClient] = useState<Client | null>(null)
   const role = asRole(profile?.role ?? 'public')
@@ -51,6 +52,11 @@ function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
           <button className={tabCls('clients')} onClick={() => setTab('clients')}>Clients</button>
           {isAdmin && (
             <button className={tabCls('users')} onClick={() => setTab('users')}>Users</button>
+          )}
+          {/* Maintainer surface: errors quote client asset names and paths, so it is super-admin only
+              here AND in RLS. The tab is hidden rather than disabled — an admin has no use for it. */}
+          {role === 'super_admin' && (
+            <button className={tabCls('errors')} onClick={() => setTab('errors')}>Errors</button>
           )}
         </div>
         <div className="flex-1" />
@@ -118,6 +124,12 @@ function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
               </div>
             )}
           </>
+        )}
+
+        {tab === 'errors' && (
+          <div className="p-6">
+            <ErrorsView isSuperAdmin={role === 'super_admin'} />
+          </div>
         )}
 
         {tab === 'users' && isAdmin && (
