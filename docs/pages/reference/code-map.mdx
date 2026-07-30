@@ -1,20 +1,67 @@
 # Code map
 
+Line numbers change; search by symbol. Comments are useful, but executable branches and database policy
+remain authoritative.
+
+## Pipeline
+
+`pipelineService.ts` is a 92-line orchestrator; each stage is its own module under
+`desktop/src/services/pipeline/`.
+
 | Question | Primary implementation |
 |---|---|
-| How are all local applications started? | Root `scripts/dev.mjs` and `package.json` |
-| How is one version propagated? | Root `scripts/version.mjs` |
-| Which files are scanned and in what order? | `desktop/src/services/pipelineService.ts` (`scanAllAssets`, `runPipeline`) |
-| Why was a thumbnail created/skipped? | `runThumbnails`; Rust `generate_thumbnail` in `src-tauri/src/lib.rs` |
+| What does pressing Run actually mean? | `desktop/src/features/pipeline/runPlan.ts` (pure, tested) |
+| What happens around a run? | `desktop/src/features/pipeline/useRunPipeline.ts` |
+| Which files are scanned, in what order? | `services/pipeline/scan.ts`, `collect.ts` |
+| Why was a thumbnail created or skipped? | `services/pipeline/thumbnails.ts`; Rust `generate_thumbnail` |
 | How does R2 deduplicate? | `src-tauri/src/r2.rs` (`upload_to_r2`) |
-| How do cloud OAuth/uploads work? | `desktop/src/services/cloudService.ts`, `src-tauri/src/cloud.rs` |
-| How are stable IDs/manifests resolved? | `desktop/src/services/supabaseService.ts` (`resolveChildId`, `resolveCdnIdentity`) |
-| How is a new stable package/draft scaffolded? | `desktop/src/features/vocabulary/VocabularyView.tsx` (`handleCreateAsset`) |
-| How are assets synchronized? | `exportAssetsToSupabase`, `processRenameTasks`, `syncVersionHistory` (tag tree SoT is web TagsAdmin; `syncTagsFromVocabulary` is a no-op) |
-| What can each web role do? | `web/packages/asset-library/src/permissions.ts` plus Supabase RLS/RPCs |
+| How are CDN object keys built? | `services/pipeline/cdnUpload.ts`, `storageKey.ts` |
+| What stops a run deleting everything? | `services/guardrail.ts` (`assessDestruction`) |
+
+## Identity and sync
+
+`supabaseService.ts` is a barrel over `desktop/src/services/supabase/`.
+
+| Question | Primary implementation |
+|---|---|
+| How is folder identity resolved? | `packages/domain/src/stableId.ts`; `services/supabase/identity.ts`, `manifest.ts` |
+| How are assets synchronised? | `services/supabase/assetExport.ts` → `exportIdentify` → `exportPlan` → `exportWrite` → `exportDisconnect` |
+| Why is a row `disconnected` rather than deleted? | `services/supabase/exportDisconnect.ts` |
+| How is a new package and draft scaffolded? | `desktop/src/features/vocabulary/createAssetFolder.ts` |
+| How do requests authenticate? | `services/supabase/rest.ts` (`makeHeaders`, `sbFetch` 401 retry) |
+
+## Cloud storage
+
+One module per provider under `desktop/src/services/cloud/`.
+
+| Question | Primary implementation |
+|---|---|
+| How does connecting work? | `cloud/oauth.ts` (PKCE), `features/cloud/connectDest.ts` (flow + cancellation) |
+| Why is OneDrive different? | `cloud/onedrive.ts` — device code, not a loopback redirect; rotates its refresh token |
+| Which drive or folder is targeted? | `cloud/onedrive.ts` (`graphDriveBase`), `cloud/gdrive.ts` (folder walk) |
+| Why was an upload skipped? | `cloud/gdrive.ts` — same name and size means unchanged |
+| Where is the Rust side? | `src-tauri/src/cloud.rs` (Dropbox chunked sessions) |
+
+## Portal
+
+| Question | Primary implementation |
+|---|---|
+| What can each role do? | `packages/asset-library/src/permissions.ts` plus Supabase RLS |
 | How are gallery rows adapted? | `web/apps/client-hub/src/services/assetService.ts` |
 | How does magic-link state load? | `web/apps/client-hub/src/context/AuthContext.tsx` |
-| Where is browser Supabase configuration selected? | `web/apps/client-hub/src/lib/supabase.ts` |
-| Where do schema changes live? | `supabase/migrations`; regenerate types with `npm run db:types` |
+| Where is Supabase configuration selected? | `web/apps/client-hub/src/lib/supabase.ts` |
+| How is a taxonomy import validated? | `web/apps/client-hub/src/services/taxonomy/validate.ts` |
+| What makes a tag a group or a leaf? | `web/apps/client-hub/src/features/admin/tags/tagTree.ts` |
+| Where do errors surface? | `features/admin/errors/ErrorsView.tsx`, `services/errorService.ts` |
 
-Line numbers change; search by symbol. Comments are useful but executable branches and database policy remain authoritative.
+## Shared and repo-wide
+
+| Question | Primary implementation |
+|---|---|
+| Where do the rules both apps need live? | `packages/domain/src` |
+| How is a client row turned into a domain object? | `packages/database/src/clients.ts` (`toClientIdentity`) |
+| How is one version propagated? | `scripts/version.mjs` |
+| How is one toolchain enforced? | `scripts/toolchain.mjs` |
+| How do database types stay in step? | `scripts/db-types.mjs`; `npm run db:types` |
+| Where do schema changes live? | `supabase/migrations`, with pgTAP tests in `supabase/tests` |
+| How are errors reported? | `desktop/src/services/reportError.ts`, `web/…/lib/reportError.ts` — see [Error reporting](/operations/error-reporting) |

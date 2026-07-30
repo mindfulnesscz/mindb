@@ -1,16 +1,58 @@
 # Architecture
 
-DC Hub is one Git monorepo and one coordinated product release. The root contains developer orchestration, versioning, CI, and the shared changelog; `desktop`, `web`, and `docs` retain independent dependency trees and lockfiles.
+DC Hub is one Git monorepo and one coordinated product release. Two applications — a Tauri desktop
+publisher and a React portal — share a Supabase backend and a set of packages holding everything the
+two must agree about.
+
+## Repository
 
 ```text
-root scripts / CI / version / changelog
-├── desktop: authenticated publisher (editor/admin)
-├── web: browser portal (anon + session under RLS)
-├── supabase: migrations, seed, edge functions (r2-grant, branding)
-└── docs: contributor and operator handbook
+dc-hub/
+├── packages/                  shared, and the reason the two apps cannot drift apart
+│   ├── domain/                platform-free product rules — identity, filename grammar, grouping
+│   ├── database/              generated Supabase types + the one clients-row projection
+│   ├── auth/                  the shared Supabase auth client
+│   └── asset-library/         shared presentational types, filters, permissions, ErrorBoundary
+│
+├── desktop/                   Tauri 2 app — the publisher
+│   ├── src/                   React UI, services, in-memory test harnesses
+│   └── src-tauri/             Rust — R2 signing, thumbnails, OAuth loopback, reveal bridge
+│
+├── web/apps/client-hub/       the portal — galleries, feedback, admin
+│
+├── supabase/                  migrations, seed, pgTAP tests, edge functions
+├── docs/                      this handbook (Nextra)
+├── e2e/                       Playwright smoke against a local stack
+└── scripts/                   version, toolchain and DB-type gates
 ```
 
-Capability ownership (who edits which fields) is documented in [Platform division](/getting-started/platform-division). Day-to-day team work uses [shared Staging](/getting-started/team-dev-setup).
+**One npm workspace, one lockfile.** `docs/` is the sole exception, and with cause: Nextra 2's loose
+`next >= 9.5.3` peer resolves a second copy of Next, after which `next-seo` imports `next/head` across
+the split. Rejoining it is blocked on the Nextra 2 → 4 upgrade.
+
+Every tool is pinned to an **exact** version in every manifest, checked by `npm run toolchain:check`.
+Ranges are how two installs drift apart while both look correctly configured — not hypothetical here:
+two TypeScript versions once disagreed about real code and hid four genuine type errors.
+
+Capability ownership (who edits which fields) is in
+[Platform division](/getting-started/platform-division). Day-to-day team work uses
+[shared Staging](/getting-started/team-dev-setup).
+
+## Who owns what
+
+The packages answer one question: when both apps need the same rule, where does it live?
+
+| Package | Holds | Rule |
+|---|---|---|
+| `@dc-hub/domain` | `stableId`, `naming`, `version`, `vocabulary`, `filenameTranslator`, `assetGrouping` | **No** `react`, `@tauri-apps/*`, `@supabase/*` or `node:*` — CI-enforced by `no-restricted-imports` |
+| `@dc-hub/database` | Generated types, `toClientIdentity`, `CLIENT_IDENTITY_SELECT`, dimension labels | Types are generated, never hand-written; CI fails on drift from the schema |
+| `@dc-hub/auth` | `createAuthClient`, `checkEmailAuth` | Transport differs per platform; the flow does not |
+| `@dc-hub/asset-library` | `Client`, filters, permissions, `ErrorBoundary` | May depend on React |
+
+A client's identity is projected **once**, in `@dc-hub/database`. Desktop's `Client` extends
+`ClientIdentity` with machine-local state (folder paths, per-machine destination toggles, OAuth
+tokens); the portal's `Client` *is* `ClientIdentity`. That follows the standing direction — the portal
+as a slightly limited desktop, not a parallel implementation of the same row.
 
 ## Components and trust boundaries
 
@@ -18,19 +60,58 @@ Capability ownership (who edits which fields) is documented in [Platform divisio
 |---|---|---|---|
 | Desktop React UI | Tauri webview | User session (PKCE magic link) | Pipeline, settings, destinations, logs |
 | Desktop Rust backend | Native process | Short-lived R2 grant per run; OAuth tokens | Thumbnails, R2 signing, provider uploads |
-| Supabase | Postgres / Auth / PostgREST / Functions | Desktop/browser: anon + user JWT; edge: service secrets | Metadata, profiles, roles, RLS, grants |
+| Supabase | Postgres / Auth / PostgREST / Functions | anon + user JWT; edge functions hold service secrets | Metadata, profiles, roles, RLS, grants |
 | Cloudflare R2 | Object storage / CDN | Environment secrets on edge functions only | Public thumbnails, originals, logos |
 | Dropbox / OneDrive / Drive | Provider APIs | Machine-local OAuth tokens | Optional delivery copies |
 | Web portal | Browser | Anon key + user session | Galleries, downloads, admin (clients, users, tags) |
 
-The desktop signs in as a staff user (**editor** or **admin**). Pipeline writes go through that session under RLS. Permanent Supabase service-role and parent R2 keys never live in the desktop — R2 access is minted by `r2-grant`. The web app must only receive the anon/publishable key.
+The desktop signs in as staff (**editor**, **admin** or **super_admin**) and every pipeline write goes
+through that session under RLS. Permanent Supabase service-role and parent R2 keys never live on the
+desktop — R2 access is minted per run by `r2-grant`. The portal must only ever receive the anon key.
 
-Remaining residual risk: cloud **OAuth tokens** are still machine-local plaintext until protected storage lands. See [Auth & secrets roadmap](/desktop/authentication-plan).
+Residual risk: cloud **OAuth tokens** are machine-local plaintext until protected storage lands. See
+[Auth & secrets roadmap](/desktop/authentication-plan).
 
-## Control flow
+> **Environments are still user-supplied.** A Supabase URL and anon key are typed into the login screen
+> and persisted to `environments.json`, so anyone able to edit that file can reach staging or dev. Fine
+> for a developer tool; **not** fine once the app is distributed, which needs a control plane that hands
+> an environment to a signed-in user. Tracked as backlog item 16.
 
-`PipelineView` builds a run context from the active client, settings, vocabulary, destinations, and a storage grant when CDN is enabled. `runPipeline` scans once and runs stages in fixed order. After it returns, the UI syncs assets and version history to Supabase. Tags are administered on the web (DB source of truth); the desktop may process `rename_tasks` after tag changes.
+## Desktop control flow
 
-Continue with [Pipeline lifecycle](/desktop/pipeline-lifecycle), [Supabase synchronization](/data-model/sync), and [Portal architecture](/web-portal/overview).
+```text
+runPlan          what the checkboxes MEAN — a checked local destination overrides
+                 targetFolder and forces Export; no cloud destination suppresses Cloud export
+   │
+useRunPipeline   refresh vocabulary → request the R2 grant → runPipeline → sync → version history
+   │
+runPipeline      one scan, then stages in fixed order:
+                 collect → thumbnails → cdnUpload → packages → publishLocal → cloudExport
+   │
+exportAssets…    identify → plan → write parents, then children → disconnect
+```
 
-For local orchestration, see [Daily developer routine](/getting-started/development) and [Commands](/reference/commands).
+Tags are administered on the web (the database is the source of truth); the desktop may process
+`rename_tasks` afterwards. Two guardrails sit in this flow:
+
+- **Blast radius.** A run must not destroy more than it wrote. The client-wide disconnect and the CDN
+  delete both consult `assessDestruction`, which refuses past `max(10, rows written)` and says why.
+- **Read failure ≠ empty disk.** The disconnect stage is skipped when the existing-rows read failed, so
+  "no row for this key" can never be mistaken for "absent".
+
+## Environments and deployment
+
+`dev` → `staging` → `main`. Migrations deploy from `staging` and `main` via `db.yml`; the portal follows
+the same branches through Vercel.
+
+The desktop rides `v*` **tags**, not branch merges — so a merge updates the database and the portal
+while every installed desktop app stays on its old build. Where a migration and a desktop version are
+coupled, the migration lands first and the tag follows.
+
+## Where to go next
+
+- [Pipeline lifecycle](/desktop/pipeline-lifecycle) and [Supabase synchronization](/data-model/sync)
+- [Portal architecture](/web-portal/overview)
+- [Error reporting](/operations/error-reporting)
+- [Testing](/reference/testing) and [Code map](/reference/code-map)
+- [Daily developer routine](/getting-started/development), [Commands](/reference/commands)
