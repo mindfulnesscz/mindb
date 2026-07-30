@@ -794,6 +794,8 @@ export type Database = {
           occurrences: number
         }[]
       }
+      send_error_digest: { Args: { p_window?: string }; Returns: number }
+      send_error_test: { Args: { p_id: string }; Returns: number }
       update_user_access: {
         Args: {
           p_can_create_clients?: boolean

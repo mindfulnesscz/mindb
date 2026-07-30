@@ -7,7 +7,7 @@
 
 import { useState } from 'react'
 import {
-  addNotification, removeNotification, setNotificationEnabled, maskWebhook,
+  addNotification, removeNotification, setNotificationEnabled, sendTestMessage, maskWebhook,
   type ErrorNotification,
 } from '../../../services/errorService'
 import { reportError, toMessage } from '../../../lib/reportError'
@@ -23,6 +23,7 @@ export function NotificationSettings({
   const [notifyAll, setNotifyAll] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [sent, setSent] = useState<string | null>(null)
 
   async function run(action: () => Promise<void>, context: string) {
     setBusy(true); setError('')
@@ -63,6 +64,21 @@ export function NotificationSettings({
                     {n.notify_all ? 'every occurrence' : 'new errors only'}
                   </td>
                   <td className="px-2 py-2 text-right whitespace-nowrap space-x-2">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void run(async () => {
+                        await sendTestMessage(n.id)
+                        // "Queued", not "sent": pg_net hands off asynchronously and Slack's reply
+                        // arrives later. Claiming a delivery we have not observed makes the button
+                        // useless for the one question it exists to answer.
+                        setSent(n.id)
+                        setTimeout(() => setSent(null), 4000)
+                      }, 'config.NotificationSettings.test')}
+                      className="text-[11px] hover:underline"
+                    >
+                      {sent === n.id ? 'Queued ✓' : 'Send test'}
+                    </button>
                     <button
                       type="button"
                       disabled={busy}
@@ -123,7 +139,10 @@ export function NotificationSettings({
             times, the channel gets muted, and a muted alert channel looks like monitoring while being
             none. */}
         <p className="text-[11px] font-sans text-text-subtle">
-          “Every occurrence” is off by default — digests carry errors seen for the first time.
+          Digests are sent daily at 08:00 UTC by a scheduled job, and carry errors seen for the first
+          time. “Every occurrence” sends all of them to that destination instead — off by default,
+          because a looping component would post until the channel gets muted. Use <em>Send test</em>
+          to check a webhook without waiting for the next digest.
         </p>
 
         {error && <p className="text-sm font-sans text-signal-error">{error}</p>}
