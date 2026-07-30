@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "test:coverage:ci": "vitest run --coverage --exclude='**/supabaseSync.integration.test.ts'"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.110.8",

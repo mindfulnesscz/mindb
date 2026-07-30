@@ -53,7 +53,8 @@
     "test:coverage:packages": "vitest run --coverage",
     "test:coverage:desktop": "npm --prefix desktop run test:coverage",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "test:coverage:ci": "npm --prefix desktop run test:coverage:ci"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

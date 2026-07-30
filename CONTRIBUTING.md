@@ -94,7 +94,11 @@ npm run test:e2e        # Playwright smoke against the local stack
   providers' `fetch`). Use them rather than reaching for the network or the disk.
 - **Coverage is a ratchet, not a target.** The thresholds in `vitest.config.ts` sit just under today's
   numbers so they can only be raised. They are honest about where the repo is: desktop services average
-  ~42% of lines. Raise a threshold in its own commit when you add tests.
+  ~40% of lines. Raise a threshold in its own commit when you add tests.
+- **Calibrate thresholds WITHOUT a local Supabase stack.** `supabaseSync.integration.test.ts` skips
+  when the stack is down and covers a lot of `services/supabase/**`, so a machine running
+  `supabase start` measures several points higher than CI ever will. Numbers taken from that richer run
+  fail on push. Reproduce the CI baseline with `npm run test:coverage:ci` before changing any threshold.
 - **The e2e suite is deliberately shallow.** It is the only place the browser, the bundle, RLS and
   Postgres are all real at once, which makes it the slowest and most fragile thing here. It answers
   "does the portal work at all". Filtering rules and rating arithmetic belong in unit tests, where a
