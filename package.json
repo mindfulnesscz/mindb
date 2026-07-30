@@ -51,10 +51,13 @@
     "lint:rust": "cargo clippy --locked --manifest-path desktop/src-tauri/Cargo.toml --all-targets -- -D warnings",
     "test:coverage": "npm run test:coverage:packages && npm run test:coverage:desktop",
     "test:coverage:packages": "vitest run --coverage",
-    "test:coverage:desktop": "npm --prefix desktop run test:coverage"
+    "test:coverage:desktop": "npm --prefix desktop run test:coverage",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.62.0",
     "@testing-library/jest-dom": "7.0.0",
     "@testing-library/react": "16.3.2",
     "@vitest/coverage-v8": "^4.1.10",

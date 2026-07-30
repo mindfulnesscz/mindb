@@ -38,3 +38,28 @@ jobs:
       # runs it too, as the composite gate used locally.
       - name: Rust lint
         run: npm run lint:rust
+
+  # Separate job: it needs a database and a browser, and the main gate should stay fast.
+  # The suite creates its own tenant and deletes it afterwards, so it can run against a
+  # stack seeded from the migrations without depending on what the seed happens to contain.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - run: supabase db start
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Portal smoke
+        run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-trace
+          path: test-results/
+          retention-days: 7

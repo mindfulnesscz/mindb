@@ -11,6 +11,9 @@
  *   it does NOT interfere when nothing is wrong.
  */
 
+// Registered at runtime by vitest.setup.ts; imported here as well so `tsc` sees the matcher
+// augmentation — the portal's typecheck does not read the root setup file.
+import '@testing-library/jest-dom/vitest'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { ErrorBoundary } from '@dc-hub/asset-library'
