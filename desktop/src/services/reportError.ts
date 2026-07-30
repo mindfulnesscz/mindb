@@ -24,7 +24,8 @@ import { appDataDir, join } from '@tauri-apps/api/path';
 import { exists, readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 
 const BREADCRUMB_LIMIT = 12;
-const LOG_FILE = 'errors.log';
+/** Exported so the Settings card opens the same file this writes. */
+export const LOG_FILE = 'errors.log';
 
 /** Keeps the log bounded on a machine that runs the pipeline daily. */
 const MAX_LOG_BYTES = 256 * 1024;

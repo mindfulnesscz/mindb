@@ -139,3 +139,16 @@
   font-size: var(--text-xs);
   color: var(--signal-success);
 }
+
+/* The log path is long and must stay selectable — an operator may want to copy it rather than
+   click through. */
+.pathLine {
+  font-family: var(--font-mono);
+  word-break: break-all;
+  user-select: text;
+}
+
+.diagActions {
+  display: flex;
+  gap: var(--sp-2);
+}
