@@ -34,7 +34,7 @@
 begin;
 create extension if not exists pgtap;
 
-select plan(72);
+select plan(75);
 
 /* ── Fixtures (created as superuser, which bypasses RLS) ───────────────────── */
 
@@ -446,6 +446,27 @@ update public.assets set perm = 'internal' where id = '33333333-0000-0000-0000-0
 select is((select count(*) from public.assets
            where parent_id = '33333333-0000-0000-0000-0000000000c0' and perm = 'internal'), 2::bigint,
   'Re-setting a parent to the level it already has terminates instead of recursing');
+
+/* ── asset_stats must not bypass the policies above (3) ───────────────────────
+   A view runs as its OWNER unless `security_invoker` is set, and RLS on the underlying table is
+   evaluated for whoever that is. asset_stats selects from assets, so without it every caller —
+   anonymous included — could enumerate id plus rating and comment counts for every asset in every
+   client, internal and unapproved ones included. Not names and not bytes, but an
+   existence-and-activity leak across the tenant boundary: rating counts on unreleased work say how
+   much review it is getting. Fixed by 20260731140000. */
+
+select pg_temp.act_as('22222222-0000-0000-0000-00000000000a');
+select is((select count(*) from public.asset_stats where id::text like '33333333-%'),
+          pg_temp.n_assets(),
+  'A member sees stats for exactly the assets they can see — no more');
+select is((select count(*) from public.asset_stats
+           where id = '33333333-0000-0000-0000-0000000000a3'), 0::bigint,
+  'A member gets no stats for an internal asset of their own client');
+
+select pg_temp.act_as_anon();
+select is((select count(*) from public.asset_stats
+           where id = '33333333-0000-0000-0000-0000000000a5'), 0::bigint,
+  'Anon gets no stats for an unapproved asset — the view inherits effective_level, not ignores it');
 
 select * from finish();
 rollback;
