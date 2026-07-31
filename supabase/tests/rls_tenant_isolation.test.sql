@@ -14,6 +14,19 @@
 -- onto another's assets. Fixed by 20260729120000_ratings_asset_scoped_writes.sql and
 -- asserted in the "writes" section below.
 --
+-- 20260731120000 then added a fourth level (`guest`) and made lifecycle gate access as well as
+-- permission, via the generated `effective_level` column:
+--
+--   effective_level = (status in ('approved','published')) ? perm : 'internal'
+--
+-- so an asset marked `public` while still in `draft` is staff-only. Two consequences this suite
+-- pins: every fixture asset must now declare a status (a `draft` default would make them all
+-- internal), and the "unapproved public" case gets its own asset.
+--
+-- MIND THE TWO SENSES OF "GUEST". The voting section below calls a signed-in user with
+-- role='public' and no client a "guest" — that is a PERSON. `perm = 'guest'` is an ACCESS LEVEL
+-- meaning "anyone signed in, whoever they are". They interact but are not the same axis.
+--
 -- Read assertions come first and writes last, so the inserts below cannot skew the counts.
 -- Everything runs in one transaction and is rolled back, so it is safe to run against a
 -- database that already holds seed data.
@@ -21,7 +34,7 @@
 begin;
 create extension if not exists pgtap;
 
-select plan(51);
+select plan(72);
 
 /* ── Fixtures (created as superuser, which bypasses RLS) ───────────────────── */
 
@@ -46,26 +59,41 @@ insert into public.profiles (id, role, client_id) values
 on conflict (id) do update
   set role = excluded.role, client_id = excluded.client_id;
 
--- One asset per permission level for A, plus a client-scoped asset for B.
-insert into public.assets (id, client_id, shortcode, stable_id, child_id, perm, name) values
-  ('33333333-0000-0000-0000-0000000000a1', '11111111-0000-0000-0000-000000000001', '(A)(PUB)', 'aaaa0001', 'c1', 'public',   'A public'),
-  ('33333333-0000-0000-0000-0000000000a2', '11111111-0000-0000-0000-000000000001', '(A)(CLI)', 'aaaa0002', 'c1', 'client',   'A client-only'),
-  ('33333333-0000-0000-0000-0000000000a3', '11111111-0000-0000-0000-000000000001', '(A)(INT)', 'aaaa0003', 'c1', 'internal', 'A internal'),
-  ('33333333-0000-0000-0000-0000000000b1', '11111111-0000-0000-0000-000000000002', '(B)(CLI)', 'bbbb0001', 'c1', 'client',   'B client-only');
+-- One asset per access level for A, plus a client-scoped asset for B. `status` is explicit on
+-- every row: the column defaults to 'draft', which effective_level downgrades to 'internal', so
+-- omitting it would make every fixture staff-only and every count below meaningless.
+--
+-- a5 is the asset the whole effective-level rule exists for: marked world-readable, not yet
+-- signed off. Its level is 'internal' regardless of `perm`.
+insert into public.assets (id, client_id, shortcode, stable_id, child_id, perm, status, name) values
+  ('33333333-0000-0000-0000-0000000000a1', '11111111-0000-0000-0000-000000000001', '(A)(PUB)', 'aaaa0001', 'c1', 'public',   'published', 'A public'),
+  ('33333333-0000-0000-0000-0000000000a2', '11111111-0000-0000-0000-000000000001', '(A)(CLI)', 'aaaa0002', 'c1', 'client',   'published', 'A client-only'),
+  ('33333333-0000-0000-0000-0000000000a3', '11111111-0000-0000-0000-000000000001', '(A)(INT)', 'aaaa0003', 'c1', 'internal', 'published', 'A internal'),
+  ('33333333-0000-0000-0000-0000000000a4', '11111111-0000-0000-0000-000000000001', '(A)(GST)', 'aaaa0004', 'c1', 'guest',    'published', 'A guest-level'),
+  ('33333333-0000-0000-0000-0000000000a5', '11111111-0000-0000-0000-000000000001', '(A)(DRF)', 'aaaa0005', 'c1', 'public',   'draft',     'A public but unapproved'),
+  ('33333333-0000-0000-0000-0000000000b1', '11111111-0000-0000-0000-000000000002', '(B)(CLI)', 'bbbb0001', 'c1', 'client',   'published', 'B client-only');
 
--- A comment on every asset (staff-authored — only staff may post).
+-- A comment on every asset (staff-authored — only staff may post). The one on a5 is the
+-- child-table half of the same leak: before effective_level, the comment thread of a
+-- draft-but-public asset was readable by anyone the asset row itself is now hidden from.
 insert into public.comments (asset_id, user_id, body) values
   ('33333333-0000-0000-0000-0000000000a1', '22222222-0000-0000-0000-00000000000e', 'comment on A public'),
   ('33333333-0000-0000-0000-0000000000a2', '22222222-0000-0000-0000-00000000000e', 'comment on A client'),
   ('33333333-0000-0000-0000-0000000000a3', '22222222-0000-0000-0000-00000000000e', 'comment on A internal'),
+  ('33333333-0000-0000-0000-0000000000a4', '22222222-0000-0000-0000-00000000000e', 'comment on A guest-level'),
+  ('33333333-0000-0000-0000-0000000000a5', '22222222-0000-0000-0000-00000000000e', 'comment on A unapproved'),
   ('33333333-0000-0000-0000-0000000000b1', '22222222-0000-0000-0000-00000000000e', 'comment on B client');
 
 -- A rating on each asset, including the PUBLIC one (that case distinguishes the ratings
 -- policy from the comments policy — see the anon section).
+-- The rating on a5 matters for the same reason its comment does: ratings carry no session
+-- guard, so before effective_level an anonymous visitor could read the score of a
+-- draft-but-public asset. Staff-authored, since staff are the only ones who can see a5.
 insert into public.ratings (asset_id, user_id, value) values
   ('33333333-0000-0000-0000-0000000000a1', '22222222-0000-0000-0000-00000000000a', 5),
   ('33333333-0000-0000-0000-0000000000a2', '22222222-0000-0000-0000-00000000000a', 4),
   ('33333333-0000-0000-0000-0000000000a3', '22222222-0000-0000-0000-00000000000e', 3),
+  ('33333333-0000-0000-0000-0000000000a5', '22222222-0000-0000-0000-00000000000e', 3),
   ('33333333-0000-0000-0000-0000000000b1', '22222222-0000-0000-0000-00000000000b', 2);
 
 insert into public.approvals (asset_id, user_id, state) values
@@ -93,6 +121,12 @@ begin
 end $$;
 
 -- Counts scoped to this suite's fixtures, so pre-existing seed rows cannot skew a result.
+create or replace function pg_temp.act_as_superuser() returns void language plpgsql as $$
+begin
+  perform set_config('role', 'postgres', true);
+  perform set_config('request.jwt.claims', '', true);
+end $$;
+
 create or replace function pg_temp.n_clients() returns bigint language sql as $$
   select count(*) from public.clients where id::text like '11111111-%'; $$;
 create or replace function pg_temp.n_assets() returns bigint language sql as $$
@@ -107,7 +141,24 @@ create or replace function pg_temp.n_activity() returns bigint language sql as $
   select count(*) from public.activity
   where asset_id::text like '33333333-%' or user_id::text like '22222222-%'; $$;
 
-/* ── Tenant A member (13) ─────────────────────────────────────────────────── */
+/* ── effective_level is derived, and derived correctly (4) ─────────────────────
+   Still superuser here, so this reads the column itself rather than what any actor can see.
+   It is the contract the Cloudflare Worker in front of R2 also depends on: the same value
+   lands in the object key at upload time, so if Postgres computes it differently from the
+   documented rule, row discovery and byte delivery disagree. */
+
+select is((select effective_level from public.assets where id = '33333333-0000-0000-0000-0000000000a1'),
+  'public', 'A published public asset has effective_level public');
+select is((select effective_level from public.assets where id = '33333333-0000-0000-0000-0000000000a4'),
+  'guest', 'A published guest asset has effective_level guest');
+select is((select effective_level from public.assets where id = '33333333-0000-0000-0000-0000000000a5'),
+  'internal', 'A DRAFT public asset has effective_level internal — status gates independently of perm');
+select throws_ok(
+  $$update public.assets set effective_level = 'public'
+    where id = '33333333-0000-0000-0000-0000000000a5'$$,
+  '428C9', null, 'effective_level cannot be written directly — it is generated, not a field to set');
+
+/* ── Tenant A member (17) ─────────────────────────────────────────────────── */
 
 select pg_temp.act_as('22222222-0000-0000-0000-00000000000a');
 
@@ -116,19 +167,25 @@ select is(pg_temp.n_clients(), 1::bigint,
 select is((select name from public.clients where id::text like '11111111-%'), 'Tenant A',
   'A member sees their OWN client, not another tenant''s');
 
-select is(pg_temp.n_assets(), 2::bigint,
-  'A member sees A''s public + client assets, not A''s internal one');
+select is(pg_temp.n_assets(), 3::bigint,
+  'A member sees A''s public + client + guest-level assets, not the internal or unapproved ones');
 select is((select count(*) from public.assets where id = '33333333-0000-0000-0000-0000000000a3'), 0::bigint,
   'A member cannot read an internal asset even of their own client');
+select is((select count(*) from public.assets where id = '33333333-0000-0000-0000-0000000000a4'), 1::bigint,
+  'A member can read a guest-level asset — being signed in is the whole test');
+select is((select count(*) from public.assets where id = '33333333-0000-0000-0000-0000000000a5'), 0::bigint,
+  'A member cannot read their own client''s DRAFT public asset — unapproved work stays internal');
 select is((select count(*) from public.assets where id = '33333333-0000-0000-0000-0000000000b1'), 0::bigint,
   'A member cannot read another tenant''s asset');
 
-select is(pg_temp.n_comments(), 2::bigint,
+select is(pg_temp.n_comments(), 3::bigint,
   'A member reads comments only on the assets they can see');
 select is((select count(*) from public.comments where asset_id = '33333333-0000-0000-0000-0000000000b1'), 0::bigint,
   'A member cannot read comments on another tenant''s asset (F-1)');
 select is((select count(*) from public.comments where asset_id = '33333333-0000-0000-0000-0000000000a3'), 0::bigint,
   'A member cannot read comments on an internal asset (F-1)');
+select is((select count(*) from public.comments where asset_id = '33333333-0000-0000-0000-0000000000a5'), 0::bigint,
+  'A member cannot read the comment thread of an unapproved asset either — the leak one table over');
 
 select is(pg_temp.n_ratings(), 2::bigint,
   'A member reads ratings only on the assets they can see');
@@ -143,7 +200,7 @@ select is(pg_temp.n_activity(), 2::bigint,
 select is((select count(*) from public.activity where user_id = '22222222-0000-0000-0000-00000000000b'), 0::bigint,
   'A member cannot read another tenant member''s activity (F-1)');
 
-/* ── Tenant B member — the mirror image (7) ───────────────────────────────── */
+/* ── Tenant B member — the mirror image (8) ───────────────────────────────── */
 
 select pg_temp.act_as('22222222-0000-0000-0000-00000000000b');
 
@@ -151,8 +208,10 @@ select is(pg_temp.n_clients(), 1::bigint,
   'B member also sees exactly one client row');
 select is((select name from public.clients where id::text like '11111111-%'), 'Tenant B',
   'B member sees Tenant B — the scoping is per-user, not a fixed row');
-select is(pg_temp.n_assets(), 2::bigint,
-  'B member sees their own client asset plus A''s PUBLIC asset');
+select is(pg_temp.n_assets(), 3::bigint,
+  'B member sees their own client asset plus A''s public and guest-level ones');
+select is((select count(*) from public.assets where id = '33333333-0000-0000-0000-0000000000a4'), 1::bigint,
+  'Guest level crosses tenants deliberately — it means "anyone signed in", not "any member"');
 select is((select count(*) from public.assets where id = '33333333-0000-0000-0000-0000000000a2'), 0::bigint,
   'B member cannot read A''s client-scoped asset');
 select is((select count(*) from public.comments where asset_id = '33333333-0000-0000-0000-0000000000a2'), 0::bigint,
@@ -162,33 +221,45 @@ select is((select count(*) from public.ratings where asset_id = '33333333-0000-0
 select is((select count(*) from public.activity where user_id = '22222222-0000-0000-0000-00000000000a'), 0::bigint,
   'B member cannot read A member''s activity (F-1)');
 
-/* ── Staff / editor (6) ───────────────────────────────────────────────────── */
+/* ── Staff / editor (7) ───────────────────────────────────────────────────── */
 
 select pg_temp.act_as('22222222-0000-0000-0000-00000000000e');
 
 select is(pg_temp.n_clients(),   2::bigint, 'Staff see every client — the admin console needs it');
-select is(pg_temp.n_assets(),    4::bigint, 'Staff see all assets, internal included');
-select is(pg_temp.n_comments(),  4::bigint, 'Staff read every comment');
-select is(pg_temp.n_ratings(),   4::bigint, 'Staff read every rating');
+select is(pg_temp.n_assets(),    6::bigint, 'Staff see all assets, internal and unapproved included');
+select is((select count(*) from public.assets where id = '33333333-0000-0000-0000-0000000000a5'), 1::bigint,
+  'The unapproved public asset is visible to staff — hidden from clients, not from its authors');
+select is(pg_temp.n_comments(),  6::bigint, 'Staff read every comment');
+select is(pg_temp.n_ratings(),   5::bigint, 'Staff read every rating');
 select is(pg_temp.n_approvals(), 2::bigint, 'Staff read every approval');
 select is(pg_temp.n_activity(),  3::bigint, 'Staff read all activity');
 
-/* ── Signed in, attached to no client (3) ─────────────────────────────────── */
+/* ── Signed in, attached to no client (4) ─────────────────────────────────── */
 
 select pg_temp.act_as('22222222-0000-0000-0000-00000000000f');
 
 select is(pg_temp.n_clients(),  0::bigint, 'A user with no client sees no client rows');
-select is(pg_temp.n_assets(),   1::bigint, 'A user with no client sees only public assets');
-select is(pg_temp.n_comments(), 1::bigint, 'A user with no client reads only public-asset comments');
+select is(pg_temp.n_assets(),   2::bigint,
+  'A user with no client sees public and guest-level assets — nothing tenant-scoped');
+select is((select count(*) from public.assets where id = '33333333-0000-0000-0000-0000000000a4'), 1::bigint,
+  'Guest level is exactly this person: signed in, no tenant, no membership');
+select is(pg_temp.n_comments(), 2::bigint,
+  'A user with no client reads the comments of the assets they can see');
 
-/* ── Anonymous — the portal''s public gallery (4) ─────────────────────────── */
+/* ── Anonymous — the portal''s public gallery (6) ─────────────────────────── */
 
 select pg_temp.act_as_anon();
 
 select is(pg_temp.n_assets(),   1::bigint, 'Anon sees public assets only');
+select is((select count(*) from public.assets where id = '33333333-0000-0000-0000-0000000000a4'), 0::bigint,
+  'Anon cannot read a guest-level asset — guest means signed in, and email capture is the door');
+select is((select count(*) from public.assets where id = '33333333-0000-0000-0000-0000000000a5'), 0::bigint,
+  'Anon cannot read a public-but-unapproved asset — the exposure effective_level exists to close');
 select is(pg_temp.n_clients(),  0::bigint, 'Anon cannot enumerate clients');
 select is(pg_temp.n_comments(), 0::bigint,
   'Anon reads NO comments, even on a public asset — the thread requires a session');
+select is((select count(*) from public.ratings where asset_id = '33333333-0000-0000-0000-0000000000a5'), 0::bigint,
+  'Anon reads no ratings on an unapproved asset, though a published public one is fair game');
 -- INTENTIONAL (confirmed 2026-07-29): the public gallery shows a score to everyone. Ratings
 -- deliberately carry no auth.uid() guard, unlike the comment thread, which requires a session.
 select is(pg_temp.n_ratings(),  1::bigint,
@@ -220,6 +291,12 @@ select throws_ok(
   $$insert into public.ratings (asset_id, user_id, value)
     values ('33333333-0000-0000-0000-0000000000a3', '22222222-0000-0000-0000-00000000000a', 1)$$,
   '42501', null, 'F-4: a member may NOT rate an INTERNAL asset, even of their own client');
+-- The write half of the effective-level rule. can_see_asset defers to the assets policies, so
+-- an unapproved asset is unrateable for exactly the same reason it is unreadable — one rule.
+select throws_ok(
+  $$insert into public.ratings (asset_id, user_id, value)
+    values ('33333333-0000-0000-0000-0000000000a5', '22222222-0000-0000-0000-00000000000a', 1)$$,
+  '42501', null, 'A member may NOT rate an unapproved asset — writes follow effective_level too');
 select throws_ok(
   $$update public.ratings set asset_id = '33333333-0000-0000-0000-0000000000b1'
     where asset_id = '33333333-0000-0000-0000-0000000000a2'
@@ -291,6 +368,15 @@ select throws_ok(
     values ('33333333-0000-0000-0000-0000000000a2', '22222222-0000-0000-0000-00000000000f', 5)$$,
   '42501', null, 'A guest may NOT rate a client-scoped asset they cannot see');
 
+-- can_see_asset used to restate the assets policies as `perm = 'public' or is_staff() or
+-- own client`. Under that copy this insert failed: the person can see a guest-level asset
+-- perfectly well, but the restatement had never heard of the level. It now defers to the
+-- policies instead of paraphrasing them, and this is the test that says so.
+select lives_ok(
+  $$insert into public.ratings (asset_id, user_id, value)
+    values ('33333333-0000-0000-0000-0000000000a4', '22222222-0000-0000-0000-00000000000f', 4)$$,
+  'A guest MAY rate a guest-level asset — feedback rules track access levels, not a copy of them');
+
 -- Truly anonymous (never signed in) cannot vote. Two independent guards agree: `auth.uid()`
 -- is null so the policy's `auth.uid() = user_id` can never hold, and `user_id` is NOT NULL so
 -- there is no anonymous row to author. RLS rejects first (42501), before the column
@@ -314,6 +400,52 @@ select throws_ok(
   $$insert into public.asset_events (asset_id, event_type, user_id)
     values ('33333333-0000-0000-0000-0000000000a1', 'view', '22222222-0000-0000-0000-00000000000e')$$,
   '42501', null, 'Anon may NOT attribute an event to a real user (F-2)');
+
+/* ── Gallery level inheritance (6) ─────────────────────────────────────────────
+   A gallery is ONE deliverable stored as a parent row plus a row per image, and `perm` used to
+   live on each row independently. That produced a card a client could see over a grid they could
+   not: parent `public`, children `client`, gallery opens empty. 20260731130000 makes the child's
+   level its parent's, in the database, so neither write path can drift.
+
+   Variants are deliberately NOT covered — separating a rendition's visibility (an internal print
+   master beside a public web version) is a real if rare need, and it depends on a choice made at
+   the moment of the edit that a trigger cannot see. */
+
+select pg_temp.act_as_superuser();
+
+insert into public.assets (id, client_id, shortcode, stable_id, child_id, perm, status, name) values
+  ('33333333-0000-0000-0000-0000000000c0', '11111111-0000-0000-0000-000000000001', '(A)(GAL)', 'cccc0001', 'c1', 'client', 'published', 'A gallery parent');
+-- Deliberately asking for `internal` on the children: the trigger must override it.
+insert into public.assets (id, client_id, shortcode, stable_id, child_id, perm, status, name, parent_id) values
+  ('33333333-0000-0000-0000-0000000000c1', '11111111-0000-0000-0000-000000000001', '(A)(GAL)|1', 'cccc0001', 'c2', 'internal', 'published', 'child 1', '33333333-0000-0000-0000-0000000000c0'),
+  ('33333333-0000-0000-0000-0000000000c2', '11111111-0000-0000-0000-000000000001', '(A)(GAL)|2', 'cccc0001', 'c3', 'internal', 'published', 'child 2', '33333333-0000-0000-0000-0000000000c0');
+
+select is((select count(distinct perm) from public.assets where parent_id = '33333333-0000-0000-0000-0000000000c0'), 1::bigint,
+  'On INSERT a gallery child takes its parent''s level, whatever the insert asked for');
+select is((select perm from public.assets where id = '33333333-0000-0000-0000-0000000000c1'), 'client',
+  'The level it takes is the parent''s, not the one supplied');
+
+update public.assets set perm = 'public' where id = '33333333-0000-0000-0000-0000000000c0';
+select is((select count(*) from public.assets
+           where parent_id = '33333333-0000-0000-0000-0000000000c0' and perm = 'public'), 2::bigint,
+  'Widening the parent cascades to every child — one click publishes the gallery, deliberately');
+
+update public.assets set perm = 'internal' where id = '33333333-0000-0000-0000-0000000000c0';
+select is((select count(*) from public.assets
+           where parent_id = '33333333-0000-0000-0000-0000000000c0' and perm = 'internal'), 2::bigint,
+  'Narrowing the parent cascades too — the gallery cannot be left half-exposed');
+
+update public.assets set perm = 'public' where id = '33333333-0000-0000-0000-0000000000c1';
+select is((select perm from public.assets where id = '33333333-0000-0000-0000-0000000000c1'), 'internal',
+  'A child cannot diverge on its own — the write is silently forced back to the parent''s level');
+
+-- The recursion guard: the cascade UPDATE re-fires both triggers on each child, and without
+-- `perm is distinct from` a child already at the target value would keep restating it. If that
+-- guard were missing this statement would not return.
+update public.assets set perm = 'internal' where id = '33333333-0000-0000-0000-0000000000c0';
+select is((select count(*) from public.assets
+           where parent_id = '33333333-0000-0000-0000-0000000000c0' and perm = 'internal'), 2::bigint,
+  'Re-setting a parent to the level it already has terminates instead of recursing');
 
 select * from finish();
 rollback;
