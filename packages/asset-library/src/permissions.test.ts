@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { effectiveLevel, canViewAsset, canDownload, isStaff } from './permissions.js'
+import { effectiveLevel, canViewAsset, canDownload, isStaff, canControlPermission } from './permissions.js'
 import type { Asset, AssetPerm, AssetStatus, Role } from './types.js'
 
 const asset = (perm: AssetPerm, status: AssetStatus, clientId = 'c-1'): Asset => ({
@@ -103,5 +103,18 @@ describe('isStaff', () => {
     expect(['editor', 'admin', 'super_admin'].every(r => isStaff(r as Role))).toBe(true)
     expect(isStaff('member')).toBe(false)
     expect(isStaff('public')).toBe(false)
+  })
+})
+
+describe('canControlPermission', () => {
+  it('is editors and above — the same set the server lets write', () => {
+    // It used to say admins only and was never called, while the panel gated on isStaff. Two
+    // answers to one access question, with the permissive one shipping. Confirmed 2026-08-01:
+    // editors change visibility, matching the `assets: staff write` policy.
+    expect(canControlPermission('editor')).toBe(true)
+    expect(canControlPermission('admin')).toBe(true)
+    expect(canControlPermission('super_admin')).toBe(true)
+    expect(canControlPermission('member')).toBe(false)
+    expect(canControlPermission('public')).toBe(false)
   })
 })
