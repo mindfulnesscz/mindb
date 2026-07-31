@@ -18,9 +18,13 @@ export default defineConfig({
   test: {
     // Shared packages, plus the portal's DOM-free logic. Component rendering is not covered —
     // that needs a jsdom + testing-library stack and is tracked as backlog item 12.
+    // The CDN gate Worker is here too: its authorization and token modules are deliberately
+    // I/O-free, so the security matrix runs in plain node with no workerd. Anything that needs a
+    // real R2 binding or the Cache API is a `wrangler dev` job — see workers/cdn-gate/README.md.
     include: [
       'packages/*/src/**/*.test.ts',
       'web/apps/*/src/**/*.test.{ts,tsx}',
+      'workers/*/src/**/*.test.ts',
     ],
     // Component tests opt into jsdom per file with `// @vitest-environment jsdom`, so the
     // pure-logic suites keep running in plain node (they are ~10x faster there).

@@ -1,0 +1,19 @@
+{
+  "name": "@dc-hub/cdn-gate",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy:staging": "wrangler deploy --env staging",
+    "deploy:production": "wrangler deploy --env production",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260731.1",
+    "typescript": "5.9.3",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.117.0"
+  }
+}

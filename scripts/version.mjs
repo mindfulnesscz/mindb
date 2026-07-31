@@ -20,14 +20,19 @@ const packageFiles = [
   'web/apps/client-hub/package.json',
   'packages/asset-library/package.json',
   'docs/package.json',
+  'workers/cdn-gate/package.json',
 ]
 
 // npm lockfiles: file → the `packages` entries that carry a version.
 // ONE lockfile: desktop/ and docs/ became workspace members (see REFACTOR_PLAN.md "Target
 // architecture"), so their versions are recorded here rather than in per-tree lockfiles.
+// The CDN gate keeps its own lockfile for the same reason docs does: it installs a toolchain
+// (wrangler) that nothing else in the repo needs, and hoisting it into the root tree would make
+// every desktop and web install pay for it.
 const lockFiles = {
   'package-lock.json': ['', 'desktop', 'web/apps/client-hub', 'packages/asset-library'],
   'docs/package-lock.json': [''],
+  'workers/cdn-gate/package-lock.json': [''],
 }
 
 function cargoPackageVersion(source) {
