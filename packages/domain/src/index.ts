@@ -25,3 +25,4 @@ export * from './version';
 export * from './vocabulary';
 export * from './filenameTranslator';
 export * from './assetGrouping';
+export * from './assetStorage';
