@@ -9,7 +9,7 @@
     "desktop"
   ],
   "scripts": {
-    "setup": "npm ci && npm ci --prefix docs",
+    "setup": "npm ci && npm ci --prefix docs && npm ci --prefix workers/cdn-gate",
     "dev": "node scripts/dev.mjs",
     "dev:desktop": "npm --prefix desktop run tauri dev",
     "dev:web": "npm run dev --workspace=web/apps/client-hub",
@@ -19,7 +19,7 @@
     "build:web": "npm run build --workspace=web/apps/client-hub",
     "build:vercel": "node scripts/vercel-build.mjs",
     "build:docs": "npm --prefix docs run build",
-    "check": "npm run version:check && npm run toolchain:check && npm run db:types:check && npm run lint && npm run build:desktop && npm run check:web && npm run build:docs && npm run lint:rust",
+    "check": "npm run version:check && npm run toolchain:check && npm run db:types:check && npm run lint && npm run build:desktop && npm run check:web && npm run typecheck:worker && npm run build:docs && npm run lint:rust",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
@@ -54,7 +54,8 @@
     "test:coverage:desktop": "npm --prefix desktop run test:coverage",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:coverage:ci": "npm --prefix desktop run test:coverage:ci"
+    "test:coverage:ci": "npm --prefix desktop run test:coverage:ci",
+    "typecheck:worker": "npm --prefix workers/cdn-gate run typecheck"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

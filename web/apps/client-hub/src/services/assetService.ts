@@ -242,12 +242,36 @@ export async function updateAssetStatus(
   if (error) throw new Error(error.message)
 }
 
+/**
+ * Set an asset's access level.
+ *
+ * `variantFamilyOf` extends the change to a whole rendition set: pass the PRIMARY's id and every
+ * `variant_of` sibling moves with it, plus the primary itself. That is the default in the portal,
+ * because "make this public" almost always means the deliverable rather than the one file the panel
+ * happens to be showing — but it is a choice, not a rule, so a print master can still be held back
+ * from the web version by unchecking it.
+ *
+ * Gallery children are NOT handled here and must not be: `perm` on a `parent_id` row is forced to
+ * its parent's value by a database trigger (20260731130000), so a gallery is one level by
+ * construction. Splitting a gallery's visibility means splitting the gallery into two folders.
+ */
 export async function updateAssetPerm(
   id: string,
   perm: Asset['perm'],
+  variantFamilyOf?: string | null,
 ): Promise<void> {
   if (!supabase) throw new Error('Supabase not configured')
-   
+
+  if (variantFamilyOf) {
+    // One statement, so the family cannot end up half-changed by a failure between two calls.
+    const { error } = await (supabase as any)
+      .from('assets')
+      .update({ perm })
+      .or(`id.eq.${variantFamilyOf},variant_of.eq.${variantFamilyOf}`)
+    if (error) throw new Error(error.message)
+    return
+  }
+
   const { error } = await (supabase as any).from('assets').update({ perm }).eq('id', id)
   if (error) throw new Error(error.message)
 }

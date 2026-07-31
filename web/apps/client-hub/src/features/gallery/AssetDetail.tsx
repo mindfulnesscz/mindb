@@ -62,7 +62,8 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
     currentStatus, currentPerm, statusBusy, statusError, permBusy, deleteBusy, deleteError,
     changeStatus: handleStatusChange, approve: handleApprove,
     changePerm: handlePermChange, removeAsset: handleDelete,
-  } = useAssetLifecycle(asset, onStatusChange, onClose)
+    isGalleryChild, canApplyToVariants, variantCount, applyToVariants, setApplyToVariants,
+  } = useAssetLifecycle(asset, onStatusChange, onClose, variants)
 
   const [note, setNote] = useState('')
   // Folder-based stable identity variants (Task 3) — format/size siblings of this asset,
@@ -220,6 +221,11 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
           permBusy={permBusy}
           deleteBusy={deleteBusy}
           deleteError={deleteError}
+          isGalleryChild={isGalleryChild}
+          canApplyToVariants={canApplyToVariants}
+          variantCount={variantCount}
+          applyToVariants={applyToVariants}
+          setApplyToVariants={setApplyToVariants}
           onStatusChange={handleStatusChange}
           onPermChange={handlePermChange}
           onApprove={handleApprove}

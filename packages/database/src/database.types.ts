@@ -205,6 +205,7 @@ export type Database = {
           download_key: string | null
           download_url: string | null
           download_urls: Json
+          effective_level: string | null
           entities: string[]
           formats: string[]
           id: string
@@ -234,6 +235,7 @@ export type Database = {
           download_key?: string | null
           download_url?: string | null
           download_urls?: Json
+          effective_level?: string | null
           entities?: string[]
           formats?: string[]
           id?: string
@@ -263,6 +265,7 @@ export type Database = {
           download_key?: string | null
           download_url?: string | null
           download_urls?: Json
+          effective_level?: string | null
           entities?: string[]
           formats?: string[]
           id?: string

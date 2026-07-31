@@ -1,8 +1,14 @@
 /* Status, permission and deletion for one asset — the staff-only write actions.
  *
- * `perm` is an access boundary, not a label: `internal` is staff-only and `client` is scoped to the
- * owning tenant, both enforced by RLS. Local state mirrors the server optimistically and RESETS on
- * asset change, so a stale value from the previous asset can never be shown as current.
+ * `perm` is an access boundary, not a label, and it is only half of one: access is decided by
+ * `perm` and `status` together (see assetOptions.ts), so changing either here changes who can reach
+ * the asset AND, once delivery is gated, which R2 key its bytes live under. Local state mirrors the
+ * server optimistically and RESETS on asset change, so a stale value from the previous asset can
+ * never be shown as current.
+ *
+ * NOTE: this writes ONE row. A gallery parent and its children, or a primary and its variants, are
+ * separate rows and do not follow each other — see the family-consistency note in
+ * supabase/audit/perm_family_mismatch.sql.
  *
  * Deletion is the one destructive action here and is confirm-gated. Note it does NOT clear
  * `deleteBusy` on success: the panel closes, so releasing the button would only re-enable a control
@@ -18,6 +24,8 @@ export function useAssetLifecycle(
   asset: Asset,
   onStatusChange?: () => void,
   onClose?: () => void,
+  /** Rendition siblings of this asset, so a perm change can move the whole set. */
+  variants: Asset[] = [],
 ) {
   const [currentStatus, setCurrentStatus] = useState<Asset['status']>(asset.status)
   const [currentPerm, setCurrentPerm] = useState<Asset['perm']>(asset.perm)
@@ -26,12 +34,23 @@ export function useAssetLifecycle(
   const [permBusy, setPermBusy] = useState(false)
   const [deleteBusy, setDeleteBusy] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  /** Default ON: changing the level almost always means the deliverable, not the one file on
+   *  screen. Unchecking it is the rare deliberate case — e.g. an internal print master. */
+  const [applyToVariants, setApplyToVariants] = useState(true)
+
+  /* A gallery child's level is its parent's, forced by a database trigger. Surfacing that here
+     rather than letting the panel offer a control whose value snaps back on the next read. */
+  const isGalleryChild = asset.parentId != null
+  /** The primary of this rendition set: this row if it IS the primary, otherwise the one it hangs
+   *  off. Null when the asset has no siblings and the choice is moot. */
+  const variantFamilyPrimaryId = asset.variantOf ?? (variants.length > 0 ? asset.id : null)
 
   useEffect(() => {
     setCurrentStatus(asset.status)
     setCurrentPerm(asset.perm)
     setStatusError(null)
-     
+    setApplyToVariants(true)
+
   }, [asset.id])
 
   async function changeStatus(newStatus: Asset['status']) {
@@ -53,10 +72,19 @@ export function useAssetLifecycle(
 
   async function changePerm(newPerm: Asset['perm']) {
     if (newPerm === currentPerm || permBusy) return
+    // Forced by the database anyway; refusing here keeps the UI honest instead of showing a value
+    // that reverts on the next read.
+    if (isGalleryChild) return
     setPermBusy(true)
     try {
-      await updateAssetPerm(asset.id, newPerm)
+      await updateAssetPerm(
+        asset.id, newPerm,
+        applyToVariants ? variantFamilyPrimaryId : null,
+      )
       setCurrentPerm(newPerm)
+      // A family change moved rows the caller is showing elsewhere (the variant picker, the grid),
+      // so the list has to be refetched — the optimistic single-row update above is not enough.
+      if (applyToVariants && variantFamilyPrimaryId) onStatusChange?.()
     } catch (err) {
       reportError('feedback.AssetDetail.updatePerm', err)
     } finally {
@@ -82,5 +110,9 @@ export function useAssetLifecycle(
   return {
     currentStatus, currentPerm, statusBusy, statusError, permBusy, deleteBusy, deleteError,
     changeStatus, approve, changePerm, removeAsset,
+    isGalleryChild,
+    variantCount: variants.length,
+    canApplyToVariants: variantFamilyPrimaryId != null,
+    applyToVariants, setApplyToVariants,
   }
 }

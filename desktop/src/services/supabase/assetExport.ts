@@ -66,9 +66,11 @@ export async function exportAssetsToSupabase(
     const existing = new Map<string, StableRow>();
     let readFailed = false;
     try {
+      // perm/status come along for readme.md only — the pipeline reports them, never rewrites
+      // perm on an existing row (see stripPortalOwnedFields).
       const rows = await fetchAllForClient<StableRow>(
         base, 'assets?status=neq.archived', clientId,
-        'id,stable_id,child_id,thumbnail_url,parent_id,variant_of', headers,
+        'id,stable_id,child_id,thumbnail_url,parent_id,variant_of,perm,status', headers,
       );
       for (const r of rows) existing.set(`${r.stable_id}:${r.child_id}`, r);
     } catch (e) {
@@ -101,7 +103,12 @@ export async function exportAssetsToSupabase(
 
     appendLog('success', `  ✓  Stable identity: ${plan.parentWrites.length} parent/single · ${plan.childWrites.length} child record(s) synced`);
 
-    await writeReadmes(plan.readmeTargets, parentIdByKey, vocab, config, appendLog);
+    // Access level as the DB has it, for readme.md. A row created this run isn't in here with a
+    // perm, so the target's own create-time default stands in.
+    const dbLevelById = new Map<string, { perm?: string | null; status?: string | null }>();
+    for (const row of existing.values()) dbLevelById.set(row.id, { perm: row.perm, status: row.status });
+
+    await writeReadmes(plan.readmeTargets, parentIdByKey, dbLevelById, vocab, config, appendLog);
 
     /* ── 4. Disconnect ────────────────────────────────────────────────────── */
     // Skipped when the read failed: "no row for this key" would then mean "unknown", not
@@ -123,10 +130,16 @@ export async function exportAssetsToSupabase(
  * readme.md — a human/Obsidian-facing mirror of the DB, regenerated in full every run.
  * Stats attach to the PRIMARY row only, matching the convention that ratings, comments and
  * downloads are tracked against the primary rather than individual variants.
+ *
+ * Status and permission are REPORTED, not asserted: both used to be hardcoded here
+ * (`published`/`public`), so the note claimed every asset was world-readable whatever the row
+ * actually said. Since these notes are how the library gets read in Obsidian, that is the one
+ * place a wrong access level is most likely to be believed.
  */
 async function writeReadmes(
   targets: ReadmeTarget[],
   parentIdByKey: Map<string, string>,
+  dbLevelById: Map<string, { perm?: string | null; status?: string | null }>,
   vocab: VocabularyData,
   config: SupabaseConfig,
   appendLog: (type: string, msg: string) => void,
@@ -146,8 +159,11 @@ async function writeReadmes(
     try {
       const parsed = parseFilename(t.stem, vocabCtx);
       const p      = parseAssetForSupabase(t.stem, vocab);
+      const dbLevel = dbLevelById.get(primaryId);
       await writeReadme(t.packageDir, {
-        name: p.name, stableId: t.stableId, status: 'published', version: p.version, perm: 'public',
+        name: p.name, stableId: t.stableId, version: p.version,
+        status: dbLevel?.status ?? t.status,
+        perm:   dbLevel?.perm   ?? t.perm,
         tags: parsed.tags, stats: statsMap.get(primaryId) ?? null,
       });
       written++;

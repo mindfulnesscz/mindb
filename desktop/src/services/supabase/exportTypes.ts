@@ -22,6 +22,10 @@ export interface StableRow {
   download_key?: string | null;
   parent_id: string | null;
   variant_of: string | null;
+  /** Access level as the DATABASE has it — portal-owned after creation, so the pipeline
+   *  reads it (for readme.md) but never writes it on an update. See stripPortalOwnedFields. */
+  perm?: string | null;
+  status?: string | null;
 }
 
 /** A top-of-hierarchy row: a single asset's primary, or a gallery parent. */
@@ -48,6 +52,11 @@ export interface ReadmeTarget {
   packageDir: string;
   stableId: string;
   stem: string;
+  /** What this run WOULD write for a brand-new row. For a row that already exists the readme
+   *  shows the database's value instead — perm and status are portal-owned once created, and a
+   *  readme asserting the pipeline's default would misreport who can see the asset. */
+  perm: string;
+  status: string;
 }
 
 /** Everything the planning stage produces for the writing stage. */

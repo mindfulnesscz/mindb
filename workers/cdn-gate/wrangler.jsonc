@@ -1,0 +1,103 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "dc-hub-cdn-gate",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-07-01",
+	// Smart Placement is deliberately ABSENT from every environment below. It moves a Worker toward
+	// its origin, which helps Workers that make database calls; this one makes none on the read path,
+	// so it belongs at the edge nearest the user. Adding `"placement": { "mode": "smart" }` would make
+	// every grid view slower, not faster.
+	// ⚠ `vars` and `r2_buckets` are NOT inherited by named environments — Wrangler treats bindings and
+	// vars as per-environment. Every env below therefore repeats the full set. The duplication is
+	// deliberate: an env missing COOKIE_DOMAIN answers /auth with a 503, and an env missing
+	// ALLOWED_ORIGINS serves no CORS headers at all, both of which look like code faults.
+	/* ── Top level = `wrangler dev` on localhost ────────────────────────────────
+     A local run has no disruptcollective.com to scope a cookie to, so it uses `localhost`.
+     Browsers treat localhost as a secure context, so the Secure attribute still works over http.
+     The R2 binding is simulated locally by Wrangler — no real bucket is needed to develop. */
+	"observability": {
+		"enabled": true
+	},
+	"vars": {
+		"COOKIE_DOMAIN": "localhost",
+		"ALLOWED_ORIGINS": "http://localhost:5173",
+		"TOKEN_TTL_SECONDS": "1800",
+				"CACHE_EPOCH": "2"
+	},
+	// ONE binding, simulated locally by Wrangler — no real bucket needed to develop.
+	//
+	// Do not add the staging or production buckets here. The Worker only ever reads `GATED`, so
+	// extra bindings buy nothing, and a `"remote": true` binding forces `wrangler dev` into remote
+	// mode — which then refuses to start without a registered workers.dev subdomain. Naming the real
+	// buckets at the top level would also mean a stray `wrangler dev` could write to them.
+	"r2_buckets": [
+		{
+			"binding": "GATED",
+			"bucket_name": "dc-hub-gated-dev"
+		}
+	],
+	// Secrets, set per environment with `wrangler secret put … --env <name>` — never in this file:
+	//   CDN_COOKIE_SECRET   HS256 signing key for the CDN cookie
+	//   SUPABASE_URL        project the /auth route validates sessions against
+	//   SUPABASE_ANON_KEY   publishable key; the caller's own token does the authorizing
+	// For `wrangler dev`, put the same three in workers/cdn-gate/.dev.vars (gitignored).
+	"env": {
+		"staging": {
+			"name": "dc-hub-cdn-gate-staging",
+			"observability": {
+				"enabled": true
+			},
+			"vars": {
+				// Same registrable domain as the portal — this is what lets staging.hub's <img> requests
+				// carry the cookie to files-staging.
+				"COOKIE_DOMAIN": ".disruptcollective.com",
+				// Exact origins only: `*` is invalid alongside credentials and is dropped by the browser
+				// with no server-side signal. Ephemeral *.vercel.app previews cannot be listed here and
+				// could not work anyway — a .disruptcollective.com cookie is never sent to vercel.app.
+				"ALLOWED_ORIGINS": "https://staging.hub.disruptcollective.com,http://localhost:5173",
+				"TOKEN_TTL_SECONDS": "1800",
+				"CACHE_EPOCH": "2"
+			},
+			"r2_buckets": [
+				{
+					"binding": "GATED",
+					"bucket_name": "dc-hub-gated-staging"
+				}
+			],
+			// custom_domain, not a plain route: it provisions DNS and a certificate, and the Cache API
+			// only actually caches on a custom domain (it is a silent no-op on workers.dev).
+			"routes": [
+				{
+					"pattern": "files-staging.disruptcollective.com",
+					"custom_domain": true
+				}
+			]
+		},
+		"production": {
+			"name": "dc-hub-cdn-gate",
+			"observability": {
+				"enabled": true
+			},
+			"vars": {
+				"COOKIE_DOMAIN": ".disruptcollective.com",
+				"ALLOWED_ORIGINS": "https://hub.disruptcollective.com",
+				"TOKEN_TTL_SECONDS": "1800",
+				"CACHE_EPOCH": "2"
+			},
+			// This bucket must have NO public access and NO custom domain of its own. This binding being
+			// its only door is what makes a broken route fail closed instead of publishing the library.
+			"r2_buckets": [
+				{
+					"binding": "GATED",
+					"bucket_name": "dc-hub-gated"
+				}
+			],
+			"routes": [
+				{
+					"pattern": "files.disruptcollective.com",
+					"custom_domain": true
+				}
+			]
+		}
+	}
+}

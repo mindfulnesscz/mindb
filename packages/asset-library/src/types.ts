@@ -1,7 +1,15 @@
 export type Role = 'public' | 'member' | 'editor' | 'admin' | 'super_admin'
 
 export type AssetStatus = 'draft' | 'review' | 'approved' | 'published' | 'archived' | 'disconnected'
-export type AssetPerm = 'public' | 'client' | 'internal'
+/**
+ * Who MAY see an asset, in ascending order of restriction. `guest` (added 2026-07-31) means
+ * anyone signed in, whoever they are — the level behind email capture.
+ *
+ * This is only half the access question: `status` gates independently, and the value that
+ * actually decides both row discovery and byte delivery is the two combined. See
+ * `effectiveLevel` in ./permissions.
+ */
+export type AssetPerm = 'public' | 'guest' | 'client' | 'internal'
 export type ApprovalState = 'approved' | 'pending' | 'changes' | 'none'
 export type EntityType = 'product' | 'customer' | 'partner' | 'event' | 'company'
 

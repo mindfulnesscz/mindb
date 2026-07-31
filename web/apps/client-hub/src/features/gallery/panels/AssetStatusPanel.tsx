@@ -24,6 +24,13 @@ export interface AssetStatusPanelProps {
   permBusy: boolean
   deleteBusy: boolean
   deleteError: string | null
+  /** This row's level is forced to its gallery parent's by a DB trigger — show, don't offer. */
+  isGalleryChild: boolean
+  /** This asset has rendition siblings, so the change can cover the set. */
+  canApplyToVariants: boolean
+  variantCount: number
+  applyToVariants: boolean
+  setApplyToVariants: (v: boolean) => void
   onStatusChange: (s: Asset['status']) => void
   onPermChange: (p: Asset['perm']) => void
   onApprove: () => void
@@ -35,6 +42,7 @@ export interface AssetStatusPanelProps {
 export function AssetStatusPanel({
   role, isStaff, accent,
   currentStatus, currentPerm, statusBusy, statusError, permBusy, deleteBusy, deleteError,
+  isGalleryChild, canApplyToVariants, variantCount, applyToVariants, setApplyToVariants,
   onStatusChange: handleStatusChange,
   onPermChange: handlePermChange,
   onApprove: handleApprove,
@@ -101,22 +109,61 @@ export function AssetStatusPanel({
           </div>
         )}
 
-        {/* Publicity / perm selector (staff only) */}
+        {/* Visibility (staff only).
+            A gallery child has no control of its own: its level is its parent's, forced by a DB
+            trigger, so showing a live selector here would offer a change that silently reverts. */}
         {isStaff && (
           <div className="space-y-2">
             <p className="text-[10px] font-sans font-bold uppercase tracking-label text-text-muted">
               Visibility
             </p>
-            <select
-              value={currentPerm}
-              onChange={e => handlePermChange(e.target.value as Asset['perm'])}
-              disabled={permBusy}
-              className="w-full text-sm font-sans border border-border rounded-sm px-3 py-2 bg-bg text-cosmos-black focus:outline-none focus:border-cosmos-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {PERM_OPTIONS.map(o => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
+
+            {isGalleryChild ? (
+              <>
+                <span className="inline-block text-[11px] font-sans font-semibold uppercase tracking-label px-2.5 py-1 border border-border rounded-chip text-cosmos-black">
+                  {PERM_OPTIONS.find(o => o.value === currentPerm)?.label ?? currentPerm}
+                </span>
+                <p className="text-[11px] font-sans text-text-muted leading-snug">
+                  Inherited from the gallery — every image in a gallery shares one level. To show
+                  part of a shoot more widely, split it into its own gallery folder.
+                </p>
+              </>
+            ) : (
+              <>
+                <select
+                  value={currentPerm}
+                  onChange={e => handlePermChange(e.target.value as Asset['perm'])}
+                  disabled={permBusy}
+                  className="w-full text-sm font-sans border border-border rounded-sm px-3 py-2 bg-bg text-cosmos-black focus:outline-none focus:border-cosmos-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {PERM_OPTIONS.map(o => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+
+                {/* Rendition siblings. On by default — "make this public" nearly always means the
+                    deliverable, not the one file on screen. Off is the deliberate rare case. */}
+                {canApplyToVariants && (
+                  <label className="flex items-start gap-2 text-[11px] font-sans text-cosmos-black cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={applyToVariants}
+                      onChange={e => setApplyToVariants(e.target.checked)}
+                      disabled={permBusy}
+                      className="mt-0.5 accent-cosmos-black"
+                    />
+                    <span>
+                      Apply to all {variantCount > 0 ? `${variantCount + 1} ` : ''}versions
+                      <span className="block text-text-muted">
+                        {applyToVariants
+                          ? 'Every format and size of this asset moves together.'
+                          : 'Only this version changes — the others keep their current level.'}
+                      </span>
+                    </span>
+                  </label>
+                )}
+              </>
+            )}
           </div>
         )}
 

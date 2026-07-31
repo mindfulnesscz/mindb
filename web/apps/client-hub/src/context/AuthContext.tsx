@@ -10,6 +10,7 @@ import {
 } from '@dc-hub/auth'
 import { supabase, isConfigured, getConfig } from '../lib/supabase'
 import { configureErrorSink } from '../lib/reportError'
+import { useCdnCookie } from '../hooks/useCdnCookie'
 import type { ProfileRow } from '@dc-hub/database'
 
 // Auth logic + types now live in the shared @dc-hub/auth package. Re-export the
@@ -50,6 +51,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [session?.user.id])
   const [profile, setProfile] = useState<ProfileRow | null>(null)
   const [loading, setLoading] = useState(configured)
+
+  /* Gated thumbnails and downloads are served by the cdn-gate Worker, which authorizes from a
+     cookie rather than from this session. Minting it here, off the access token, means it is in
+     place before the gallery's first <img> fires and is re-minted on every token refresh. A no-op
+     when VITE_CDN_GATE_URL is unset — see cdnGate.ts on why that is a supported state. */
+  useCdnCookie(session?.access_token)
 
   useEffect(() => {
     if (!supabase || !configured) { setLoading(false); return }
