@@ -15,14 +15,22 @@
 -- That is exactly the first failure mode, and it is what "as a guest I only see the first item of a
 -- gallery" looks like from the portal.
 --
--- Read-only. Run as a superuser / service role, or RLS will hide the rows being compared:
+-- Read-only; it changes nothing.
 --
---   docker exec -i supabase_db_dc-hub psql -U postgres -d postgres < supabase/audit/perm_family_mismatch.sql
-
-\pset footer off
+-- HOW TO RUN THIS
+--
+-- Supabase dashboard -> your project -> SQL Editor. Paste the whole file, then SELECT the block
+-- you want and press Run — the editor executes only the highlighted text, and shows one result
+-- grid at a time. Running everything at once shows only the LAST block's result, which is why the
+-- sections below are numbered and independent.
+--
+-- The SQL Editor connects as `postgres`, which bypasses RLS. That is required here: these queries
+-- exist to count rows a normal session is not allowed to see.
+--
+-- (Prefer a terminal? `psql "$CONNECTION_STRING" -f <this file>` also works, but psql is not
+-- installed on this machine by default.)
 
 -- ── 1. Summary: how many families disagree, and in which direction ───────────
-\echo '== 1. Parent level vs child level =='
 with fam as (
   select
     p.effective_level as parent_level,
@@ -45,7 +53,6 @@ group by kind, parent_level, child_level
 order by kind, parent_level, child_level;
 
 -- ── 2. The offending families, named ─────────────────────────────────────────
-\echo '== 2. Mismatched families =='
 select
   cl.name                                as client,
   left(p.name, 40)                       as parent,

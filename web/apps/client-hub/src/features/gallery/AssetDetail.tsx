@@ -58,13 +58,6 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
     submitComment: handleSubmitComment, removeComment: handleDeleteComment,
     onCommentKeyDown: handleCommentKeyDown,
   } = useAssetComments(asset.id, userId, role)
-  const {
-    currentStatus, currentPerm, statusBusy, statusError, permBusy, deleteBusy, deleteError,
-    changeStatus: handleStatusChange, approve: handleApprove,
-    changePerm: handlePermChange, removeAsset: handleDelete,
-    isGalleryChild, canApplyToVariants, variantCount, applyToVariants, setApplyToVariants,
-  } = useAssetLifecycle(asset, onStatusChange, onClose, variants)
-
   const [note, setNote] = useState('')
   // Folder-based stable identity variants (Task 3) — format/size siblings of this asset,
   // distinct from gallery `children` above (those are preview images, not download choices).
@@ -81,6 +74,19 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
   const selectedAsset = sortedVariants.find(v => v.id === selectedVariantId) ?? asset
   const shared      = sortedVariants.length > 0 ? sharedLabels([asset, ...sortedVariants]) : []
   const displayName = shared.length > 0 ? shared.join(' ') : asset.name
+
+  /* The lifecycle panel is bound to the SELECTED variant, not to the primary.
+     It used to take `asset`, which is always the top-level row the grid opened — so the panel
+     showed the primary's status and level whichever variant was picked, and switching between
+     versions appeared to "remember" whatever was set last. Worse, an edit made while looking at
+     one variant silently landed on the primary. A panel must act on the row it displays. */
+  const {
+    currentStatus, currentPerm, statusBusy, statusError, permBusy, permError,
+    deleteBusy, deleteError,
+    changeStatus: handleStatusChange, approve: handleApprove,
+    changePerm: handlePermChange, removeAsset: handleDelete,
+    isGalleryChild, canApplyToVariants, variantCount, applyToVariants, setApplyToVariants,
+  } = useAssetLifecycle(selectedAsset, onStatusChange, onClose, variants)
 
   // Comments
 
@@ -219,6 +225,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
           statusBusy={statusBusy}
           statusError={statusError}
           permBusy={permBusy}
+          permError={permError}
           deleteBusy={deleteBusy}
           deleteError={deleteError}
           isGalleryChild={isGalleryChild}

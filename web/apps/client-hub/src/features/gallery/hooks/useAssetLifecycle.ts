@@ -32,6 +32,11 @@ export function useAssetLifecycle(
   const [statusBusy, setStatusBusy] = useState(false)
   const [statusError, setStatusError] = useState<string | null>(null)
   const [permBusy, setPermBusy] = useState(false)
+  /* A failed visibility write used to be logged and otherwise swallowed, so the selector kept
+     showing the value the user picked while the database still held the old one. For an access
+     boundary that is the worst possible failure mode: it reads as "this is now staff-only" when
+     nothing changed. */
+  const [permError, setPermError] = useState<string | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
   /** Default ON: changing the level almost always means the deliverable, not the one file on
@@ -49,6 +54,7 @@ export function useAssetLifecycle(
     setCurrentStatus(asset.status)
     setCurrentPerm(asset.perm)
     setStatusError(null)
+    setPermError(null)
     setApplyToVariants(true)
 
   }, [asset.id])
@@ -76,16 +82,21 @@ export function useAssetLifecycle(
     // that reverts on the next read.
     if (isGalleryChild) return
     setPermBusy(true)
+    setPermError(null)
     try {
       await updateAssetPerm(
         asset.id, newPerm,
         applyToVariants ? variantFamilyPrimaryId : null,
       )
       setCurrentPerm(newPerm)
-      // A family change moved rows the caller is showing elsewhere (the variant picker, the grid),
-      // so the list has to be refetched — the optimistic single-row update above is not enough.
-      if (applyToVariants && variantFamilyPrimaryId) onStatusChange?.()
+      /* Always refetch, not only on a family change. The grid holds its own copy of these rows,
+         and a level it thinks is stale is a level it will keep showing — including to the person
+         who just changed it, which is exactly how a change that DID apply looks like one that
+         did not. */
+      onStatusChange?.()
     } catch (err) {
+      // Surfaced, not just logged: see setPermError above.
+      setPermError(err instanceof Error ? err.message : 'Failed to update visibility')
       reportError('feedback.AssetDetail.updatePerm', err)
     } finally {
       setPermBusy(false)
@@ -108,7 +119,8 @@ export function useAssetLifecycle(
   }
 
   return {
-    currentStatus, currentPerm, statusBusy, statusError, permBusy, deleteBusy, deleteError,
+    currentStatus, currentPerm, statusBusy, statusError, permBusy, permError,
+    deleteBusy, deleteError,
     changeStatus, approve, changePerm, removeAsset,
     isGalleryChild,
     variantCount: variants.length,

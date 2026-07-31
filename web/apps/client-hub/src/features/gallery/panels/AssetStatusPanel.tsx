@@ -22,6 +22,7 @@ export interface AssetStatusPanelProps {
   statusBusy: boolean
   statusError: string | null
   permBusy: boolean
+  permError: string | null
   deleteBusy: boolean
   deleteError: string | null
   /** This row's level is forced to its gallery parent's by a DB trigger — show, don't offer. */
@@ -42,7 +43,7 @@ export interface AssetStatusPanelProps {
 export function AssetStatusPanel({
   role, isStaff, accent,
   currentStatus, currentPerm, statusBusy, statusError, permBusy, deleteBusy, deleteError,
-  isGalleryChild, canApplyToVariants, variantCount, applyToVariants, setApplyToVariants,
+  permError, isGalleryChild, canApplyToVariants, variantCount, applyToVariants, setApplyToVariants,
   onStatusChange: handleStatusChange,
   onPermChange: handlePermChange,
   onApprove: handleApprove,
@@ -163,6 +164,10 @@ export function AssetStatusPanel({
                   </label>
                 )}
               </>
+            )}
+
+            {permError && (
+              <p className="text-xs font-sans text-red-600">{permError}</p>
             )}
           </div>
         )}
