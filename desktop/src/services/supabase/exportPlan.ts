@@ -28,6 +28,24 @@ import {
 import type { ExportPlan, ChildWrite, ParentWrite, ReadmeTarget, StableRow } from './exportTypes';
 import type { IdentifiedAssets } from './exportIdentify';
 
+/**
+ * Access level for a row the pipeline CREATES. Deliberately not `public`.
+ *
+ * Until 2026-07-31 every export path hardcoded `perm: 'public'`, overriding the column's own
+ * `client` default on every write — so the whole library was discoverable by anonymous portal
+ * visitors, regardless of intent. `client` means "the client this asset belongs to, plus staff";
+ * anything genuinely world-readable is promoted deliberately in the portal.
+ *
+ * This is a CREATE-time default only. `perm` is portal-owned once the row exists — see
+ * stripPortalOwnedFields in ./exportWrite, without which a pipeline run would drag an editor's
+ * deliberate promotion back down (and, once level is encoded in the R2 object key, move the
+ * bytes with it).
+ */
+export const PIPELINE_DEFAULT_PERM = 'client';
+
+/** Lifecycle state for a row the pipeline creates. Also create-time only, same reasoning. */
+export const PIPELINE_DEFAULT_STATUS = 'published';
+
 export interface PlanInput {
   identified: IdentifiedAssets;
   clientId: string;
@@ -59,8 +77,8 @@ export async function planExport(input: PlanInput): Promise<ExportPlan> {
       angles:        p.angles,
       tags:          p.tags,
       version:       p.version,
-      status:        'published',
-      perm:          'public',
+      status:        PIPELINE_DEFAULT_STATUS,
+      perm:          PIPELINE_DEFAULT_PERM,
       thumbnail_url: cdnUrls?.get(absPath) ?? null,
       download_url:  originalUrls?.get(absPath) ?? null,
       // cloudUrls carries its own composite destId:stem key — see runCloudExport.
@@ -124,6 +142,20 @@ export async function planExport(input: PlanInput): Promise<ExportPlan> {
       const primary = resolvedItems.find(i => i.childId === 'c1') ?? resolvedItems[0];
       const primaryKey = `${stableId}:${primary.childId}`;
 
+      /* A NEW rendition joining an EXISTING set takes that set's level, not the create-time
+         default. Without this, adding a print variant to an asset an editor had promoted to
+         `public` would insert it at `client` — a set whose members disagree, which reads in the
+         portal as a variant picker that half-works. Existing rows are unaffected either way:
+         stripPortalOwnedFields drops `perm` from every PATCH.
+
+         Gallery children need no equivalent here — a database trigger forces them to their
+         parent's level whatever this stage sends (20260731130000). */
+      const existingPrimaryPerm = (existingByStableId.get(stableId) ?? [])
+        .find(row => `${row.stable_id}:${row.child_id}` === primaryKey)?.perm;
+      if (existingPrimaryPerm) {
+        for (const item of resolvedItems) item.record.perm = existingPrimaryPerm;
+      }
+
       // A real variant group (more than one surviving file): the primary's own name/tags are
       // just one variant's filename, which reads as noise on a "group" card (e.g. a generic
       // group ending up named "... — Accuracy"). Rename it to the tags shared by every variant,
@@ -141,7 +173,11 @@ export async function planExport(input: PlanInput): Promise<ExportPlan> {
       }
 
       parentWrites.push({ key: primaryKey, record: primary.record });
-      readmeTargets.push({ packageDir, stableId, stem: primary.stem });
+      readmeTargets.push({
+        packageDir, stableId, stem: primary.stem,
+        perm:   primary.record.perm   as string,
+        status: primary.record.status as string,
+      });
       for (const item of resolvedItems) {
         // Compare by child id, not object identity — a duplicate resolution of
         // the primary must never become a self-referencing variant write.
@@ -195,22 +231,24 @@ export async function planExport(input: PlanInput): Promise<ExportPlan> {
       const uniq = (arr: string[]) => [...new Set(arr.filter(Boolean))];
       const parentKey = `${stableId}:${parentChildId}`;
       currentStableKeys.add(parentKey);
-      readmeTargets.push({ packageDir, stableId, stem: group.name });
-      parentWrites.push({
-        key: parentKey,
-        record: {
-          client_id: clientId, stable_id: stableId, child_id: parentChildId,
-          shortcode: pp.shortcode || pkg?.shortcode || leafFolder,
-          name: displayName,
-          entities: uniq([...(pkg?.entities ?? []), ...pp.entities]),
-          formats:  uniq([...(pkg?.formats ?? []),  ...pp.formats]),
-          angles:   uniq([...(pkg?.angles ?? []),   ...pp.angles]),
-          tags:     uniq([...(pkg?.tags ?? []),     ...pp.tags]),
-          version: pp.version || pkg?.version || '1-0-0',
-          status: 'published', perm: 'public', thumbnail_url: firstChildThumb,
-          download_url: firstChildOriginalUrl, download_urls: firstChildCloudUrls,
-        },
+      const galleryParentRecord = {
+        client_id: clientId, stable_id: stableId, child_id: parentChildId,
+        shortcode: pp.shortcode || pkg?.shortcode || leafFolder,
+        name: displayName,
+        entities: uniq([...(pkg?.entities ?? []), ...pp.entities]),
+        formats:  uniq([...(pkg?.formats ?? []),  ...pp.formats]),
+        angles:   uniq([...(pkg?.angles ?? []),   ...pp.angles]),
+        tags:     uniq([...(pkg?.tags ?? []),     ...pp.tags]),
+        version: pp.version || pkg?.version || '1-0-0',
+        status: PIPELINE_DEFAULT_STATUS, perm: PIPELINE_DEFAULT_PERM,
+        thumbnail_url: firstChildThumb,
+        download_url: firstChildOriginalUrl, download_urls: firstChildCloudUrls,
+      };
+      readmeTargets.push({
+        packageDir, stableId, stem: group.name,
+        perm: galleryParentRecord.perm, status: galleryParentRecord.status,
       });
+      parentWrites.push({ key: parentKey, record: galleryParentRecord });
 
       for (const child of group.children) {
         const absPath  = child.absPath;
@@ -232,7 +270,8 @@ export async function planExport(input: PlanInput): Promise<ExportPlan> {
             angles:   cp.angles.length   ? cp.angles   : pp.angles,
             tags:     cp.tags.length     ? cp.tags     : pp.tags,
             version:  cp.version || pp.version,
-            status: 'published', perm: 'public', thumbnail_url: cdnUrls?.get(absPath) ?? null,
+            status: PIPELINE_DEFAULT_STATUS, perm: PIPELINE_DEFAULT_PERM,
+            thumbnail_url: cdnUrls?.get(absPath) ?? null,
             download_url: originalUrls?.get(absPath) ?? null,
             download_urls: cloudUrls?.get(fileStem) ?? [],
           },

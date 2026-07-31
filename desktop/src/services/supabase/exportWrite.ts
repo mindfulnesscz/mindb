@@ -11,6 +11,11 @@
  * stripAbsentUrls matters because PATCH leaves omitted fields untouched in Postgres: sending
  * `thumbnail_url: null` from a run where the upload phase was cached or disabled would BLANK the
  * image the portal is already serving. Absent means "no opinion", not "clear it".
+ *
+ * stripPortalOwnedFields uses that same PATCH semantics deliberately: `perm` is a decision an
+ * editor makes in the portal, so the pipeline supplies it once at INSERT and then has no opinion.
+ * Sending it on every update would silently undo every promotion or lock-down between runs — and
+ * because the access level is encoded in the R2 object key, it would drag the bytes back too.
  */
 
 import { sbFetch } from './rest';
@@ -38,6 +43,18 @@ export function stripAbsentUrls(record: Record<string, unknown>): Record<string,
 }
 
 /**
+ * Drop fields the portal owns once a row exists — see the note above.
+ *
+ * `perm` only. `status` stays on the update path on purpose: it is how a row whose file came back
+ * to disk is un-`disconnected`, and dropping it would leave reconnected assets invisible forever.
+ */
+export function stripPortalOwnedFields(record: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...record };
+  delete out.perm;
+  return out;
+}
+
+/**
  * Write parents/singles. Returns key → row uuid so children can be linked.
  * `existing` is updated as we go, so a key resolved more than once this run still lands as an
  * update rather than a duplicate insert.
@@ -60,7 +77,8 @@ export async function writeParents(
     try {
       if (existingRow) {
         const res = await sbFetch(`${base}/assets?id=eq.${existingRow.id}`, {
-          method: 'PATCH', headers: { ...headers, Prefer: 'return=minimal' }, body: JSON.stringify(record),
+          method: 'PATCH', headers: { ...headers, Prefer: 'return=minimal' },
+          body: JSON.stringify(stripPortalOwnedFields(record)),
         });
         if (res.ok) { result.updated++; parentIdByKey.set(key, existingRow.id); }
         else { appendLog('error', `  ✕  Stable update failed for ${key}: ${await res.text()}`); result.errors++; }
@@ -110,7 +128,8 @@ export async function writeChildren(
     try {
       if (existingRow) {
         const res = await sbFetch(`${base}/assets?id=eq.${existingRow.id}`, {
-          method: 'PATCH', headers: { ...headers, Prefer: 'return=minimal' }, body: JSON.stringify(withParent),
+          method: 'PATCH', headers: { ...headers, Prefer: 'return=minimal' },
+          body: JSON.stringify(stripPortalOwnedFields(withParent)),
         });
         if (res.ok) result.updated++;
         else { appendLog('error', `  ✕  Stable child update failed for ${key}: ${await res.text()}`); result.errors++; }

@@ -73,7 +73,7 @@ describe('assetExport — a fresh package folder', () => {
     expect(restStub.inserted()[0]).toMatchObject({
       client_id: CLIENT, stable_id: 'a1000001', child_id: 'c1',
       shortcode: '(PRD)(SlD) Deck', name: 'Product Slides — Deck',
-      status: 'published', perm: 'public',
+      status: 'published', perm: 'client',
       parent_id: null, variant_of: null,
     });
   });
@@ -110,6 +110,87 @@ describe('assetExport — a fresh package folder', () => {
     expect(restStub.inserted()).toEqual([]);
     expect(result.errors).toBe(1);
     expect(logged('no " __<hash>" suffix')).toBe(true);
+  });
+});
+
+describe('assetExport — access level', () => {
+  /* Until 2026-07-31 every export path hardcoded `perm: 'public'`, overriding the column's own
+     `client` default, so the entire library was discoverable by anonymous portal visitors. These
+     are the tests that would have caught it — and that stop it coming back through any of the
+     four shapes the planner writes (single, variant, gallery parent, gallery child). */
+
+  const EVERY_SHAPE = [
+    `${SRC}/Single __a7000001/OUT/(PRD)(SlD) Deck.pdf`,
+    `${SRC}/Variants __a7000002/OUT/(PRD)(SlD) Deck.pdf`,
+    `${SRC}/Variants __a7000002/OUT/(ACQ)(Pdf) Deck.pdf`,
+    `${SRC}/Shoot __a7000003/OUT/(PRD)(Gll) Studios/01.jpg`,
+    `${SRC}/Shoot __a7000003/OUT/(PRD)(Gll) Studios/02.jpg`,
+  ];
+
+  it('never writes perm: public from ANY export path', async () => {
+    EVERY_SHAPE.forEach(p => vfs.put(p, p));
+    await sync(EVERY_SHAPE);
+
+    const rows = restStub.inserted();
+    expect(rows.length).toBeGreaterThan(4);          // all four shapes actually exercised
+    expect(rows.filter(r => r.perm === 'public')).toEqual([]);
+    for (const row of rows) expect(row.perm).toBe('client');
+  });
+
+  it('leaves perm alone on an UPDATE, so a portal promotion survives the next run', async () => {
+    // perm is an editor's decision. Sending the pipeline default on every PATCH would quietly
+    // undo it — and once the level is encoded in the R2 object key, move the bytes back with it.
+    const p = `${SRC}/Asset __a7000004/OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.put(p, 'pdf');
+    restStub.existingRows = [{ id: 'row-promoted', stable_id: 'a7000004', child_id: 'c1' }];
+
+    await sync([p]);
+
+    const body = restStub.patched()[0];
+    expect('perm' in body).toBe(false);
+  });
+
+  it('inserts a NEW variant at the level its existing set already has', async () => {
+    // Adding a print rendition to an asset staff had promoted to `public` must not insert it at
+    // the create-time default: a set whose members disagree shows up as a variant picker that
+    // half-works, which is the same class of fault as the gallery-with-hidden-children bug.
+    const primary = `${SRC}/Asset __a7000006/OUT/(PRD)(SlD) Deck.pdf`;
+    const fresh   = `${SRC}/Asset __a7000006/OUT/(ACQ)(Pdf) Deck.pdf`;
+    [primary, fresh].forEach(p => vfs.put(p, p));
+    restStub.existingRows = [
+      { id: 'row-promoted', stable_id: 'a7000006', child_id: 'c1',
+        thumbnail_url: null, parent_id: null, variant_of: null, perm: 'public', status: 'published' },
+    ];
+
+    await sync([primary, fresh]);
+
+    // The one INSERT is the new variant; it takes the set's level, not PIPELINE_DEFAULT_PERM.
+    expect(restStub.inserted()).toHaveLength(1);
+    expect(restStub.inserted()[0].perm).toBe('public');
+    // …and the existing primary is still not re-stamped, because perm is insert-only.
+    expect('perm' in restStub.patched()[0]).toBe(false);
+  });
+
+  it('falls back to the default level when the set is brand new', async () => {
+    const a = `${SRC}/Asset __a7000007/OUT/(PRD)(SlD) Deck.pdf`;
+    const b = `${SRC}/Asset __a7000007/OUT/(ACQ)(Pdf) Deck.pdf`;
+    [a, b].forEach(p => vfs.put(p, p));
+
+    await sync([a, b]);
+
+    for (const row of restStub.inserted()) expect(row.perm).toBe('client');
+  });
+
+  it('still sends status on an UPDATE, so a returning file is un-disconnected', async () => {
+    // The counterpart to the test above: status is NOT portal-owned on the write path, because
+    // re-appearing on disk is how a `disconnected` row comes back.
+    const p = `${SRC}/Asset __a7000005/OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.put(p, 'pdf');
+    restStub.existingRows = [{ id: 'row-back', stable_id: 'a7000005', child_id: 'c1' }];
+
+    await sync([p]);
+
+    expect(restStub.patched()[0].status).toBe('published');
   });
 });
 
