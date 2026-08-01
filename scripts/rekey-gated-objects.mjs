@@ -176,6 +176,11 @@ async function s3(creds, bucket, method, key, body = null, extraHeaders = {}) {
 
 /* ── the work ─────────────────────────────────────────────────────────────── */
 
+/* Must match parseGatedKey in workers/cdn-gate/src/authz.ts — the Worker restates this shape by
+   hand because it is a separate deployment, so the two are checked against each other here. */
+const GATED_KEY_SHAPE =
+  /^(public|guest|client|internal)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/.+/i;
+
 const log = (...a) => console.log(...a);
 const plan = { skip: 0, copy: 0, repoint: 0, del: 0, missing: 0, failed: 0 };
 
@@ -271,8 +276,25 @@ async function main() {
          next run, where a wrong key is a re-upload rather than a lost file. */
       const currentTier = source.bucket === env.R2_BUCKET ? 'public' : 'gated';
       const bare = source.key.replace(/^(public|guest|client|internal)\//, '');
+
+      /* The gated key must be `{level}/{client_id}/…` — the Worker reads the client out of the
+         second segment to decide tenant access, without a lookup. Objects from before the
+         per-client prefix carry keys like `thumbnails/{stable}/{child}.webp` with no client at
+         all, and simply prefixing the level yields `client/thumbnails/…`, which the Worker cannot
+         parse and refuses with a 404. It fails closed, which is right, but the file is then
+         unreachable. So the client id is inserted when the key lacks it. */
+      const withClient = bare.startsWith(`${a.client_id}/`) ? bare : `${a.client_id}/${bare}`;
       const targetTier = tierFor(level);
-      const targetKey = targetTier === 'public' ? bare : `${level}/${bare}`;
+      const targetKey = targetTier === 'public' ? bare : `${level}/${withClient}`;
+
+      /* Refuse to write a key the gate cannot serve. This is the assertion that should have
+         existed before a single byte moved: it is cheap, it is exact, and its absence let 9
+         production objects land at unreachable addresses before anyone noticed. */
+      if (targetTier === 'gated' && !GATED_KEY_SHAPE.test(targetKey)) {
+        plan.failed++;
+        log(`  ✕  ${a.id} ${column}: refusing unservable key ${targetKey}`);
+        continue;
+      }
 
       if (currentTier === targetTier && source.key === targetKey) { plan.skip++; continue; }
 
