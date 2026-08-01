@@ -5,8 +5,10 @@ import { useClientStore } from '../../store/clientStore';
 import { useAuthStore } from '../../store/authStore';
 import { saveEnvironments, makeEnvironment, validateAnonKey } from '../../services/environmentService';
 import { checkSupabaseConnection } from '../../services/supabaseService';
+import { reportError } from '../../services/reportError';
 import { CloudDestinations } from '../cloud/CloudDestinations';
 import css from './SettingsView.module.css';
+import { DiagnosticsCard } from './DiagnosticsCard';
 
 export function SettingsView() {
   const { settings, setField, markClean } = useSettingsStore();
@@ -34,20 +36,6 @@ export function SettingsView() {
           <div className={css.card}>
             <div className={css.cardTitle}>Folder patterns</div>
             <div className={css.fields}>
-              <div className={css.field}>
-                <span className={css.fieldLabel}>Filter mode</span>
-                <div className={css.segmentedControl}>
-                  {(['blacklist', 'whitelist'] as const).map(mode => (
-                    <button
-                      key={mode}
-                      className={`${css.segment}${settings.filterMode === mode ? ` ${css.active}` : ''}`}
-                      onClick={() => setField('filterMode', mode)}
-                    >
-                      {mode.charAt(0).toUpperCase() + mode.slice(1)}
-                    </button>
-                  ))}
-                </div>
-              </div>
               <Field
                 label="Package folder prefix"
                 value={settings.packagePrefix}
@@ -61,15 +49,9 @@ export function SettingsView() {
                 mono
               />
               <Field
-                label="Exclude mark (blacklist)"
+                label="Exclude mark"
                 value={settings.excludeMark}
                 onChange={v => setField('excludeMark', v)}
-                mono
-              />
-              <Field
-                label="Include mark (whitelist)"
-                value={settings.includeMark}
-                onChange={v => setField('includeMark', v)}
                 mono
               />
             </div>
@@ -113,6 +95,7 @@ export function SettingsView() {
             <EnvironmentSettings />
           </div>
 
+          <DiagnosticsCard />
         </div>
       </div>
     </div>
@@ -133,14 +116,16 @@ function EnvironmentSettings() {
     setActiveEnvId(envId);
     useClientStore.getState().setClients([]);
     useClientStore.getState().setActiveClientId(null);
-    await saveEnvironments({ activeId: envId, list: environments }).catch(console.error);
+    await saveEnvironments({ activeId: envId, list: environments })
+      .catch(e => reportError('env.SettingsView.activateEnvironment', e));
   }
 
   async function addEnvironment() {
     const env = makeEnvironment({ name: 'New environment' });
     const list = [...environments, env];
     setEnvironments(list);
-    await saveEnvironments({ activeId: activeEnvId, list }).catch(console.error);
+    await saveEnvironments({ activeId: activeEnvId, list })
+      .catch(e => reportError('env.SettingsView.addEnvironment', e));
   }
 
   async function removeEnvironment(envId: string) {
@@ -149,7 +134,8 @@ function EnvironmentSettings() {
     if (!confirm(`Remove environment "${env?.name || env?.supabaseUrl}"? Its machine-local client config stays on disk.`)) return;
     const list = environments.filter(e => e.id !== envId);
     setEnvironments(list);
-    await saveEnvironments({ activeId: activeEnvId, list }).catch(console.error);
+    await saveEnvironments({ activeId: activeEnvId, list })
+      .catch(e => reportError('env.SettingsView.removeEnvironment', e));
   }
 
   const [name,    setName]    = useState(activeEnv?.name        ?? '');
@@ -174,7 +160,8 @@ function EnvironmentSettings() {
       ? { ...e, name: name.trim(), supabaseUrl: url.trim().replace(/\/+$/, ''), anonKey: anonKey.trim() }
       : e);
     setEnvironments(updated);
-    await saveEnvironments({ activeId: activeEnvId, list: updated }).catch(console.error);
+    await saveEnvironments({ activeId: activeEnvId, list: updated })
+      .catch(e => reportError('env.SettingsView.saveEnvironmentFields', e));
   }
 
   async function checkConnection() {

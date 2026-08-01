@@ -17,7 +17,7 @@ export async function fetchPendingRenameTasks(
   const base = `${config.url}/rest/v1`;
   const res = await sbFetch(
     `${base}/rename_tasks?client_id=eq.${clientId}&status=eq.pending&select=*&order=created_at`,
-    { headers: makeHeaders(config.anonKey) },
+    { headers: await makeHeaders(config.anonKey) },
   );
   if (!res.ok) throw new Error(await res.text());
   return await res.json<RenameTask[]>();
@@ -35,7 +35,7 @@ export async function updateRenameTaskStatus(
   }
   const res = await sbFetch(`${base}/rename_tasks?id=eq.${taskId}`, {
     method:  'PATCH',
-    headers: { ...makeHeaders(config.anonKey), Prefer: 'return=minimal' },
+    headers: { ...(await makeHeaders(config.anonKey)), Prefer: 'return=minimal' },
     body:    JSON.stringify(body),
   });
   if (!res.ok) throw new Error(await res.text());

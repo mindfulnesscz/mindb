@@ -8,8 +8,10 @@ import {
   type EmailAuthType,
   type OAuthProvider,
 } from '@dc-hub/auth'
-import { supabase, isConfigured } from '../lib/supabase'
-import type { ProfileRow } from '../lib/database.types'
+import { supabase, isConfigured, getConfig } from '../lib/supabase'
+import { configureErrorSink } from '../lib/reportError'
+import { useCdnCookie } from '../hooks/useCdnCookie'
+import type { ProfileRow } from '@dc-hub/database'
 
 // Auth logic + types now live in the shared @dc-hub/auth package. Re-export the
 // types so existing importers (e.g. SignInModal) keep resolving them from here.
@@ -33,8 +35,28 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const configured = isConfigured()
   const [session, setSession] = useState<Session | null>(null)
+
+  /* The sink follows the configured backend, so a staging failure lands in staging. Set before the
+     session resolves, because a failed sign-in is exactly the error worth capturing. */
+  useEffect(() => {
+    const { url, anonKey } = getConfig()
+    configureErrorSink(url && anonKey
+      ? {
+          url, anonKey,
+          environment: import.meta.env.MODE,
+          appVersion: __APP_VERSION__,
+          userId: session?.user.id ?? null,
+        }
+      : null)
+  }, [session?.user.id])
   const [profile, setProfile] = useState<ProfileRow | null>(null)
   const [loading, setLoading] = useState(configured)
+
+  /* Gated thumbnails and downloads are served by the cdn-gate Worker, which authorizes from a
+     cookie rather than from this session. Minting it here, off the access token, means it is in
+     place before the gallery's first <img> fires and is re-minted on every token refresh. A no-op
+     when VITE_CDN_GATE_URL is unset — see cdnGate.ts on why that is a supported state. */
+  useCdnCookie(session?.access_token)
 
   useEffect(() => {
     if (!supabase || !configured) { setLoading(false); return }
@@ -56,7 +78,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function fetchProfile(userId: string) {
     if (!supabase) return
-    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
+    // maybeSingle: no profile row is a normal state (stale session, invite not completed).
+    // .single() answers that with an opaque 406 instead of null.
+    const { data } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle()
     setProfile(data as ProfileRow | null)
     setLoading(false)
   }

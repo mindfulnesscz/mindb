@@ -130,31 +130,6 @@
   letter-spacing: 0.1em;
 }
 
-.segmentedControl {
-  display: flex;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-
-.segment {
-  flex: 1;
-  padding: 7px 12px;
-  font-family: var(--font-sans);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  cursor: pointer;
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  transition: all var(--dur-fast) var(--ease-out);
-}
-.segment + .segment { border-left: 1px solid var(--border); }
-.segment.active {
-  background: var(--cosmos-black);
-  color: var(--clear-white);
-}
-
 .fieldHint {
   font-size: var(--text-xs);
   color: var(--text-muted);
@@ -163,4 +138,17 @@
 .savedMsg {
   font-size: var(--text-xs);
   color: var(--signal-success);
+}
+
+/* The log path is long and must stay selectable — an operator may want to copy it rather than
+   click through. */
+.pathLine {
+  font-family: var(--font-mono);
+  word-break: break-all;
+  user-select: text;
+}
+
+.diagActions {
+  display: flex;
+  gap: var(--sp-2);
 }

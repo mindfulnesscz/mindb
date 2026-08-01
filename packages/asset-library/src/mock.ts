@@ -1,9 +1,12 @@
+import { DEFAULT_DIMENSION_LABELS } from '@dc-hub/database'
 import type { Asset, Client, Comment } from './types.js'
 
+// A real client always has labels — `toClientIdentity` defaults each one — so the mocks carry them
+// too rather than pretending the field is optional.
 export const MOCK_CLIENTS: Client[] = [
-  { id: 'meridian', name: 'Meridian Labs', accent: '#2E6E4E', initials: 'ML' },
-  { id: 'northwind', name: 'Northwind', accent: '#2B5BD7', initials: 'NW' },
-  { id: 'volta', name: 'Volta Studio', accent: '#B8472D', initials: 'VS' },
+  { id: 'meridian', name: 'Meridian Labs', accent: '#2E6E4E', initials: 'ML', dimensionLabels: DEFAULT_DIMENSION_LABELS },
+  { id: 'northwind', name: 'Northwind', accent: '#2B5BD7', initials: 'NW', dimensionLabels: DEFAULT_DIMENSION_LABELS },
+  { id: 'volta', name: 'Volta Studio', accent: '#B8472D', initials: 'VS', dimensionLabels: DEFAULT_DIMENSION_LABELS },
 ]
 
 export const MOCK_ASSETS: Asset[] = [

@@ -2,13 +2,18 @@
 
 > **Current residual risk:** provider OAuth tokens (and Google client secret where used) remain in machine-local client configuration. Supabase user authentication, secret-free exports, and R2 grants are **already shipped** — permanent service-role and parent R2 keys do not belong on the desktop. See [Auth & secrets roadmap](/desktop/authentication-plan).
 
-## Public CDN nature
+## Two tiers of delivery
 
-R2 objects served through a public domain or custom hostname are reachable by anyone who knows the URL. Treat CDN assets as published unless a private delivery layer is added later.
+Since 2026-07-31 there **is** a private delivery layer — see [Access levels and gated delivery](/cloud-storage/access-levels).
+
+- **Public tier.** Objects on the public bucket domain are reachable by anyone who knows the URL. `?v=<hash>` is cache-busting, not authorization. Only assets whose effective level is `public` live here.
+- **Gated tier.** Everything else lives in a bucket with no public access at all, reachable only through the `cdn-gate` Worker, which authorizes from a signed cookie plus the object key. An anonymous request gets 403.
+
+Two things this does not change. A URL that was already public **stays fetchable at that address forever** by anyone who kept it — re-keying limits future exposure, never past exposure, so treat everything published before 2026-07-31 as permanently public. And an object's level lives in its key, so changing `perm` or `status` moves the bytes; the pipeline and a scheduled reconciler keep that in step.
 
 ## Local secrets today
 
-Expect only **OAuth tokens** (and optional Google client secret) in local config. Restrict OS account access, disk backups, logs, and screenshots. Never put a service-role key or parent R2 secret in web env vars or the desktop. Client export bundles are secret-free (`_version: 2.0`); old imports strip legacy credential fields and warn to rotate.
+Expect only **OAuth tokens** (and optional Google client secret) in local config. Restrict OS account access, disk backups, logs, and screenshots. Never put a service-role key or parent R2 secret in web env vars or the desktop. Client export bundles are secret-free (`_version: 2.0`); importing an older bundle strips any credential fields it still carries and warns to rotate them.
 
 ## Temporary grants
 

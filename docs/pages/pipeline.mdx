@@ -59,7 +59,7 @@ Copy decisions use an mtime check (`isUnchanged`): if the destination file alrea
 
 ### 3 — Export to destinations
 
-Resolves the checked **local** destination’s machine path (or legacy `settings.targetFolder`). Shape comes from `exportLayout` + optional `includePackages`. Publish/export always keeps **highest version only** (one file per base+extension).
+Resolves the checked **local** destination’s machine path (falling back to `settings.targetFolder`). Shape comes from `exportLayout` + optional `includePackages`. Publish/export always keeps **highest version only** (one file per base+extension).
 
 - **`folders` (default):** mirrors the source tree looking for `OUT`, publishes contents (filenames translated), recurses otherwise. Stable-identity hash suffixes (` __a1b2c3d4`) are stripped from folder names. Package folders next to OUT are skipped here unless packages are included.
 - **`flat`:** all publishable OUT files into the target root (no nesting).
@@ -87,12 +87,11 @@ Despite the name, this step doesn't touch Supabase or the CDN — it generates t
 
 ### Supabase sync
 
-Always runs after the steps above, if a Supabase config is present for the active client. Two identity systems currently coexist, gated per client:
+Always runs after the steps above, if a Supabase config is present for the active client. Assets are matched by **folder-based stable identity**: an 8-hex-char hash suffix on the package folder (` __a1b2c3d4`) plus a per-folder `.dchub.json` manifest mapping individual files to a stable child ID, with SHA-256 content-hash matching as a fallback for renamed files. That pair is immune to filename and taxonomy renames. Stale rows are **soft-marked `disconnected`**, never deleted, so ratings/comments/history stay attached — see [Stable asset identity](/desktop/identity).
 
-- **Legacy (default)** — assets are matched by `shortcode`, a string derived from the filename with the version suffix stripped. A taxonomy or filename rename changes the shortcode, which the pipeline reads as "this asset disappeared" — the old row is deleted and a new one created, orphaning its ratings/comments/history. Stale rows here are **hard-deleted**.
-- **Folder-based stable identity** (`client.identityMigrated`) — assets are matched by an 8-hex-char hash suffix on their package folder (` __a1b2c3d4`), immune to filename/taxonomy renames. A per-folder `.dchub.json` manifest maps individual files to a stable child ID, with SHA-256 content-hash matching as a fallback for renamed files. Stale rows here are **soft-marked `disconnected`**, never deleted — see `CLAUDE_CODE_PROMPT_identity-migration.md` at the repo root for the full design and migration procedure (`desktop/scripts/migrate-identity.ts`).
+An asset in a folder with no hash suffix has no identity to sync by: it is reported as an error and skipped. Create packages through the Vocabulary screen so they are born with one.
 
-Either way, this step also cleans up R2 objects for assets no longer present on disk — except any object key still referenced by an active record (protects a gallery parent's shared thumbnail). Tag trees are **not** synced from vocabulary JSON (web TagsAdmin is source of truth); the desktop may process pending `rename_tasks` from web tag edits.
+This step also cleans up R2 objects for assets no longer present on disk — except any object key still referenced by an active record (protects a gallery parent's shared thumbnail). Tag trees are **not** synced from vocabulary JSON (web TagsAdmin is source of truth); the desktop may process pending `rename_tasks` from web tag edits.
 
 ### Version history sync
 

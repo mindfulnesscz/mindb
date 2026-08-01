@@ -4,7 +4,7 @@ An asset row has client, name/shortcode, taxonomy arrays, status, permission, ve
 
 Two grouping systems coexist:
 
-- Legacy galleries use `parent_id`; child shortcodes historically use `Parent|childStem`.
+- Galleries link children with `parent_id`; child shortcodes read `Parent|childStem`.
 - Stable package variants use `variant_of`; one primary row is shown as the top-level card and siblings appear in detail.
 
 Top-level queries exclude both relationship types and separately count/load them. Archived/disconnected related rows are excluded. Deleting a referenced primary may be blocked when foreign-key behavior does not cascade or null the relationship.

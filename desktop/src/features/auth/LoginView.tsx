@@ -64,16 +64,12 @@ export function LoginView() {
     // the first. Further environments come from "+ Add environment…" above.
     const fallbackName = url.includes('localhost') || url.includes('127.0.0.1') ? 'Local' : 'Production';
     const name = serverName.trim() || fallbackName;
-    let list = environments;
-    let envId = activeEnvId;
     const active = environments.find(e2 => e2.id === activeEnvId);
-    if (active) {
-      list = environments.map(e2 => e2.id === active.id ? { ...e2, name, supabaseUrl: url, anonKey } : e2);
-    } else {
-      const env = makeEnvironment({ name, supabaseUrl: url, anonKey });
-      list = [...environments, env];
-      envId = env.id;
-    }
+    const created = active ? null : makeEnvironment({ name, supabaseUrl: url, anonKey });
+    const list = active
+      ? environments.map(e2 => e2.id === active.id ? { ...e2, name, supabaseUrl: url, anonKey } : e2)
+      : [...environments, created!];
+    const envId = created ? created.id : activeEnvId;
     await saveEnvironments({ activeId: envId, list });
     setEnvironments(list);
     setActiveEnvId(envId);

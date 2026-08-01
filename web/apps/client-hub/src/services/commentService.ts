@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase'
+import { reportError } from '../lib/reportError'
 
 export interface RealComment {
   id: string
@@ -23,7 +24,7 @@ export async function fetchComments(assetId: string): Promise<RealComment[]> {
     .order('created_at', { ascending: true })
 
   if (error) {
-    console.error('fetchComments error:', error.message)
+    reportError('feedback.commentService.fetchComments', error)
     return []
   }
 

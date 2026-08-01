@@ -23,8 +23,19 @@ jobs:
       - uses: supabase/setup-cli@v1
         with:
           version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - run: supabase db start
       - run: supabase db lint --level warning
+      # RLS tenant isolation (F-1) as a tested property, not a policy re-read.
+      # supabase/tests/*.test.sql — pgTAP, transactional, safe against seed data.
+      - name: RLS policy tests
+        run: supabase test db
+      # The committed types must match a schema replayed from zero. A missing type is
+      # not a type error, so drift is silent — `can_see_asset` was absent for a day.
+      - name: Database types match the schema
+        run: node scripts/db-types.mjs check
 
   # Push to the staging branch: apply new migrations to STAGING.
   deploy-staging:

@@ -1,0 +1,58 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  max-width: 62ch;
+  padding: var(--sp-6);
+}
+
+.title {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--text);
+}
+
+.body {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* The message is the most useful thing on screen for a staff user mid-run, so it is shown verbatim
+   rather than summarised. */
+.detail {
+  margin: 0;
+  padding: var(--sp-3);
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--signal-error);
+  white-space: pre-wrap;
+}
+
+.trail {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-subtle);
+}
+
+.retry {
+  padding: 6px 12px;
+  border: 1px solid var(--cosmos-black);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.retry:hover {
+  background: var(--cosmos-black);
+  color: var(--clear-white);
+}

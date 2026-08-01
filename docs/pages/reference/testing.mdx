@@ -1,0 +1,108 @@
+# Testing
+
+## Where it stands
+
+| Suite | Count | Runs with |
+|---|---:|---|
+| Shared packages + portal | 209 | `npm test` |
+| Desktop | 343 | `npm test` |
+| Rust | 43 | `npm run test:rust` |
+| pgTAP (RLS, constraints, rate limits) | 85 | `npm run test:rls` |
+| Playwright portal smoke | 4 | `npm run test:e2e` |
+
+The repo had **27** tests before the v3 refactor. The growth was not incidental: each phase wrote tests
+*first*, and the tests found real defects — cross-tenant rating writes, filename-keyed CDN identity
+overwriting published objects, a silent same-name drop in Collect, a stale token 401, and a rate limit
+that never fired.
+
+## The rule
+
+**Prove behaviour before changing structure.** Write tests that pin what the code does *today*, bugs
+included; then move the code; then check that no test needed editing. A test that had to be adjusted to
+accommodate a refactor was not a characterization test — it was a description of the new code written
+afterwards.
+
+That is what made `pipelineService` 1,894 → 92 lines safe, and why `damService` was only split *after*
+17 tests existed for it.
+
+## Hermetic by default
+
+Desktop has three in-memory harnesses in `desktop/src/test/`:
+
+| Harness | Replaces | Notable |
+|---|---|---|
+| `vfs` | `@tauri-apps/plugin-fs` | Monotonic mtimes, and an `ops` log so a test can assert what was destroyed |
+| `invokeStub` | the Rust bridge | Records `upload_to_r2`, `generate_thumbnail`, `delete_r2_object` |
+| `fetchStub` | the cloud providers' `fetch` | Route-based replies; asserts which request was made |
+
+Use these rather than touching the network or the disk.
+
+## Tests that touch a real database own their tenant
+
+A test writing to the local stack **creates its own client and deletes it afterwards**. It never uses
+the seeded dev client.
+
+This is not tidiness. The asset sync's disconnect stage is client-wide by design: everything absent
+from the current run is marked stale. Pointed at the client a developer is working in, a single
+`npm test` marks every one of their assets `disconnected`. That happened — see F-9. Deleting the
+fixture client is enough cleanup, because `assets_client_id_fkey` cascades.
+
+Two related lessons, both learned the same way:
+
+- **Run as the role that actually calls the code.** A pgTAP case using `reset role` runs as superuser
+  and bypasses RLS, so it can pass while proving nothing about `anon` — which is who inserts in
+  production (F-10).
+- **Scope counts to the test's own rows.** A suite counting a whole table passes only against an empty
+  database, and breaks the first time real data exists.
+
+## Coverage is a ratchet
+
+Thresholds in `vitest.config.ts` and `desktop/vitest.config.ts` sit just **under** today's numbers, so
+the gate only stops coverage going down. A threshold set above the current number fails on day one, and
+a gate that is red on day one gets commented out within a week — at which point it protects nothing.
+
+Honest current state:
+
+| Area | Lines |
+|---|---:|
+| `packages/domain` | 88% |
+| `packages/database` (clients projection) | 90% |
+| `desktop/src/services/cloud` | 61% |
+| `desktop/src/services/pipeline` | 60% |
+| `desktop/src/services/supabase` | 55% |
+| `desktop/src/services` overall | **42%** |
+| `desktop/src/services/dam` | 16% |
+| `desktop/src/services` root files | 13% |
+
+Raise a threshold in its own commit when you add tests.
+
+## Next steps
+
+In rough order of value:
+
+1. **`services/` root — 13%.** `clientService`, `environmentService`, `authService`, `vocabService`,
+   `settingsService`. `clientService` is the highest value: it merges portal identity with machine-local
+   config, and a mistake there silently changes which folders a client publishes to.
+2. **`dam/` — 16%.** Only `patchMeta` has real coverage. The canvas builder and scanning have none, and
+   the canvas is regenerated wholesale on every run.
+3. **Extend the e2e smoke** to the write path — rate and comment — once there is a way to do it without
+   leaving rows in a shared database. Today it deliberately covers reads only.
+4. **Desktop UI components** have no tests at all. Lower value than the above: the logic was extracted
+   into hooks and pure modules during the refactor, and those *are* tested.
+
+The plan's original target was 70% on `domain` + services. `domain` is past it; the services are not,
+and closing that is test-writing rather than configuration.
+
+## Commands
+
+```bash
+npm test              # packages + portal, then desktop
+npm run test:coverage # the same, with the ratchet enforced
+npm run test:rust     # SigV4 date maths, URI encoding, OAuth authority resolution
+npm run test:rls      # pgTAP — needs `supabase start`
+npm run test:e2e      # Playwright — needs `supabase start`
+npm run check         # versions, toolchain, DB types, lint, builds, clippy
+```
+
+`npm run check` skips the database-type gate when the local stack is down, so start Supabase if you
+touched the schema. The e2e and pgTAP suites skip rather than fail for the same reason.

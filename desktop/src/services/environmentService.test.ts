@@ -23,7 +23,7 @@ describe('portalUrlForEnvironment', () => {
     expect(portalUrlForEnvironment(env)).toBe('https://hub.disruptcollective.com');
   });
 
-  it('ignores legacy "Production (…)" names when the URL is staging', () => {
+  it('prefers the URL over a mislabelled "Production (…)" name', () => {
     const env = makeEnvironment({
       name: 'Production (tvrxnwbh)',
       supabaseUrl: 'https://tvrxnwbhzborkkkdeyuk.supabase.co/',

@@ -16,10 +16,13 @@ import { loadClientsForEnvironment, saveLocalClient, pullCloudDestinations } fro
 import { loadEnvironments } from './services/environmentService';
 import { useEnvironmentStore } from './store/environmentStore';
 import { switchAuthClient, getSession, loadProfile, DESKTOP_ROLES } from './services/authService';
-import { reportError } from './services/reportError';
+import { reportError, configureErrorSink } from './services/reportError';
 import './styles/tokens.css';
 import './styles/global.css';
 import css from './App.module.css';
+import { ViewErrorBoundary } from './app/ViewErrorBoundary';
+
+const APP_VERSION = __APP_VERSION__;
 
 export default function App() {
   const active = useAppStore(s => s.active);
@@ -43,7 +46,7 @@ export default function App() {
 
   /* Localhost reveal bridge for the web portal ("Reveal in Finder"). */
   useEffect(() => {
-    invoke('start_reveal_bridge').catch(console.error);
+    invoke('start_reveal_bridge').catch(e => reportError('os.App.startRevealBridge', e));
   }, []);
 
   /* Keep bridge clientId → sourceFolder map in sync with the active client. */
@@ -53,7 +56,7 @@ export default function App() {
     invoke('set_reveal_client_root', {
       clientId: client.id,
       sourceFolder: client.sourceFolder ?? '',
-    }).catch(console.error);
+    }).catch(e => reportError('os.App.setRevealClientRoot', e));
   }, [activeClientId, clients]);
 
   /* The gate: authenticate against the ACTIVE environment. Re-runs on
@@ -63,6 +66,13 @@ export default function App() {
     if (!envsLoaded.current || !activeEnvId) return;
     const env = useEnvironmentStore.getState().environments.find(e => e.id === activeEnvId) ?? null;
     if (!env || !env.supabaseUrl || !env.anonKey) { setAuthStatus('unconfigured'); return; }
+
+    // Errors report to whichever backend is active, so a staging failure lands in staging. Set before
+    // the auth attempt, because a failure to sign in is exactly the error worth capturing.
+    configureErrorSink({
+      url: env.supabaseUrl, anonKey: env.anonKey,
+      environment: env.name, appVersion: APP_VERSION, userId: null,
+    });
 
     const runId = ++authRunId.current;
     (async () => {
@@ -81,10 +91,14 @@ export default function App() {
         if (authRunId.current !== runId) return;
         if (!DESKTOP_ROLES.includes(profile.role)) { setAuthStatus('denied'); return; }
         setProfile(profile);
+        configureErrorSink({
+          url: env.supabaseUrl, anonKey: env.anonKey,
+          environment: env.name, appVersion: APP_VERSION, userId: profile.id,
+        });
         setAuthStatus('signedIn');
       } catch (e) {
         if (authRunId.current !== runId) return;
-        reportError('App.authForEnvironment', e);
+        reportError('auth.App.authForEnvironment', e);
         setAuthStatus('signedOut');
       }
     })();
@@ -92,7 +106,7 @@ export default function App() {
 
   /* Boot: settings are auth-independent */
   useEffect(() => {
-    loadSettings().then(s => { setSettings(s); markClean(); }).catch(console.error);
+    loadSettings().then(s => { setSettings(s); markClean(); }).catch(e => reportError('config.App.loadSettings', e));
   }, []);
 
   /* Clients are DB-first: fetched per environment once signed in, filtered by
@@ -101,13 +115,13 @@ export default function App() {
   useEffect(() => {
     if (authStatus !== 'signedIn' || !profile || !activeEnv) return;
     useClientStore.getState().setLoadError(null);
-    loadClientsForEnvironment(activeEnv, profile.role, environments)
+    loadClientsForEnvironment(activeEnv, profile.role)
       .then(({ clients, activeClientId }) => {
         setClients(clients);
         setActiveClientId(activeClientId);
       })
       .catch(e => {
-        reportError('App.loadClientsForEnvironment', e);
+        reportError('env.App.loadClientsForEnvironment', e);
         useClientStore.getState().setLoadError(String(e instanceof Error ? e.message : e));
       });
   }, [authStatus, activeEnvId, activeEnv?.supabaseUrl, activeEnv?.anonKey]);
@@ -119,7 +133,7 @@ export default function App() {
   useEffect(() => {
     const client = clients.find(c => c.id === activeClientId) ?? null;
     if (client) {
-      document.documentElement.style.setProperty('--client-accent', client.brandColor);
+      document.documentElement.style.setProperty('--client-accent', client.accent);
       setField('sourceFolder', client.sourceFolder);
       setField('targetFolder', client.targetFolder);
       setField('vaultFolder',  client.vaultFolder);
@@ -133,13 +147,14 @@ export default function App() {
       const prevId = vocabClientRef.current;
       // Flush dirty edits for the client we're leaving before switching.
       if (prevDirty && prevId && useVocabularyStore.getState().data) {
-        saveVocabulary(useVocabularyStore.getState().data!, prevId).catch(console.error);
+        saveVocabulary(useVocabularyStore.getState().data!, prevId)
+          .catch(e => reportError('vocab.App.flushVocabularyOnClientSwitch', e));
       }
       vocabClientRef.current = activeClientId;
       // Default: DB. Unpublished local cache (_unpublished) is kept by loadVocabulary.
       loadVocabulary(activeClientId)
         .then(d => setVocab(d, { dirty: !!d._unpublished }))
-        .catch(console.error);
+        .catch(e => reportError('vocab.App.loadVocabulary', e));
     }
   }, [activeClientId, clients]);
 
@@ -157,7 +172,7 @@ export default function App() {
       updateClient(client.id, { cloudDestinations: merged });
       const updated = useClientStore.getState().clients.find(c => c.id === client.id);
       if (updated && activeEnvId) return saveLocalClient(activeEnvId, updated);
-    }).catch(console.error);
+    }).catch(e => reportError('sync.App.pullCloudDestinations', e));
   }, [activeClientId]);
 
   /* Persist vocabulary on change — only when dirty (user edits), never overwrite
@@ -166,7 +181,8 @@ export default function App() {
   const vocabDirty = useVocabularyStore(s => s.dirty);
   useEffect(() => {
     if (vocabDirty && vocabData && vocabClientRef.current) {
-      saveVocabulary({ ...vocabData, _unpublished: true }, vocabClientRef.current).catch(console.error);
+      saveVocabulary({ ...vocabData, _unpublished: true }, vocabClientRef.current)
+        .catch(e => reportError('vocab.App.saveVocabulary', e));
     }
   }, [vocabData, vocabDirty]);
 
@@ -174,7 +190,7 @@ export default function App() {
   const settings = useSettingsStore(s => s.settings);
   const dirty    = useSettingsStore(s => s.dirty);
   useEffect(() => {
-    if (dirty) saveSettings(settings).then(markClean).catch(console.error);
+    if (dirty) saveSettings(settings).then(markClean).catch(e => reportError('config.App.saveSettings', e));
   }, [settings, dirty]);
 
   /* The gate: nothing operational renders without a staff session. A visible
@@ -196,10 +212,14 @@ export default function App() {
   return (
     <div className={css.shell}>
       <NavRail />
+      {/* Inside the shell, so a broken view never strands the operator — the nav rail stays usable
+          and switching views resets the boundary. */}
       <main className={css.main}>
-        {active === 'pipeline'   && <PipelineView />}
-        {active === 'vocabulary' && <VocabularyView />}
-        {active === 'settings'   && <SettingsView />}
+        <ViewErrorBoundary view={active}>
+          {active === 'pipeline'   && <PipelineView />}
+          {active === 'vocabulary' && <VocabularyView />}
+          {active === 'settings'   && <SettingsView />}
+        </ViewErrorBoundary>
       </main>
     </div>
   );

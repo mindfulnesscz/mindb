@@ -23,6 +23,10 @@ supabase/.env.local
 
 # per-environment bootstrap configs (hold secrets)
 scripts/environments/*.env
+# …but the non-secret half of an environment IS committed: project ref, bucket names and public
+# hostnames are all visible in the browser or in wrangler.jsonc already. Keeping them in the repo
+# means CI needs only the four real secrets, instead of nine settings hand-copied per environment.
+!scripts/environments/*.public.env
 
 # stale compiled JS emitted next to TS sources.
 # The app builds from main.tsx; the workspace packages are `noEmit` and resolve
@@ -32,3 +36,10 @@ web/apps/client-hub/src/**/*.js
 web/apps/client-hub/src/**/*.js.map
 packages/*/src/**/*.js
 packages/*/src/**/*.js.map
+
+# Coverage output (the ratchet reads it in-process; nothing here is committed)
+coverage/
+test-results/
+playwright-report/
+.wrangler
+.dev.vars

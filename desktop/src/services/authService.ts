@@ -54,8 +54,35 @@ let clientKey = '';
 let authSubscription: { unsubscribe: () => void } | null = null;
 let currentAccessToken: string | null = null;
 
-export function getCurrentAccessToken(): string | null {
-  return currentAccessToken;
+/**
+ * A token that is valid *now*.
+ *
+ * `client.auth.getSession()` checks the expiry and silently refreshes when needed, which the cached
+ * string above cannot do. This is why the CDN grant used to fail with
+ * "Storage grant refused (401): Not authenticated" on a second pipeline run: the first run happened
+ * within the hour, the second did not, and every request still carried the original token.
+ *
+ * Falls back to the cached value if the lookup fails, so a transient network blip degrades to
+ * "try the old token" rather than "not signed in".
+ */
+export async function getAccessToken(opts: { forceRefresh?: boolean } = {}): Promise<string | null> {
+  if (!client) return null;
+  try {
+    if (opts.forceRefresh) {
+      const { data, error } = await withTimeout(
+        client.auth.refreshSession(), AUTH_TIMEOUT_MS, 'Session refresh',
+      );
+      if (!error && data.session) currentAccessToken = data.session.access_token;
+      return currentAccessToken;
+    }
+    const { data, error } = await withTimeout(
+      client.auth.getSession(), AUTH_TIMEOUT_MS, 'Session lookup',
+    );
+    if (!error && data.session) currentAccessToken = data.session.access_token;
+    return currentAccessToken;
+  } catch {
+    return currentAccessToken;
+  }
 }
 
 function authStorageKey(url: string): string {
@@ -87,6 +114,11 @@ function mountAuthClient(config: AuthServerConfig): DcHubClient {
     currentAccessToken = session?.access_token ?? null;
   });
   authSubscription = data.subscription;
+  // Start the background refresh explicitly. supabase-js ties its automatic ticker to browser
+  // visibility events, which a Tauri webview does not deliver the same way — and teardown already
+  // called stopAutoRefresh(), so nothing was ever running to stop. Without this the session simply
+  // expired after an hour and every request 401'd.
+  try { client.auth.startAutoRefresh(); } catch { /* unsupported in this environment */ }
   return client;
 }
 
