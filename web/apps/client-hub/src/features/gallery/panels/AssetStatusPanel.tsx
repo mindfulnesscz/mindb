@@ -10,7 +10,7 @@
  * server would refuse.
  */
 
-import { canApprove, canReadComments, type Asset, type Role } from '@dc-hub/asset-library'
+import { canApprove, canControlPermission, canReadComments, type Asset, type Role } from '@dc-hub/asset-library'
 import { STATUS_OPTIONS, PERM_OPTIONS } from '../assetOptions'
 
 export interface AssetStatusPanelProps {
@@ -110,10 +110,11 @@ export function AssetStatusPanel({
           </div>
         )}
 
-        {/* Visibility (staff only).
+        {/* Visibility. Editors and above — canControlPermission, not a bare isStaff, so the rule
+            has one name and matches the `assets: staff write` policy the server enforces.
             A gallery child has no control of its own: its level is its parent's, forced by a DB
             trigger, so showing a live selector here would offer a change that silently reverts. */}
-        {isStaff && (
+        {canControlPermission(role) && (
           <div className="space-y-2">
             <p className="text-[10px] font-sans font-bold uppercase tracking-label text-text-muted">
               Visibility

@@ -118,6 +118,23 @@ export function canManageClients(role: Role): boolean {
   return canEditClients(role)
 }
 
+/**
+ * Who may change an asset's visibility. Editors and above — confirmed 2026-08-01.
+ *
+ * This said `admin || super_admin` and was never called anywhere, while the panel gated the
+ * selector on `isStaff`. So the codebase carried two different answers to "who sets visibility"
+ * and shipped the more permissive one. That is the worst shape for an access rule: the written
+ * one looks authoritative in review, and the real one is a condition inline in a component.
+ *
+ * Editors is the intended answer, and it matches what the server already enforces — the
+ * `assets: staff write` policy is `is_staff()`, so narrowing this to admins would have produced a
+ * UI that hides a control the API accepts. Now it is one named predicate, used.
+ *
+ * NOTE the scope question this does NOT answer: `is_staff()` grants editors every client, while
+ * `client_members` exists and r2-grant already scopes non-admins by it. Whether an editor should
+ * be able to change visibility on a client they are not assigned to is a separate decision, and
+ * today the answer is yes.
+ */
 export function canControlPermission(role: Role): boolean {
-  return role === 'admin' || role === 'super_admin'
+  return isStaff(role)
 }
