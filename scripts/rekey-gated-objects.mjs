@@ -51,22 +51,29 @@ if (!envName) {
   process.exit(1);
 }
 
-/* Config comes from `scripts/environments/<env>.env` when it exists, and otherwise from the
-   process environment. Both, in fact — the process wins — so the same script runs from a laptop
-   against a gitignored env file and from CI against repository secrets, with no second code path
-   to keep correct. The scheduled reconciler (.github/workflows/reconcile-cdn-keys.yml) is the CI
-   caller; it has no env file and never will. */
-const envFile = path.join(root, 'scripts/environments', `${envName}.env`);
-const fromFile = fs.existsSync(envFile)
+/* Config is layered, lowest precedence first:
+     1. <env>.public.env   COMMITTED. Project ref, bucket names, public hostnames — every one of
+                           them already visible in a browser or in wrangler.jsonc, so keeping them
+                           in the repo costs nothing and means CI needs only the real secrets.
+     2. <env>.env          gitignored. The four actual secrets, for local runs.
+     3. the process        what CI supplies.
+   One code path serves a laptop and a GitHub runner, which is the point: a second path is a second
+   thing to get right, and this one moves client files. */
+const readEnvFile = (file) => fs.existsSync(file)
   ? Object.fromEntries(
-      fs.readFileSync(envFile, 'utf8').split('\n')
+      fs.readFileSync(file, 'utf8').split('\n')
         .filter(l => l.trim() && !l.startsWith('#') && l.includes('='))
         .map(l => [l.slice(0, l.indexOf('=')).trim(), l.slice(l.indexOf('=') + 1).trim()]),
     )
   : {};
-const env = { ...fromFile, ...Object.fromEntries(
-  Object.entries(process.env).filter(([, v]) => v !== undefined && v !== ''),
-) };
+
+const publicFile = path.join(root, 'scripts/environments', `${envName}.public.env`);
+const envFile    = path.join(root, 'scripts/environments', `${envName}.env`);
+const env = {
+  ...readEnvFile(publicFile),
+  ...readEnvFile(envFile),
+  ...Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== undefined && v !== '')),
+};
 
 /* Every value is named explicitly, including the gated pair. An earlier draft derived the gated
    bucket from the public one and got it wrong — `dc-hub-staging` would have produced
@@ -77,9 +84,9 @@ const need = ['PROJECT_REF', 'SUPABASE_SERVICE_KEY', 'R2_BUCKET', 'R2_PUBLIC_DOM
               'CF_API_TOKEN', 'CF_ACCOUNT_ID', 'R2_PARENT_ACCESS_KEY_ID'];
 const missing = need.filter(k => !env[k]);
 if (missing.length) {
-  const where = fs.existsSync(envFile) ? path.relative(root, envFile) : 'the environment';
-  console.error(`Missing from ${where}: ${missing.join(', ')}`);
-  console.error('R2_GATED_BUCKET / R2_GATED_DOMAIN must match workers/cdn-gate/wrangler.jsonc.');
+  console.error(`Missing for "${envName}": ${missing.join(', ')}`);
+  console.error(`Non-secret values belong in ${path.relative(root, publicFile)} (committed);`);
+  console.error(`secrets in ${path.relative(root, envFile)} (gitignored) or the environment.`);
   process.exit(1);
 }
 

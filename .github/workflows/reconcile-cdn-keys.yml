@@ -63,13 +63,11 @@ jobs:
       # No `npm ci`. The script uses node builtins and fetch only, so an install would add a
       # minute per run to fetch dependencies it never touches.
       - name: Reconcile ${{ matrix.environment }}
+        # Only the secrets. Project ref, bucket names and hostnames come from the committed
+        # scripts/environments/<env>.public.env — they are public values, and making someone
+        # hand-copy nine settings per environment is how one of them ends up wrong.
         env:
-          PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          R2_BUCKET: ${{ vars.R2_BUCKET }}
-          R2_PUBLIC_DOMAIN: ${{ vars.R2_PUBLIC_DOMAIN }}
-          R2_GATED_BUCKET: ${{ vars.R2_GATED_BUCKET }}
-          R2_GATED_DOMAIN: ${{ vars.R2_GATED_DOMAIN }}
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           R2_PARENT_ACCESS_KEY_ID: ${{ secrets.R2_PARENT_ACCESS_KEY_ID }}
@@ -88,21 +86,16 @@ jobs:
 
 # ── Setup, once, per GitHub environment (staging / production) ────────────────
 #
-# Settings -> Environments -> <env>
+# Settings -> Environments -> <env> -> Environment secrets. FOUR, and that is all:
 #
-#   Secrets
-#     SUPABASE_PROJECT_REF      the project ref, e.g. tvrxnwbhzborkkkdeyuk
-#     SUPABASE_SERVICE_KEY      service role key — bypasses RLS, which this needs: it reconciles
-#                               rows no ordinary session may see
-#     CF_API_TOKEN              mints short-lived, bucket-scoped R2 credentials
-#     CF_ACCOUNT_ID
-#     R2_PARENT_ACCESS_KEY_ID
+#   SUPABASE_SERVICE_KEY      service role key — bypasses RLS, which this needs: it reconciles
+#                             rows no ordinary session may see
+#   CF_API_TOKEN              mints short-lived, bucket-scoped R2 credentials
+#   CF_ACCOUNT_ID
+#   R2_PARENT_ACCESS_KEY_ID
 #
-#   Variables (not secrets — these are names and public hostnames)
-#     R2_BUCKET                 public bucket,  e.g. dc-hub-staging
-#     R2_PUBLIC_DOMAIN          its public URL
-#     R2_GATED_BUCKET           gated bucket,   e.g. dc-hub-gated-staging
-#     R2_GATED_DOMAIN           the Worker hostname in front of it
+# All four are already in scripts/environments/<env>.env locally — copy them across.
 #
-# The same values already live in scripts/environments/<env>.env for local runs; this job has no
-# env file, which is why the script reads the process environment too.
+# Everything else (project ref, bucket names, public hostnames) lives in the COMMITTED
+# scripts/environments/<env>.public.env, because none of it is secret and a value hand-copied
+# into a settings page is a value that can silently disagree with wrangler.jsonc.
