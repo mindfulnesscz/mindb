@@ -139,6 +139,14 @@ async function tempCredentials(bucket) {
 const sha256hex = b => crypto.createHash('sha256').update(b).digest('hex');
 const hmac = (k, s) => crypto.createHmac('sha256', k).update(s).digest();
 
+/* SigV4 canonicalises paths per RFC 3986, where the unreserved set is only A–Z a–z 0–9 - _ . ~
+   `encodeURIComponent` leaves !'()* alone, so a key containing parentheses signed cleanly on this
+   side and hashed differently on Cloudflare's — an opaque 403 that reads as a permissions fault.
+   It cost 17 objects on the production run: legacy filename-keyed thumbnails such as
+   `(p-SpW)(ILL)(TrpB) 3D Vis v3-0-0-thumb.webp`, which are exactly the ones full of brackets. */
+const rfc3986 = str => encodeURIComponent(str)
+  .replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+
 /** Minimal SigV4 for R2. Only the three verbs this script needs. */
 async function s3(creds, bucket, method, key, body = null, extraHeaders = {}) {
   const host = `${env.CF_ACCOUNT_ID}.r2.cloudflarestorage.com`;
@@ -146,7 +154,7 @@ async function s3(creds, bucket, method, key, body = null, extraHeaders = {}) {
   const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
   const dateStamp = amzDate.slice(0, 8);
   const payloadHash = sha256hex(body ?? Buffer.alloc(0));
-  const canonicalUri = `/${bucket}/${key.split('/').map(encodeURIComponent).join('/')}`;
+  const canonicalUri = `/${bucket}/${key.split('/').map(rfc3986).join('/')}`;
 
   // Lowercase keys throughout, so the canonical form is a plain sort of this object rather than a
   // case-insensitive lookup back into it. SigV4 fails opaquely (403 SignatureDoesNotMatch) when
@@ -171,7 +179,18 @@ async function s3(creds, bucket, method, key, body = null, extraHeaders = {}) {
   headers.Authorization =
     `AWS4-HMAC-SHA256 Credential=${creds.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
 
-  return fetch(`https://${host}${canonicalUri}`, { method, headers, body: body ?? undefined });
+  /* One transient socket error ended a run 643 objects in. The work is idempotent so a re-run
+     resumes, but a thousand-object job should not need babysitting through every network blip. */
+  let lastErr;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await fetch(`https://${host}${canonicalUri}`, { method, headers, body: body ?? undefined });
+    } catch (e) {
+      lastErr = e;
+      if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 1500));
+    }
+  }
+  throw lastErr;
 }
 
 /* ── the work ─────────────────────────────────────────────────────────────── */
