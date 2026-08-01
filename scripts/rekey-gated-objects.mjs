@@ -215,10 +215,23 @@ async function main() {
   }
   log(`  ${assets.length} asset row(s)\n`);
 
-  const creds = {
-    public: await tempCredentials(env.R2_BUCKET),
-    gated: await tempCredentials(GATED_BUCKET),
-  };
+  /* Credentials expire after an hour, and a full production re-key is ~1000 objects including
+     multi-hundred-megabyte video. Minting once at the start meant a long run died partway through
+     with 403s that look like a permissions fault rather than an expiry — and while the script is
+     resumable, that is a bad half hour for whoever is watching it.
+     Re-minted well inside the window, before each copy. */
+  let creds = { public: await tempCredentials(env.R2_BUCKET), gated: await tempCredentials(GATED_BUCKET), mintedAt: Date.now() };
+  const CRED_REFRESH_MS = 45 * 60 * 1000;   // TTL is 60 min; refresh with a quarter of it to spare
+  async function freshCreds() {
+    if (Date.now() - creds.mintedAt < CRED_REFRESH_MS) return creds;
+    creds = {
+      public: await tempCredentials(env.R2_BUCKET),
+      gated: await tempCredentials(GATED_BUCKET),
+      mintedAt: Date.now(),
+    };
+    log('  ⟳  storage credentials refreshed');
+    return creds;
+  }
   const bucketFor = tier => (tier === 'public' ? env.R2_BUCKET : GATED_BUCKET);
   const domainFor = tier => (tier === 'public' ? env.R2_PUBLIC_DOMAIN : GATED_DOMAIN);
 
@@ -255,7 +268,7 @@ async function main() {
       log(`     ${' '.repeat(9)}-> ${target.tier}:${target.key}`);
 
       if (EXECUTE) {
-        const moved = await copyObject(creds, source, { bucket: bucketFor(target.tier), key: target.key });
+        const moved = await copyObject(await freshCreds(), source, { bucket: bucketFor(target.tier), key: target.key });
         if (moved === 'missing') { plan.missing++; continue; }
         if (moved === 'failed') { plan.failed++; continue; }
         plan.copy++;
@@ -292,7 +305,8 @@ async function main() {
         if (!src.key) continue;
         log(`  ${EXECUTE ? '✕' : '·'}  delete ${src.bucket}:${src.key}`);
         if (EXECUTE) {
-          const res = await s3(creds[src.bucket === env.R2_BUCKET ? 'public' : 'gated'], src.bucket, 'DELETE', src.key);
+          const c = await freshCreds();
+          const res = await s3(c[src.bucket === env.R2_BUCKET ? 'public' : 'gated'], src.bucket, 'DELETE', src.key);
           if (res.ok || res.status === 404) plan.del++; else plan.failed++;
         } else plan.del++;
       }
