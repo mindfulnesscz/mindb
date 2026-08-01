@@ -22,7 +22,7 @@
  * keeps the bytes regardless. Re-keying limits future exposure; it does not undo past exposure.
  *
  *   node scripts/rekey-gated-objects.mjs staging                     # dry run, changes nothing
- *   node scripts/rekey-gated-objects.mjs staging --reclassify-public # preview the perm change too
+ *   node scripts/rekey-gated-objects.mjs staging --raise-to-client   # preview the perm change too
  *   node scripts/rekey-gated-objects.mjs staging --execute
  *   node scripts/rekey-gated-objects.mjs staging --execute --delete-source   # after verifying
  */
@@ -44,10 +44,10 @@ const envName = args.find(a => !a.startsWith('--'));
 const has = f => args.includes(f);
 const EXECUTE = has('--execute');
 const DELETE_SOURCE = has('--delete-source');
-const RECLASSIFY = has('--reclassify-public');
+const RECLASSIFY = has('--raise-to-client') || has('--reclassify-public'); // old name kept working
 
 if (!envName) {
-  console.error('usage: node scripts/rekey-gated-objects.mjs <env> [--reclassify-public] [--execute] [--delete-source]');
+  console.error('usage: node scripts/rekey-gated-objects.mjs <env> [--raise-to-client] [--execute] [--delete-source]');
   process.exit(1);
 }
 
@@ -172,21 +172,32 @@ async function main() {
   log(`  gated         ${GATED_BUCKET}  ${GATED_DOMAIN}`);
   log(`  mode          ${EXECUTE ? 'EXECUTE' : 'DRY RUN — nothing will change'}${DELETE_SOURCE ? ' + DELETE SOURCE' : ''}\n`);
 
-  /* Step 0 — the legacy `public` rows.
-     Every asset written before 2026-07-31 carries perm='public' because the pipeline hardcoded it,
-     not because anyone decided it should be world-readable. Reclassifying them is what makes the
-     re-key meaningful; without it the overwhelming majority of objects stay on the public domain.
-     Separate flag, because it changes who can SEE things and not merely where bytes live. */
+  /* Step 0 — raise the floor to `client`: readable by members of the owning client and above.
+     Assets written before 2026-07-31 carry perm='public' because the pipeline hardcoded it, not
+     because anyone decided they should be world-readable, and without this the overwhelming
+     majority of objects stay on the public domain and the re-key means little.
+
+     NARROWING ONLY, and both halves of that matter. `public` and `guest` are below the floor and
+     are raised to it; `client` is already there; `internal` is ABOVE it and is left alone, because
+     a sweep that loosened an asset someone had deliberately locked down would be the one mistake
+     this whole exercise exists to prevent.
+
+     Separate flag, because it changes who can SEE things rather than merely where bytes live —
+     and it is never passed by the scheduled reconciler. */
+  const BELOW_FLOOR = ['public', 'guest'];
   if (RECLASSIFY) {
-    const legacy = await sbGet('/assets?select=id&perm=eq.public');
-    log(`  reclassify    ${legacy.length} row(s) perm public -> client`);
-    if (EXECUTE && legacy.length) {
-      const res = await fetch(`${REST}/assets?perm=eq.public`, {
+    const filter = `perm=in.(${BELOW_FLOOR.join(',')})`;
+    const below = await sbGet(`/assets?select=id,perm&${filter}`);
+    const byPerm = BELOW_FLOOR
+      .map(p => `${below.filter(r => r.perm === p).length} ${p}`).join(' + ');
+    log(`  raise to client   ${below.length} row(s) (${byPerm}) -> client`);
+    if (EXECUTE && below.length) {
+      const res = await fetch(`${REST}/assets?${filter}`, {
         method: 'PATCH', headers: { ...sbHeaders, Prefer: 'return=minimal' },
         body: JSON.stringify({ perm: 'client' }),
       });
-      if (!res.ok) throw new Error(`reclassify failed: ${res.status} ${await res.text()}`);
-      log('                done\n');
+      if (!res.ok) throw new Error(`raise-to-client failed: ${res.status} ${await res.text()}`);
+      log('                    done\n');
     } else log('');
   }
 
@@ -200,7 +211,7 @@ async function main() {
      nine moves — a preview that does not resemble the run it is previewing is worse than none.
      Apply it in memory so the numbers shown are the numbers you would get. */
   if (RECLASSIFY && !EXECUTE) {
-    for (const a of assets) if (a.perm === 'public') a.perm = 'client';
+    for (const a of assets) if (BELOW_FLOOR.includes(a.perm)) a.perm = 'client';
   }
   log(`  ${assets.length} asset row(s)\n`);
 
