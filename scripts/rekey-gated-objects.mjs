@@ -82,11 +82,24 @@ const env = {
 const need = ['PROJECT_REF', 'SUPABASE_SERVICE_KEY', 'R2_BUCKET', 'R2_PUBLIC_DOMAIN',
               'R2_GATED_BUCKET', 'R2_GATED_DOMAIN',
               'CF_API_TOKEN', 'CF_ACCOUNT_ID', 'R2_PARENT_ACCESS_KEY_ID'];
-const missing = need.filter(k => !env[k]);
+const missing = need.filter(k => !env[k] || String(env[k]).startsWith('PASTE_'));
 if (missing.length) {
   console.error(`Missing for "${envName}": ${missing.join(', ')}`);
-  console.error(`Non-secret values belong in ${path.relative(root, publicFile)} (committed);`);
-  console.error(`secrets in ${path.relative(root, envFile)} (gitignored) or the environment.`);
+  /* "missing" is the truth but not always the cause. An empty or absent file reads exactly like a
+     file whose keys are wrong, and the first costs someone a while re-checking key names that were
+     never there — so say which it is. */
+  const secretsRead = Object.keys(readEnvFile(envFile)).length;
+  if (!fs.existsSync(envFile)) {
+    console.error(`\n  ${path.relative(root, envFile)} does not exist.`);
+  } else if (secretsRead === 0) {
+    console.error(`\n  ${path.relative(root, envFile)} exists but is EMPTY — unsaved edit?`);
+  }
+  const placeholder = Object.entries(env).filter(([, v]) => String(v).startsWith('PASTE_'));
+  if (placeholder.length) {
+    console.error(`  still holding a placeholder: ${placeholder.map(([k]) => k).join(', ')}`);
+  }
+  console.error(`\n  Non-secret values belong in ${path.relative(root, publicFile)} (committed);`);
+  console.error(`  secrets in ${path.relative(root, envFile)} (gitignored) or the environment.`);
   process.exit(1);
 }
 
