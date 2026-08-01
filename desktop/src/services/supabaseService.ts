@@ -38,7 +38,7 @@ export { slugifyKeyPart, parentKeyForLeaf } from './supabase/taxonomyKeys';
 export { cdnStemKey, resolveCdnIdentity } from './supabase/identity';
 
 /* ── Queries ──────────────────────────────────────────────────────────────── */
-export { fetchExistingStableIds, fetchAssetStats } from './supabase/assetQueries';
+export { fetchExistingStableIds, fetchAssetStats, fetchAssetLevels } from './supabase/assetQueries';
 export { resolveTagId, createDraftAsset, type DraftAssetInput } from './supabase/draftAssets';
 export { fetchCloudDestinationDefs, saveCloudDestinationDefs } from './supabase/destinations';
 export { syncTagsFromVocabulary } from './supabase/tagSync';

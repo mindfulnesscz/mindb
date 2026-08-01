@@ -106,7 +106,14 @@ export function makeCtx(settings: AppSettings, over: Record<string, unknown> = {
   return captured;
 }
 
-/** R2 config fixture — `keyPrefix` mirrors the per-client bucket scoping in production. */
+/**
+ * R2 config fixture — BOTH delivery tiers, as a real grant now returns.
+ *
+ * `public` objects go to the public bucket on the public domain with an unprefixed key; every
+ * other level goes to the gated bucket, under `{level}/`, on the Worker's hostname. Which one an
+ * asset uses is decided per asset from its effective level, so a fixture with only the public half
+ * would let a routing bug pass by silently defaulting everything to one bucket.
+ */
 export const R2 = {
   endpoint: 'https://r2.example.com',
   accessKeyId: 'ak',
@@ -115,4 +122,10 @@ export const R2 = {
   bucket: 'dchub-test',
   publicDomain: 'https://cdn.example.com',
   keyPrefix: 'client-abc/',
+  clientId: 'client-abc',
+  gatedBucket: 'dchub-test-gated',
+  gatedDomain: 'https://files.example.com',
+  gatedAccessKeyId: 'gated-ak',
+  gatedSecretKey: 'gated-sk',
+  gatedSessionToken: 'gated-st',
 };

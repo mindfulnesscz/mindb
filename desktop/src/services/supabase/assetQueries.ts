@@ -73,6 +73,42 @@ export async function fetchAssetStats(
   return result;
 }
 
+/**
+ * `${stable_id}:${child_id}` → the asset's effective access level.
+ *
+ * The upload stages need this BEFORE they write, because the level is part of the object key and
+ * decides which bucket the bytes go to. It cannot be derived locally: `perm` is portal-owned once
+ * a row exists (see stripPortalOwnedFields), so the database is the only place that knows whether
+ * an editor has promoted or locked down this asset since the last run.
+ *
+ * A key that is absent from the map is a NEW asset, and the caller supplies the create-time
+ * default rather than this function guessing — the two defaults would otherwise drift.
+ *
+ * Best-effort in the same sense as fetchAssetStats: a failure returns an empty map. The caller
+ * then treats every asset as new, which sends everything to the create-time default of `client`.
+ * That is the safe direction — the failure mode of a network blip is over-restriction, never
+ * publishing a client's assets to the public bucket.
+ */
+export async function fetchAssetLevels(
+  clientId: string,
+  config:   SupabaseConfig,
+): Promise<Map<string, string>> {
+  const base    = `${config.url}/rest/v1`;
+  const headers = await makeHeaders(config.anonKey);
+  const out     = new Map<string, string>();
+  try {
+    const rows = await fetchAllForClient<{ stable_id: string; child_id: string; effective_level: string }>(
+      base, 'assets?status=neq.archived', clientId, 'stable_id,child_id,effective_level', headers,
+    );
+    for (const r of rows) {
+      if (r.stable_id && r.child_id && r.effective_level) {
+        out.set(`${r.stable_id}:${r.child_id}`, r.effective_level);
+      }
+    }
+  } catch { /* best-effort — see doc comment above */ }
+  return out;
+}
+
 /* fetch helpers live in supabase/rest.ts */
 
 /* ── Version history pagination ──────────────────────────────────────────── */

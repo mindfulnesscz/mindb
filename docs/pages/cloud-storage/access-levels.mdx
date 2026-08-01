@@ -1,0 +1,132 @@
+# Access levels and gated delivery
+
+Two questions look like one and are not:
+
+- **Discovery** — who can see that an asset exists, and get its URL. Postgres row-level security.
+- **Delivery** — who can fetch the bytes at that URL. A Cloudflare Worker in front of R2.
+
+Until 2026-07-31 only the first was enforced. R2 objects sat on a public bucket domain, so a URL
+was a bearer token: `perm` decided who could *find* a file and nothing decided who could *open*
+one. This page describes both halves.
+
+## The four levels
+
+| Level | Who | Bytes served by |
+|---|---|---|
+| `public` | anyone with the URL | the public bucket, directly — no Worker, no cookie |
+| `guest` | anyone signed in, including a magic-link visitor with no client | the Worker |
+| `client` | members of that client, plus staff | the Worker |
+| `internal` | staff only — `editor`, `admin`, `super_admin` | the Worker |
+
+`client` is the default the pipeline creates assets at. Anything world-readable is promoted
+deliberately, one asset at a time.
+
+## Effective level: `perm` and `status` both gate
+
+`perm` says who may see an asset; `status` says where it is in its lifecycle. They are independent
+axes and access needs both:
+
+```text
+effective_level = (status in ('approved','published')) ? perm : 'internal'
+```
+
+So an asset marked `public` while still in `draft` serves to staff only. That is what stops
+unapproved work being published by a stray dropdown, and it is why an asset can be visible to its
+author and invisible to everyone else without anyone having touched `perm`.
+
+`assets.effective_level` is a **stored generated column**, so Postgres and the Worker cannot
+disagree about it. It is not writable — set `perm` or `status` and it follows.
+
+## Two buckets, and why
+
+| Tier | Bucket | Hostname | Public access |
+|---|---|---|---|
+| public | `dc-hub-bucket` | `cdn.disruptcollective.com` | yes, by design |
+| gated | `dc-hub-gated` | `files.disruptcollective.com` | **none** — the Worker's binding is its only door |
+
+Two buckets rather than one bucket with a path exclusion, so the failure mode is **closed**: if the
+Worker route breaks or its binding is missing, gated objects 404. With a single bucket behind a
+public custom domain, the same mistake publishes the whole library.
+
+## The key is the authorization
+
+```text
+files.disruptcollective.com/{level}/{client_id}/thumbnails/{stable_id}/{child_id}.webp
+                            ^^^^^^^ ^^^^^^^^^^^
+```
+
+The Worker reads the level and client straight out of the key and decides from the signed cookie
+alone — no database call, no KV read. A 50-tile gallery costs 50 signature verifications rather
+than 50 lookups, which is the difference between a tool that browses and one that does not.
+
+The price is that **changing an asset's level moves its bytes**. That is bought deliberately, and
+it is the thing to remember when reasoning about anything in this area.
+
+Public keys are unchanged from what the pipeline has always written, so an asset that is genuinely
+public keeps the address it already had.
+
+## The cookie
+
+Sign-in mints a short-lived signed cookie (`dch_cdn`, ~30 min) scoped to `.disruptcollective.com`,
+so the portal's `<img>` requests carry it to the CDN subdomain automatically.
+
+It is minted by the **Worker**, not by a Supabase edge function, for a reason worth knowing: a
+cookie's `Domain` must be a parent of the host that *sets* it, and a response from `*.supabase.co`
+cannot set one for `.disruptcollective.com`.
+
+URLs are permanent; the **session** expires, not the link. A leaked URL keeps working and simply
+returns 403 to anyone not signed in. Expiring URLs were considered and rejected — they would make
+every stored `thumbnail_url` a ticking clock.
+
+## What this does not do
+
+**It does not un-publish anything.** A URL that has already been served stays fetchable at that
+address forever by anyone who kept it. Re-keying gives objects new addresses and limits future
+exposure; it cannot undo past exposure. Everything published before 2026-07-31 should be treated as
+permanently public.
+
+**Gated content does not load on Vercel preview deployments.** A cookie scoped to
+`.disruptcollective.com` is never sent to `*.vercel.app`, and `SameSite=None` would walk into
+third-party-cookie blocking. Test gated delivery on `staging.hub.disruptcollective.com`.
+
+## Keeping keys and levels in step
+
+Changing `perm` or `status` in the portal updates the row immediately — discovery is correct at
+once — but the bytes still sit under the old level's key until they are moved. Two things close
+that gap:
+
+- the **pipeline** writes each asset at its current level on every run;
+- a **scheduled reconciler** (`.github/workflows/reconcile-cdn-keys.yml`, every ~15 minutes) moves
+  anything that has drifted, using the same key rules.
+
+Both compute the target from `packages/domain/src/assetStorage.ts`. If you add a third caller, use
+that module rather than restating the rules — the Worker's parser already restates them once out of
+necessity, and that is one copy more than anybody wants.
+
+To reconcile by hand:
+
+```bash
+node scripts/rekey-gated-objects.mjs staging              # dry run, changes nothing
+node scripts/rekey-gated-objects.mjs staging --execute
+```
+
+## Galleries and variants
+
+A gallery is one deliverable stored as many rows, so **its images inherit the parent's level** —
+enforced by a database trigger, not by whichever code path happened to write. Setting a gallery
+child's level individually has no effect; to show part of a shoot more widely, split it into its own
+gallery folder.
+
+A **variant set** is different: separating a rendition's visibility is a real if rare need (an
+internal print master beside a public web version), so the portal offers a checkbox, on by default.
+
+## Where to look
+
+| | |
+|---|---|
+| levels, keys, URLs | `packages/domain/src/assetStorage.ts` |
+| the Worker | `workers/cdn-gate/` — see its README for the performance contract |
+| RLS policies | `supabase/migrations/20260731120000_gated_delivery_levels.sql` |
+| gallery inheritance | `supabase/migrations/20260731130000_gallery_perm_inheritance.sql` |
+| what is exposed today | `supabase/audit/perm_exposure.sql` |
+| families that disagree | `supabase/audit/perm_family_mismatch.sql` |

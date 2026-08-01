@@ -4,10 +4,18 @@
  * browsers cache it. If key construction changes, every already-published asset is orphaned
  * — the object stays in the bucket, unreferenced, and the portal shows a broken image.
  *
- * The key is `{prefix}thumbnails|originals/{stable_id}/{child_id}` and both halves come from
- * folder identity, deliberately NOT from the filename, so that renaming a file or bumping its
- * version keeps the same address. These tests prove that property end to end — through the
- * real `.dchub.json` manifest on the virtual filesystem — rather than trusting the comment.
+ * The key is `{level}/{client_id}/thumbnails|originals/{stable_id}/{child_id}` for gated assets,
+ * and `{client_id}/…` — no level segment — for public ones, which stay in the public bucket. The
+ * identity halves come from folder identity, deliberately NOT from the filename, so that renaming
+ * a file or bumping its version keeps the same address. These tests prove that property end to end
+ * — through the real `.dchub.json` manifest on the virtual filesystem — rather than trusting the
+ * comment.
+ *
+ * The LEVEL segment is not decoration: the cdn-gate Worker authorizes a request by reading it back
+ * out of the key, without a database lookup. A key written at the wrong level is a 403 on a file
+ * the portal is offering, or bytes served to someone who should not have them. A run with no
+ * known levels writes everything at the create-time default of `client`, which is what these
+ * fixtures exercise — see `assetLevels` in RunContext for the promoted case.
  *
  * Each test uses its own stable id: the module-level R2 upload cache (`r2CacheMemo`) is not
  * resettable from outside, so distinct keys are what keeps tests independent.
@@ -49,14 +57,14 @@ describe('CDN — object key construction', () => {
     vfs.tree(SRC, { 'Asset __a1000001/[03] OUT/(PRD)(SlD) Deck.pdf': '' });
     await cdn({ doCdnOriginals: false });
 
-    expect(invokeStub.uploadedKeys()).toEqual(['client-abc/thumbnails/a1000001/c1.webp']);
+    expect(invokeStub.uploadedKeys()).toEqual(['client/client-abc/thumbnails/a1000001/c1.webp']);
   });
 
   it('keys an original by the same identity, keeping the real extension', async () => {
     vfs.tree(SRC, { 'Asset __a1000002/[03] OUT/(PRD)(SlD) Deck.pdf': '' });
     await cdn({ doThumbnails: false });
 
-    expect(invokeStub.uploadedKeys()).toEqual(['client-abc/originals/a1000002/c1.pdf']);
+    expect(invokeStub.uploadedKeys()).toEqual(['client/client-abc/originals/a1000002/c1.pdf']);
   });
 
   it('uploads a thumbnail and an original under sibling namespaces', async () => {
@@ -64,16 +72,19 @@ describe('CDN — object key construction', () => {
     await cdn();
 
     expect(invokeStub.uploadedKeys()).toEqual([
-      'client-abc/originals/a1000003/c1.pdf',
-      'client-abc/thumbnails/a1000003/c1.webp',
+      'client/client-abc/originals/a1000003/c1.pdf',
+      'client/client-abc/thumbnails/a1000003/c1.webp',
     ]);
   });
 
-  it('omits the prefix segment entirely when no key prefix is configured', async () => {
+  it('routes a PUBLIC asset to the public bucket, with no level segment in the key', async () => {
+    // Public keys are deliberately unchanged from what the pipeline has always written, so an
+    // asset that is legitimately public keeps the address it already had and never has to move.
     vfs.tree(SRC, { 'Asset __a1000004/[03] OUT/(PRD)(SlD) Deck.pdf': '' });
-    await cdn({ doCdnOriginals: false }, { r2: { ...R2, keyPrefix: '' } });
+    await cdn({ doCdnOriginals: false }, { assetLevels: new Map([['a1000004:c1', 'public']]) });
 
-    expect(invokeStub.uploadedKeys()).toEqual(['thumbnails/a1000004/c1.webp']);
+    expect(invokeStub.uploadedKeys()).toEqual(['client-abc/thumbnails/a1000004/c1.webp']);
+    expect(invokeStub.argsFor('upload_to_r2')[0].bucket).toBe('dchub-test');
   });
 
   it('never double-applies a prefix that a key already carries', async () => {
@@ -81,7 +92,7 @@ describe('CDN — object key construction', () => {
     vfs.tree(SRC, { 'Asset __a1000005/[03] OUT/(PRD)(SlD) Deck.pdf': '' });
     await cdn({ doCdnOriginals: false }, { r2: { ...R2, keyPrefix: 'client-abc' } });
 
-    expect(invokeStub.uploadedKeys()).toEqual(['client-abc/thumbnails/a1000005/c1.webp']);
+    expect(invokeStub.uploadedKeys()).toEqual(['client/client-abc/thumbnails/a1000005/c1.webp']);
   });
 
   it('sends the right content type for each namespace', async () => {
@@ -89,8 +100,8 @@ describe('CDN — object key construction', () => {
     await cdn();
 
     const byKey = new Map(invokeStub.argsFor('upload_to_r2').map(a => [a.objectKey, a.contentType]));
-    expect(byKey.get('client-abc/thumbnails/a1000006/c1.webp')).toBe('image/webp');
-    expect(byKey.get('client-abc/originals/a1000006/c1.pdf')).toBe('application/pdf');
+    expect(byKey.get('client/client-abc/thumbnails/a1000006/c1.webp')).toBe('image/webp');
+    expect(byKey.get('client/client-abc/originals/a1000006/c1.pdf')).toBe('application/pdf');
   });
 
   it('gives each asset in a package its own child id', async () => {
@@ -101,8 +112,8 @@ describe('CDN — object key construction', () => {
     await cdn({ doThumbnails: false });
 
     expect(invokeStub.uploadedKeys()).toEqual([
-      'client-abc/originals/a1000007/c1.pdf',
-      'client-abc/originals/a1000007/c2.jpg',
+      'client/client-abc/originals/a1000007/c1.pdf',
+      'client/client-abc/originals/a1000007/c2.jpg',
     ]);
   });
 
@@ -144,14 +155,14 @@ describe('CDN — identity is rename- and version-proof', () => {
     // child id and overwrites its object instead of stranding it.
     vfs.tree(SRC, { 'Asset __a2000002/[03] OUT/(PRD)(SlD) Deck v1.pdf': 'v1' });
     await cdn({ doThumbnails: false });
-    expect(invokeStub.uploadedKeys()).toEqual(['client-abc/originals/a2000002/c1.pdf']);
+    expect(invokeStub.uploadedKeys()).toEqual(['client/client-abc/originals/a2000002/c1.pdf']);
 
     invokeStub.reset();
     await vfs.fsApi().remove(`${SRC}/Asset __a2000002/[03] OUT/(PRD)(SlD) Deck v1.pdf`);
     vfs.put(`${SRC}/Asset __a2000002/[03] OUT/(PRD)(SlD) Deck v2.pdf`, 'v2');
     await cdn({ doThumbnails: false });
 
-    expect(invokeStub.uploadedKeys()).toEqual(['client-abc/originals/a2000002/c1.pdf']);
+    expect(invokeStub.uploadedKeys()).toEqual(['client/client-abc/originals/a2000002/c1.pdf']);
   });
 
   it('keeps the same key after the package folder is retitled', async () => {
@@ -212,7 +223,7 @@ describe('CDN — assets with no folder identity', () => {
     });
     const run = await cdn({ doThumbnails: false });
 
-    expect(invokeStub.uploadedKeys()).toEqual(['client-abc/originals/a3000001/c1.pdf']);
+    expect(invokeStub.uploadedKeys()).toEqual(['client/client-abc/originals/a3000001/c1.pdf']);
     expect(run.stats.errors).toBe(1);
   });
 });
@@ -227,7 +238,7 @@ describe('CDN — version filtering', () => {
     });
     const run = await cdn({ doThumbnails: false });
 
-    expect(invokeStub.uploadedKeys()).toEqual(['client-abc/originals/a4000001/c1.pdf']);
+    expect(invokeStub.uploadedKeys()).toEqual(['client/client-abc/originals/a4000001/c1.pdf']);
     expect(run.logsOfType('skip').join('\n')).toContain('older version file(s) excluded from CDN');
   });
 
@@ -258,14 +269,14 @@ describe('CDN — version filtering', () => {
     const run = await cdn({ doThumbnails: false });
 
     expect(invokeStub.uploadedKeys()).toEqual([
-      'client-abc/originals/a4000004/c1.pdf',
-      'client-abc/originals/a4000005/c1.pdf',
+      'client/client-abc/originals/a4000004/c1.pdf',
+      'client/client-abc/originals/a4000005/c1.pdf',
     ]);
     // Each file uploaded its own bytes, under its own package's identity.
     const byKey = new Map(invokeStub.argsFor('upload_to_r2').map(a => [a.objectKey, a.filePath]));
-    expect(byKey.get('client-abc/originals/a4000004/c1.pdf'))
+    expect(byKey.get('client/client-abc/originals/a4000004/c1.pdf'))
       .toBe(`${SRC}/A __a4000004/[03] OUT/(PRD)(SlD) Deck.pdf`);
-    expect(byKey.get('client-abc/originals/a4000005/c1.pdf'))
+    expect(byKey.get('client/client-abc/originals/a4000005/c1.pdf'))
       .toBe(`${SRC}/B __a4000005/[03] OUT/(PRD)(SlD) Deck.pdf`);
 
     // And each file's row gets its own download URL — the second half of F-5, which would
@@ -285,8 +296,8 @@ describe('CDN — version filtering', () => {
     await cdn({ doCdnOriginals: false });
 
     expect(invokeStub.uploadedKeys()).toEqual([
-      'client-abc/thumbnails/a4000006/c1.webp',
-      'client-abc/thumbnails/a4000007/c1.webp',
+      'client/client-abc/thumbnails/a4000006/c1.webp',
+      'client/client-abc/thumbnails/a4000007/c1.webp',
     ]);
   });
 
@@ -301,23 +312,26 @@ describe('CDN — version filtering', () => {
     await cdn({ doCdnOriginals: false });
 
     expect(new Set(invokeStub.uploadedKeys()).size).toBe(1);
-    expect(invokeStub.uploadedKeys()[0]).toMatch(/^client-abc\/thumbnails\/a4000008\/c\d\.webp$/);
+    expect(invokeStub.uploadedKeys()[0]).toMatch(/^client\/client-abc\/thumbnails\/a4000008\/c\d\.webp$/);
   });
 });
 
 describe('CDN — URLs handed to the portal', () => {
-  it('records a cache-busted public URL for the thumbnail and the original', async () => {
+  it('records a cache-busted URL on the tier the asset actually landed in', async () => {
     const src = `${SRC}/Asset __a5000001/[03] OUT/(PRD)(SlD) Deck.pdf`;
     vfs.tree(SRC, { 'Asset __a5000001/[03] OUT/(PRD)(SlD) Deck.pdf': '' });
     const run = await cdn();
 
     const cdnUrls = run.ctx.cdnUrls as Map<string, string>;
     const originalUrls = run.ctx.originalUrls as Map<string, string>;
+    // Default level is `client`, so both land behind the gate — and the URL the portal stores
+    // has to be the gated hostname, or the row would point at a public address holding nothing.
+    // `?v=` rides on both tiers: it is what busts caches when a version bump overwrites a key.
     expect(cdnUrls.get(src)).toBe(
-      'https://cdn.example.com/client-abc/thumbnails/a5000001/c1.webp?v=a1b2c3d4e5f6',
+      'https://files.example.com/client/client-abc/thumbnails/a5000001/c1.webp?v=a1b2c3d4e5f6',
     );
     expect(originalUrls.get(src)).toBe(
-      'https://cdn.example.com/client-abc/originals/a5000001/c1.pdf?v=a1b2c3d4e5f6',
+      'https://files.example.com/client/client-abc/originals/a5000001/c1.pdf?v=a1b2c3d4e5f6',
     );
   });
 
@@ -368,13 +382,13 @@ describe('CDN — guard rails', () => {
     vfs.tree(SRC, { 'Asset __a6000004/[03] OUT/(PRD)(SlD) Deck.pdf': '' });
     const run = await cdn({ doThumbnails: false });
 
-    expect(invokeStub.uploadedKeys()).toEqual(['client-abc/originals/a6000004/c1.pdf']);
+    expect(invokeStub.uploadedKeys()).toEqual(['client/client-abc/originals/a6000004/c1.pdf']);
     expect(run.logged('falling back to per-file checks')).toBe(true);
   });
 
   it('passes remoteExists to Rust so it can skip a byte transfer', async () => {
     vfs.tree(SRC, { 'Asset __a6000005/[03] OUT/(PRD)(SlD) Deck.pdf': '' });
-    invokeStub.remoteKeys.add('client-abc/originals/a6000005/c1.pdf');
+    invokeStub.remoteKeys.add('client/client-abc/originals/a6000005/c1.pdf');
     await cdn({ doThumbnails: false });
 
     expect(invokeStub.argsFor('upload_to_r2')[0].remoteExists).toBe(true);

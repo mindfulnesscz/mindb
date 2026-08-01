@@ -13,23 +13,46 @@
 
 import { stat } from '@tauri-apps/plugin-fs';
 import { invoke } from '@tauri-apps/api/core';
-import { filterHighestVersions } from '@dc-hub/domain';
+import { filterHighestVersions, storageTarget, assetUrl, type AccessLevel } from '@dc-hub/domain';
 import type { RunContext, RunStats } from './types';
 import { cdnStemKey } from '../supabaseService';
-import { storageKey } from './storageKey';
-import { loadR2Cache, saveR2Cache, r2CacheKey, rememberR2Upload, r2PublicUrl } from './r2Cache';
+import { loadR2Cache, saveR2Cache, r2CacheKey, rememberR2Upload } from './r2Cache';
+
+/* The level a brand-new asset is written at. Must equal the create-time default the export stage
+   uses (PIPELINE_DEFAULT_PERM='client' at status 'published'), or an asset's bytes would land at
+   one level while its row claims another — the object key IS the authorization, so that
+   disagreement is a 403 on a file the portal is offering. */
+const NEW_ASSET_LEVEL: AccessLevel = 'client';
+
+/** Everything an upload needs to reach the right bucket, resolved per asset from its level. */
+function routeFor(r2: NonNullable<RunContext['r2']>, level: AccessLevel, kind: 'thumbnails' | 'originals',
+                  stableId: string, childId: string, ext: string) {
+  const target = storageTarget(level, r2.clientId, kind, stableId, childId, ext);
+  return target.tier === 'public'
+    ? { ...target, bucket: r2.bucket, domain: r2.publicDomain,
+        accessKeyId: r2.accessKeyId, secretKey: r2.secretKey, sessionToken: r2.sessionToken }
+    : { ...target, bucket: r2.gatedBucket, domain: r2.gatedDomain,
+        accessKeyId: r2.gatedAccessKeyId, secretKey: r2.gatedSecretKey, sessionToken: r2.gatedSessionToken };
+}
+
+/** The level this asset's bytes belong at. Absent from the map means the row does not exist yet. */
+function levelOf(ctx: RunContext, stableId: string, childId: string): AccessLevel {
+  return (ctx.assetLevels?.get(`${stableId}:${childId}`) as AccessLevel | undefined) ?? NEW_ASSET_LEVEL;
+}
 
 export async function fetchR2KeyManifest(
   r2: NonNullable<RunContext['r2']>, prefix: string,
   appendLog: RunContext['appendLog'],
+  bucket = r2.bucket, accessKeyId = r2.accessKeyId,
+  secretKey = r2.secretKey, sessionToken = r2.sessionToken,
 ): Promise<Set<string> | null> {
   try {
     const keys = await invoke<string[]>('list_r2_keys', {
       endpoint:    r2.endpoint,
-      bucket:      r2.bucket,
-      accessKeyId: r2.accessKeyId,
-      secretKey:   r2.secretKey,
-      sessionToken: r2.sessionToken,
+      bucket,
+      accessKeyId,
+      secretKey,
+      sessionToken,
       prefix,
     });
     return new Set(keys);
@@ -37,6 +60,35 @@ export async function fetchR2KeyManifest(
     appendLog('dim', `  R2 inventory list failed (${e}) — falling back to per-file checks`);
     return null;
   }
+}
+
+
+/**
+ * Which keys already exist, across BOTH tiers.
+ *
+ * One asset's objects can be in either bucket and under any of three level prefixes, so a manifest
+ * of a single prefix would report "absent" for most of them. That errs safely — a false absent
+ * causes a re-upload, never a skipped one — but it would re-upload most of the library every run,
+ * which is exactly the cost this manifest exists to avoid.
+ *
+ * A failure in any one listing degrades to per-file checks for everything, matching the old
+ * behaviour: null means "no manifest", not "nothing is there".
+ */
+async function fetchTieredManifest(
+  r2: NonNullable<RunContext['r2']>, kind: 'thumbnails' | 'originals',
+  appendLog: RunContext['appendLog'],
+): Promise<Set<string> | null> {
+  const listings = await Promise.all([
+    fetchR2KeyManifest(r2, `${r2.clientId}/${kind}/`, appendLog,
+                       r2.bucket, r2.accessKeyId, r2.secretKey, r2.sessionToken),
+    ...(['guest', 'client', 'internal'] as const).map(level =>
+      fetchR2KeyManifest(r2, `${level}/${r2.clientId}/${kind}/`, appendLog,
+                         r2.gatedBucket, r2.gatedAccessKeyId, r2.gatedSecretKey, r2.gatedSessionToken)),
+  ]);
+  if (listings.some(l => l === null)) return null;
+  const all = new Set<string>();
+  for (const l of listings) for (const k of l!) all.add(k);
+  return all;
 }
 
 /* CDN uploads publish one object per logical asset under a version-stable key —
@@ -94,7 +146,7 @@ export async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<vo
 
   const r2Cache = await loadR2Cache();
   let r2CacheDirty = false;
-  const remoteKeys = await fetchR2KeyManifest(r2, storageKey(r2.keyPrefix, 'thumbnails/'), appendLog);
+  const remoteKeys = await fetchTieredManifest(r2, 'thumbnails', appendLog);
 
   const CONCURRENCY = 8;
   for (let i = 0; i < thumbFiles.length; i += CONCURRENCY) {
@@ -119,19 +171,21 @@ export async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<vo
         stats.errors += 1;
         return;
       }
-      const objectKey = storageKey(r2.keyPrefix, `thumbnails/${identity.stableId}/${identity.childId}.webp`);
+      const route     = routeFor(r2, levelOf(ctx, identity.stableId, identity.childId),
+                                 'thumbnails', identity.stableId, identity.childId, '.webp');
+      const objectKey = route.key;
 
       // Cheap local check (mtime+size, no file read/hash/network) before the real thing.
       // A manifest that says the key is gone from R2 overrides the cache — re-upload.
       // Do NOT skip just because DB already has a URL — version bumps overwrite the same
       // key; we still need a fresh ?v= hash in cdnUrls for browser cache busting.
-      const cacheKey = r2CacheKey(r2.bucket, objectKey);
+      const cacheKey = r2CacheKey(route.bucket, objectKey);
       const cacheEntry = r2Cache[cacheKey];
       const mtimeMs = thumbInfo.mtime?.getTime() ?? -1;
       if (cacheEntry && cacheEntry.size === thumbInfo.size && cacheEntry.mtimeMs === mtimeMs
           && remoteKeys?.has(objectKey) !== false) {
         if (ctx.cdnUrls) {
-          ctx.cdnUrls.set(srcPath, r2PublicUrl(r2.publicDomain, objectKey, cacheEntry.sha256));
+          ctx.cdnUrls.set(srcPath, assetUrl(route.domain, objectKey, cacheEntry.sha256));
         }
         cached += 1;
         stats.cdnThumbCached += 1;
@@ -147,17 +201,17 @@ export async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<vo
           filePath:     thumbPath,
           objectKey,
           endpoint:     r2.endpoint,
-          bucket:       r2.bucket,
-          accessKeyId:  r2.accessKeyId,
-          secretKey:    r2.secretKey,
-          sessionToken: r2.sessionToken,
-          publicDomain: r2.publicDomain,
+          bucket:       route.bucket,
+          accessKeyId:  route.accessKeyId,
+          secretKey:    route.secretKey,
+          sessionToken: route.sessionToken,
+          publicDomain: route.domain,
           contentType:  'image/webp',
           remoteExists: remoteKeys ? remoteKeys.has(objectKey) : null,
           knownSha256:  cacheEntry && cacheEntry.size === thumbInfo.size ? cacheEntry.sha256 : null,
         });
         if (ctx.cdnUrls) ctx.cdnUrls.set(srcPath, result.url);
-        rememberR2Upload(r2Cache, r2.bucket, objectKey, mtimeMs, thumbInfo.size, result.sha256);
+        rememberR2Upload(r2Cache, route.bucket, objectKey, mtimeMs, thumbInfo.size, result.sha256);
         r2CacheDirty = true;
         remoteKeys?.add(objectKey);
         if (result.skipped) {
@@ -222,7 +276,7 @@ export async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promi
 
   const r2Cache = await loadR2Cache();
   let r2CacheDirty = false;
-  const remoteKeys = await fetchR2KeyManifest(r2, storageKey(r2.keyPrefix, 'originals/'), appendLog);
+  const remoteKeys = await fetchTieredManifest(r2, 'originals', appendLog);
 
   // Identity by full filename first — extension-only variants (foo.pdf + foo.webp) share a
   // stem but carry distinct child ids in the manifest.
@@ -236,8 +290,11 @@ export async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promi
       stats.errors += 1;
       return [];
     }
-    const keyPrefix = storageKey(r2.keyPrefix, `originals/${identity.stableId}/${identity.childId}`);
-    return [{ ...f, keyPrefix, objectKey: `${keyPrefix}${f.ext}` }];
+    const route = routeFor(r2, levelOf(ctx, identity.stableId, identity.childId),
+                           'originals', identity.stableId, identity.childId, f.ext);
+    // Prefix without the extension — the stale-sibling cleanup below matches on `${prefix}.`
+    const keyPrefix = route.key.slice(0, route.key.length - f.ext.length);
+    return [{ ...f, keyPrefix, objectKey: route.key, route }];
   });
   // Keys claimed by any file this run — the stale-sibling cleanup must never delete
   // these, or two files sharing a key prefix would destroy each other's upload.
@@ -246,7 +303,7 @@ export async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promi
   const CONCURRENCY = 8;
   for (let i = 0; i < withKeys.length; i += CONCURRENCY) {
     const batch = withKeys.slice(i, i + CONCURRENCY);
-    await Promise.all(batch.map(async ({ srcPath, stem, ext, keyPrefix, objectKey }) => {
+    await Promise.all(batch.map(async ({ srcPath, stem, ext, keyPrefix, objectKey, route }) => {
 
       // Cheap local check (mtime+size, no file read/hash/network) before the real thing.
       let srcInfo;
@@ -256,7 +313,7 @@ export async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promi
         stats.errors += 1;
         return;
       }
-      const cacheKey = r2CacheKey(r2.bucket, objectKey);
+      const cacheKey = r2CacheKey(route.bucket, objectKey);
       const cacheEntry = r2Cache[cacheKey];
       const mtimeMs = srcInfo.mtime?.getTime() ?? -1;
       if (cacheEntry && cacheEntry.size === srcInfo.size && cacheEntry.mtimeMs === mtimeMs
@@ -265,7 +322,7 @@ export async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promi
         // pre-population for originals, so skipping without setting the map would
         // null the column on the next sync (the web portal's download button).
         if (ctx.originalUrls) {
-          ctx.originalUrls.set(srcPath, r2PublicUrl(r2.publicDomain, objectKey, cacheEntry.sha256));
+          ctx.originalUrls.set(srcPath, assetUrl(route.domain, objectKey, cacheEntry.sha256));
         }
         cached += 1;
         stats.cdnOrigCached += 1;
@@ -277,11 +334,11 @@ export async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promi
           filePath:     srcPath,
           objectKey,
           endpoint:     r2.endpoint,
-          bucket:       r2.bucket,
-          accessKeyId:  r2.accessKeyId,
-          secretKey:    r2.secretKey,
-          sessionToken: r2.sessionToken,
-          publicDomain: r2.publicDomain,
+          bucket:       route.bucket,
+          accessKeyId:  route.accessKeyId,
+          secretKey:    route.secretKey,
+          sessionToken: route.sessionToken,
+          publicDomain: route.domain,
           contentType:  mimeFromExt(ext),
           remoteExists: remoteKeys ? remoteKeys.has(objectKey) : null,
           knownSha256:  cacheEntry && cacheEntry.size === srcInfo.size ? cacheEntry.sha256 : null,
@@ -289,7 +346,7 @@ export async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promi
         // Keyed by absolute path, so extension variants and same-named files in other
         // packages each record their own URL instead of racing for one key.
         if (ctx.originalUrls) ctx.originalUrls.set(srcPath, result.url);
-        rememberR2Upload(r2Cache, r2.bucket, objectKey, mtimeMs, srcInfo.size, result.sha256);
+        rememberR2Upload(r2Cache, route.bucket, objectKey, mtimeMs, srcInfo.size, result.sha256);
         r2CacheDirty = true;
         remoteKeys?.add(objectKey);
 
@@ -302,16 +359,17 @@ export async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promi
             ? [...remoteKeys].filter(k => k.startsWith(`${keyPrefix}.`))
             : result.skipped ? [] : await invoke<string[]>('list_r2_keys', {
                 endpoint:     r2.endpoint,
-                bucket:       r2.bucket,
-                accessKeyId:  r2.accessKeyId,
-                secretKey:    r2.secretKey,
-          sessionToken: r2.sessionToken,
+                bucket:       route.bucket,
+                accessKeyId:  route.accessKeyId,
+                secretKey:    route.secretKey,
+                sessionToken: route.sessionToken,
                 prefix:       `${keyPrefix}.`,
               });
           for (const staleKey of siblingKeys.filter(k => k !== objectKey && !plannedKeys.has(k))) {
             await invoke('delete_r2_object', {
-              endpoint: r2.endpoint, bucket: r2.bucket,
-              accessKeyId: r2.accessKeyId, secretKey: r2.secretKey, sessionToken: r2.sessionToken, objectKey: staleKey,
+              endpoint: r2.endpoint, bucket: route.bucket,
+              accessKeyId: route.accessKeyId, secretKey: route.secretKey,
+              sessionToken: route.sessionToken, objectKey: staleKey,
             });
             remoteKeys?.delete(staleKey);
             appendLog('dim', `  ↷  removed stale original: ${staleKey}`);

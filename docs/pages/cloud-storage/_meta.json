@@ -1,1 +1,12 @@
-{"overview":"Provider comparison","dropbox":"Dropbox setup","onedrive":"OneDrive setup","microsoft-setup":"Microsoft & SharePoint setup","google-drive":"Google Drive setup","oauth-tokens":"OAuth and tokens","publishing":"Cloud publishing internals","security":"Security and sharing","troubleshooting":"Troubleshooting"}
+{
+  "overview": "Provider comparison",
+  "dropbox": "Dropbox setup",
+  "onedrive": "OneDrive setup",
+  "microsoft-setup": "Microsoft & SharePoint setup",
+  "google-drive": "Google Drive setup",
+  "oauth-tokens": "OAuth and tokens",
+  "publishing": "Cloud publishing internals",
+  "access-levels": "Access levels and gated delivery",
+  "security": "Security and sharing",
+  "troubleshooting": "Troubleshooting"
+}

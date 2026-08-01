@@ -6,9 +6,19 @@ export interface R2Grant {
   bucket:          string;
   publicDomain:    string;
   keyPrefix:       string;
+  clientId:        string;
   accessKeyId:     string;
   secretAccessKey: string;
   sessionToken:    string;
+  /* The gated tier: a bucket with no public access, reachable only through the cdn-gate Worker.
+     Null only for a branding grant, which has no gated tier. For a pipeline grant the function
+     refuses with 503 rather than returning null, because a desktop that quietly published gated
+     assets to the public bucket would look like a successful run. */
+  gatedBucket:          string | null;
+  gatedDomain:          string | null;
+  gatedAccessKeyId:     string | null;
+  gatedSecretAccessKey: string | null;
+  gatedSessionToken:    string | null;
   expiresAt:       number;
 }
 
