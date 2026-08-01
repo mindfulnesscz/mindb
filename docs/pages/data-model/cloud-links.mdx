@@ -28,4 +28,4 @@ Entries without a matching destination definition are shown to **staff only**. C
 
 Separate from download URLs. When a destination has `allowRevealLocal` and the user’s role meets `minRole`, asset detail can call the desktop localhost bridge (`:7624`) with `clientId` + `stableId`. The desktop resolves the package under `sourceFolder` via `.dchub.json` and reveals it in the OS file manager. Requires the desktop app running with that client selected.
 
-Database fields control discoverability but not public-object access. Rotate/remove the underlying R2 object or provider permission when a bearer link must stop working.
+Database fields control discoverability. For **third-party** share links (Dropbox, Drive, OneDrive) they control nothing else: revoke the provider permission when a link must stop working. R2 objects are no longer in that category — `guest`/`client`/`internal` assets are served through the `cdn-gate` Worker and refuse an unauthorized request ([access levels](/cloud-storage/access-levels)) — but anything ever served on the **public** tier stays fetchable at that URL forever.
