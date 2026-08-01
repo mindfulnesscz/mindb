@@ -118,7 +118,7 @@ const sbHeaders = {
    bucket-scoped key pair from the parent key. Nothing long-lived is written down here. */
 
 async function tempCredentials(bucket) {
-  const res = await fetch(
+  const res = await retryFetch(
     `https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/r2/temp-access-credentials`,
     {
       method: 'POST',
@@ -136,6 +136,18 @@ async function tempCredentials(bucket) {
   return body.result;
 }
 
+/* A thousand-object run touches the network thousands of times; one blip should not end it. The
+   S3 path re-signs per attempt (see s3), so this wrapper is for everything else: the Cloudflare
+   credential mint and the Supabase reads and writes, each of which ended a run outright. */
+async function retryFetch(url, init, attempts = 3) {
+  let lastErr;
+  for (let i = 1; i <= attempts; i++) {
+    try { return await fetch(url, init); }
+    catch (e) { lastErr = e; if (i < attempts) await new Promise(r => setTimeout(r, i * 1500)); }
+  }
+  throw lastErr;
+}
+
 const sha256hex = b => crypto.createHash('sha256').update(b).digest('hex');
 const hmac = (k, s) => crypto.createHmac('sha256', k).update(s).digest();
 
@@ -150,39 +162,43 @@ const rfc3986 = str => encodeURIComponent(str)
 /** Minimal SigV4 for R2. Only the three verbs this script needs. */
 async function s3(creds, bucket, method, key, body = null, extraHeaders = {}) {
   const host = `${env.CF_ACCOUNT_ID}.r2.cloudflarestorage.com`;
-  const now = new Date();
-  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
-  const dateStamp = amzDate.slice(0, 8);
   const payloadHash = sha256hex(body ?? Buffer.alloc(0));
   const canonicalUri = `/${bucket}/${key.split('/').map(rfc3986).join('/')}`;
 
-  // Lowercase keys throughout, so the canonical form is a plain sort of this object rather than a
-  // case-insensitive lookup back into it. SigV4 fails opaquely (403 SignatureDoesNotMatch) when
-  // the signed list and the sent headers disagree by so much as capitalisation.
-  const headers = {
-    host,
-    'x-amz-content-sha256': payloadHash,
-    'x-amz-date': amzDate,
-    'x-amz-security-token': creds.sessionToken,
-    ...Object.fromEntries(Object.entries(extraHeaders).map(([k, v]) => [k.toLowerCase(), v])),
-  };
-  const signedNames = Object.keys(headers).sort();
-  const canonicalHeaders = signedNames.map(h => `${h}:${String(headers[h]).trim()}\n`).join('');
-  const signedHeaders = signedNames.join(';');
-
-  const canonical = [method, canonicalUri, '', canonicalHeaders, signedHeaders, payloadHash].join('\n');
-  const scope = `${dateStamp}/auto/s3/aws4_request`;
-  const toSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256hex(Buffer.from(canonical))].join('\n');
-  const kDate = hmac(`AWS4${creds.secretAccessKey}`, dateStamp);
-  const signature = hmac(hmac(hmac(hmac(kDate, 'auto'), 's3'), 'aws4_request'), toSign).toString('hex');
-
-  headers.Authorization =
-    `AWS4-HMAC-SHA256 Credential=${creds.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
-
-  /* One transient socket error ended a run 643 objects in. The work is idempotent so a re-run
-     resumes, but a thousand-object job should not need babysitting through every network blip. */
+  /* Signed INSIDE the retry loop, not once above it.
+     A signature is stamped with the moment it was made, and R2 rejects anything more than a few
+     minutes adrift with `RequestTimeTooSkewed` — a 403, indistinguishable at a glance from a
+     credentials problem. Re-using one timestamp across retries meant a large upload that failed
+     slowly was retried with a stale stamp and refused for a reason that had nothing to do with
+     the retry. Each attempt now carries its own. */
   let lastErr;
   for (let attempt = 1; attempt <= 3; attempt++) {
+    const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, '');
+    const dateStamp = amzDate.slice(0, 8);
+
+    // Lowercase keys throughout, so the canonical form is a plain sort of this object rather than
+    // a case-insensitive lookup back into it. SigV4 fails opaquely (403) when the signed list and
+    // the sent headers disagree by so much as capitalisation.
+    const headers = {
+      host,
+      'x-amz-content-sha256': payloadHash,
+      'x-amz-date': amzDate,
+      'x-amz-security-token': creds.sessionToken,
+      ...Object.fromEntries(Object.entries(extraHeaders).map(([k, v]) => [k.toLowerCase(), v])),
+    };
+    const signedNames = Object.keys(headers).sort();
+    const canonicalHeaders = signedNames.map(h => `${h}:${String(headers[h]).trim()}\n`).join('');
+    const signedHeaders = signedNames.join(';');
+
+    const canonical = [method, canonicalUri, '', canonicalHeaders, signedHeaders, payloadHash].join('\n');
+    const scope = `${dateStamp}/auto/s3/aws4_request`;
+    const toSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256hex(Buffer.from(canonical))].join('\n');
+    const kDate = hmac(`AWS4${creds.secretAccessKey}`, dateStamp);
+    const signature = hmac(hmac(hmac(hmac(kDate, 'auto'), 's3'), 'aws4_request'), toSign).toString('hex');
+
+    headers.Authorization =
+      `AWS4-HMAC-SHA256 Credential=${creds.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
     try {
       return await fetch(`https://${host}${canonicalUri}`, { method, headers, body: body ?? undefined });
     } catch (e) {
@@ -229,7 +245,7 @@ async function main() {
       .map(p => `${below.filter(r => r.perm === p).length} ${p}`).join(' + ');
     log(`  raise to client   ${below.length} row(s) (${byPerm}) -> client`);
     if (EXECUTE && below.length) {
-      const res = await fetch(`${REST}/assets?${filter}`, {
+      const res = await retryFetch(`${REST}/assets?${filter}`, {
         method: 'PATCH', headers: { ...sbHeaders, Prefer: 'return=minimal' },
         body: JSON.stringify({ perm: 'client' }),
       });
@@ -335,7 +351,7 @@ async function main() {
     }
 
     if (EXECUTE && Object.keys(patch).length) {
-      const res = await fetch(`${REST}/assets?id=eq.${a.id}`, {
+      const res = await retryFetch(`${REST}/assets?id=eq.${a.id}`, {
         method: 'PATCH', headers: { ...sbHeaders, Prefer: 'return=minimal' }, body: JSON.stringify(patch),
       });
       if (!res.ok) { plan.failed++; log(`  ✕  ${a.id}: DB update failed ${res.status} ${await res.text()}`); continue; }
@@ -408,7 +424,7 @@ async function copyObject(creds, source, target) {
 async function sbGet(query) {
   const out = [];
   for (let offset = 0; ; offset += 1000) {
-    const res = await fetch(`${REST}${query}${query.includes('?') ? '&' : '?'}limit=1000&offset=${offset}`,
+    const res = await retryFetch(`${REST}${query}${query.includes('?') ? '&' : '?'}limit=1000&offset=${offset}`,
       { headers: sbHeaders });
     if (!res.ok) throw new Error(`${query}: ${res.status} ${await res.text()}`);
     const page = await res.json();
