@@ -1,0 +1,108 @@
+name: Reconcile CDN object keys
+
+# An asset's access level is encoded in its R2 object key, which is what lets the cdn-gate Worker
+# authorize a request without a single lookup. The cost of that trade is that changing an asset's
+# `perm` or `status` has to MOVE the bytes, and nothing in the portal does — the write updates a
+# row and the object stays where it was.
+#
+# Left alone, that means an editor changing visibility silently breaks delivery for that asset:
+# the portal offers it and the gate refuses it, or the reverse. This job closes the loop. It runs
+# the same script a human would, which computes the target from `packages/domain/src/assetStorage.ts`
+# — the same module the pipeline uses — so there is no second implementation to keep in step.
+#
+# WHAT THIS IS NOT: it is not immediate. Between a visibility change and the next run, the bytes
+# sit at their old level. Discovery is unaffected — RLS hides the row from the portal at once — so
+# the exposure window applies only to someone already holding the URL, which is the leaked-URL case
+# that re-keying cannot undo anyway. A portal-triggered move would cut the delay to seconds and is
+# worth adding; this is the safety net that makes the system self-healing rather than silently
+# broken, and the net is wanted even once the fast path exists.
+#
+# GitHub's scheduled runs are best-effort and are commonly late under load. Treat the interval as
+# "within about half an hour", not a guarantee.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Which environment to reconcile
+        required: true
+        default: staging
+        type: choice
+        options: [staging, production]
+      dry_run:
+        description: Report drift without moving anything
+        required: false
+        default: false
+        type: boolean
+
+# One at a time per environment. Two overlapping runs would both plan from the same starting state
+# and race each other's copies.
+concurrency:
+  group: reconcile-cdn-${{ github.event.inputs.environment || 'all' }}
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # A scheduled run does both; a manual run does the one that was asked for.
+        environment: ${{ github.event_name == 'schedule' && fromJSON('["staging","production"]') || fromJSON(format('["{0}"]', github.event.inputs.environment)) }}
+    environment: ${{ matrix.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # 24 for type stripping on import: the script imports assetStorage.ts directly rather
+          # than restating the key rules, and that only works from Node 22.6 onwards.
+          node-version: 24
+
+      # No `npm ci`. The script uses node builtins and fetch only, so an install would add a
+      # minute per run to fetch dependencies it never touches.
+      - name: Reconcile ${{ matrix.environment }}
+        env:
+          PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_PUBLIC_DOMAIN: ${{ vars.R2_PUBLIC_DOMAIN }}
+          R2_GATED_BUCKET: ${{ vars.R2_GATED_BUCKET }}
+          R2_GATED_DOMAIN: ${{ vars.R2_GATED_DOMAIN }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          R2_PARENT_ACCESS_KEY_ID: ${{ secrets.R2_PARENT_ACCESS_KEY_ID }}
+        run: |
+          node scripts/rekey-gated-objects.mjs "${{ matrix.environment }}" \
+            ${{ github.event.inputs.dry_run == 'true' && ' ' || '--execute' }} \
+            | tee run.log
+          # --reclassify-public is deliberately NOT passed. It changes who can SEE things and is a
+          # decision, never something a timer should make.
+
+      - name: Summarise
+        if: always()
+        run: |
+          echo "### ${{ matrix.environment }}" >> "$GITHUB_STEP_SUMMARY"
+          tail -3 run.log >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "no output" >> "$GITHUB_STEP_SUMMARY"
+
+# ── Setup, once, per GitHub environment (staging / production) ────────────────
+#
+# Settings -> Environments -> <env>
+#
+#   Secrets
+#     SUPABASE_PROJECT_REF      the project ref, e.g. tvrxnwbhzborkkkdeyuk
+#     SUPABASE_SERVICE_KEY      service role key — bypasses RLS, which this needs: it reconciles
+#                               rows no ordinary session may see
+#     CF_API_TOKEN              mints short-lived, bucket-scoped R2 credentials
+#     CF_ACCOUNT_ID
+#     R2_PARENT_ACCESS_KEY_ID
+#
+#   Variables (not secrets — these are names and public hostnames)
+#     R2_BUCKET                 public bucket,  e.g. dc-hub-staging
+#     R2_PUBLIC_DOMAIN          its public URL
+#     R2_GATED_BUCKET           gated bucket,   e.g. dc-hub-gated-staging
+#     R2_GATED_DOMAIN           the Worker hostname in front of it
+#
+# The same values already live in scripts/environments/<env>.env for local runs; this job has no
+# env file, which is why the script reads the process environment too.
