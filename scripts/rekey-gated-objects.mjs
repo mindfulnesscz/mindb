@@ -304,8 +304,18 @@ async function copyObject(creds, source, target) {
   const body = Buffer.from(await got.arrayBuffer());
   const contentType = got.headers.get('content-type') ?? 'application/octet-stream';
 
+  /* `x-amz-meta-sha256` is how the pipeline recognises an object it has already uploaded: before
+     writing, it reads this header back and skips when the hash matches the local file. An earlier
+     version of this copy did not carry it, so every moved object looked brand new — the first
+     pipeline run after the staging re-key re-uploaded all 16 files instead of skipping them. On
+     production that is the entire library, including a 380 MB video, for nothing.
+
+     Set from the bytes actually copied rather than forwarded from the source, so this also repairs
+     an object whose metadata was missing or wrong. */
+  const bodyHash = sha256hex(body);
   const put = await s3(to, target.bucket, 'PUT', target.key, body, {
     'content-type': contentType,
+    'x-amz-meta-sha256': bodyHash,
     // Gated bytes are only ever served through the Worker, which sets its own Cache-Control;
     // this is what a direct read would see, and `private` is the honest value for them.
     'cache-control': target.bucket === env.R2_BUCKET
@@ -313,7 +323,7 @@ async function copyObject(creds, source, target) {
       : 'private, max-age=31536000, immutable',
   });
   if (!put.ok) { log(`     PUT failed ${put.status} ${await put.text()}`); return 'failed'; }
-  return sha256hex(body);
+  return bodyHash;
 }
 
 async function sbGet(query) {
