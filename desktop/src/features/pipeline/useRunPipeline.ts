@@ -22,6 +22,7 @@ import { runPipeline, scanVersionMap, deleteCdnObjects, type RunContext } from '
 import type { CloudUrlEntry } from '../../services/pipelineService';
 import {
   exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary, requestR2Grant, processRenameTasks,
+  fetchAssetLevels,
 } from '../../services/supabaseService';
 import { loadVocabulary } from '../../services/vocabService';
 import { notifyRunComplete } from '../../services/notifyService';
@@ -75,9 +76,19 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
     }
 
     let r2Config: RunContext['r2'];
+    let assetLevels: Map<string, string> | undefined;
     if (sbConfig && clientId && (settings.doThumbnails || settings.doCdnOriginals)) {
       try {
         const grant = await requestR2Grant(sbConfig, clientId);
+        // A pipeline grant without the gated half means the environment is half-provisioned.
+        // Refusing here is the point: uploading anyway would put client and internal assets on
+        // the public domain, and the run would report success.
+        if (!grant.gatedBucket || !grant.gatedDomain || !grant.gatedAccessKeyId) {
+          throw new Error(
+            'storage grant has no gated tier — set R2_GATED_BUCKET and R2_GATED_DOMAIN function '
+            + 'secrets for this environment. Refusing to publish to the public bucket.',
+          );
+        }
         r2Config = {
           endpoint:     grant.endpoint,
           accessKeyId:  grant.accessKeyId,
@@ -86,8 +97,22 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
           bucket:       grant.bucket,
           publicDomain: grant.publicDomain,
           keyPrefix:    grant.keyPrefix,
+          clientId:     grant.clientId ?? clientId,
+          gatedBucket:       grant.gatedBucket,
+          gatedDomain:       grant.gatedDomain,
+          gatedAccessKeyId:  grant.gatedAccessKeyId,
+          gatedSecretKey:    grant.gatedSecretAccessKey!,
+          gatedSessionToken: grant.gatedSessionToken!,
         };
-        log('dim', `  Storage grant issued for "${activeClient!.name}" (bucket ${grant.bucket}, expires ${new Date(grant.expiresAt).toLocaleTimeString()})`);
+        log('dim', `  Storage grant issued for "${activeClient!.name}" (public ${grant.bucket} · gated ${grant.gatedBucket}, expires ${new Date(grant.expiresAt).toLocaleTimeString()})`);
+
+        /* Object keys carry the access level, so the upload stages need each asset's CURRENT
+           level before they write — and `perm` is portal-owned, so the database is the only place
+           that knows it. Fetched once per run. An empty map (a failed read) means every asset is
+           treated as new and written at the create-time default: the restrictive direction, and
+           the reconciler picks up anything that lands wrong. */
+        assetLevels = await fetchAssetLevels(clientId, sbConfig);
+        log('dim', `  ${assetLevels.size} known asset level(s) loaded for key routing`);
       } catch (e) {
         log('error', `  ✕  CDN steps disabled — ${e}`);
       }
@@ -101,6 +126,7 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
       collectedAssets,
       cdnUrls,
       originalUrls,
+      assetLevels,
       cloudUrls,
       cloudDestinations: cloudDests,
       localExportLayout:    resolveExportShape(runLocalDest ?? {}).exportLayout,

@@ -63,6 +63,23 @@ Deno.serve(async (req) => {
     return json(503, { error: 'Storage not provisioned — set R2_BUCKET and R2_PUBLIC_DOMAIN function secrets' });
   }
 
+  /* The gated tier. Delivery is two-bucket: `public` objects stay in the bucket above, on the
+     public domain; every other level lives in a bucket with no public access at all, reachable
+     only through the cdn-gate Worker. The pipeline therefore needs credentials for BOTH, because
+     which one an object belongs in is decided per asset, from its effective level.
+
+     Absent is a hard 503 rather than a silent fall back to the public bucket. A desktop that
+     quietly published gated content to the public domain because a secret was unset is the exact
+     failure this whole tier exists to prevent — and it would look like a successful run. */
+  const gatedBucket = Deno.env.get('R2_GATED_BUCKET');
+  const gatedDomain = Deno.env.get('R2_GATED_DOMAIN');
+  if (purpose === 'pipeline' && (!gatedBucket || !gatedDomain)) {
+    return json(503, {
+      error: 'Gated storage not provisioned — set R2_GATED_BUCKET and R2_GATED_DOMAIN function '
+           + 'secrets. Publishing is refused rather than risk writing gated assets to the public bucket.',
+    });
+  }
+
   const cfToken   = Deno.env.get('CF_API_TOKEN');
   const accountId = Deno.env.get('CF_ACCOUNT_ID');
   const parentKey = Deno.env.get('R2_PARENT_ACCESS_KEY_ID');
@@ -70,23 +87,35 @@ Deno.serve(async (req) => {
     return json(503, { error: 'Storage backend not provisioned — set CF_API_TOKEN / CF_ACCOUNT_ID / R2_PARENT_ACCESS_KEY_ID' });
   }
 
-  const cfRes = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${accountId}/r2/temp-access-credentials`,
-    {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${cfToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        bucket,
-        parentAccessKeyId: parentKey,
-        permission: 'object-read-write',
-        ttlSeconds: GRANT_TTL_SECONDS,
-      }),
-    },
-  );
-  const cfBody = await cfRes.json().catch(() => null);
-  if (!cfRes.ok || !cfBody?.result?.accessKeyId) {
-    console.error('Cloudflare temp-credentials failed:', cfRes.status, JSON.stringify(cfBody?.errors ?? cfBody));
-    return json(502, { error: 'Could not obtain storage credentials' });
+  /* Temporary credentials are scoped to ONE bucket, so the two tiers need one grant each. */
+  async function tempCredentials(forBucket: string) {
+    const res = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/r2/temp-access-credentials`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${cfToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bucket: forBucket,
+          parentAccessKeyId: parentKey,
+          permission: 'object-read-write',
+          ttlSeconds: GRANT_TTL_SECONDS,
+        }),
+      },
+    );
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body?.result?.accessKeyId) {
+      console.error('Cloudflare temp-credentials failed:', forBucket, res.status, JSON.stringify(body?.errors ?? body));
+      return null;
+    }
+    return body.result as { accessKeyId: string; secretAccessKey: string; sessionToken: string };
+  }
+
+  const publicCreds = await tempCredentials(bucket);
+  if (!publicCreds) return json(502, { error: 'Could not obtain storage credentials' });
+
+  const gatedCreds = purpose === 'pipeline' ? await tempCredentials(gatedBucket!) : null;
+  if (purpose === 'pipeline' && !gatedCreds) {
+    return json(502, { error: 'Could not obtain gated storage credentials' });
   }
 
   const keyPrefix = purpose === 'branding'
@@ -98,9 +127,18 @@ Deno.serve(async (req) => {
     bucket,
     publicDomain,
     keyPrefix,
-    accessKeyId:     cfBody.result.accessKeyId,
-    secretAccessKey: cfBody.result.secretAccessKey,
-    sessionToken:    cfBody.result.sessionToken,
+    // The client id, stated rather than left to be parsed back out of keyPrefix. Object keys are
+    // built from it directly now, and `branding/{id}/` vs `{id}/` makes that parse a trap.
+    clientId:        client_id,
+    accessKeyId:     publicCreds.accessKeyId,
+    secretAccessKey: publicCreds.secretAccessKey,
+    sessionToken:    publicCreds.sessionToken,
+    // Absent for a branding grant, which has no gated tier — branding assets are public by nature.
+    gatedBucket:     gatedBucket ?? null,
+    gatedDomain:     gatedDomain ?? null,
+    gatedAccessKeyId:     gatedCreds?.accessKeyId ?? null,
+    gatedSecretAccessKey: gatedCreds?.secretAccessKey ?? null,
+    gatedSessionToken:    gatedCreds?.sessionToken ?? null,
     expiresAt:       Date.now() + GRANT_TTL_SECONDS * 1000,
   });
 });

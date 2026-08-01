@@ -17,6 +17,8 @@ export interface CloudUrlEntry {
   url:      string;  // sharing link
 }
 
+/* Two tiers of delivery. Which one an object goes to is decided per asset from its effective
+   level (see @dc-hub/domain `storageTarget`), so the pipeline holds credentials for both. */
 export interface R2Config {
   endpoint:     string;
   accessKeyId:  string;
@@ -24,7 +26,14 @@ export interface R2Config {
   sessionToken: string;
   bucket:       string;
   publicDomain: string;
-  keyPrefix:    string;  // e.g. "{client_id}/" — prepended to all object keys
+  keyPrefix:    string;  // e.g. "{client_id}/" — legacy prefix helper, kept for branding uploads
+  clientId:     string;  // object keys are built from this directly
+  /** Gated bucket — no public access; the cdn-gate Worker is its only door. */
+  gatedBucket:       string;
+  gatedDomain:       string;
+  gatedAccessKeyId:  string;
+  gatedSecretKey:    string;
+  gatedSessionToken: string;
 }
 
 export interface RunContext {
@@ -49,6 +58,10 @@ export interface RunContext {
   /** absPath → identity (per file), plus cdnStemKey(absPath) → identity (shared thumbnail). */
   cdnIdentity?:      Map<string, { stableId: string; childId: string }>;
   storageKeyPrefix?: string;  // mirrors r2.keyPrefix when CDN enabled
+  /** `${stable_id}:${child_id}` → effective access level, read from the DB before uploading.
+   *  The level is part of the object key and picks the bucket, and `perm` is portal-owned, so
+   *  the database is the only place that knows it. Absent key ⇒ a new asset. */
+  assetLevels?:      Map<string, string>;
 }
 
 
