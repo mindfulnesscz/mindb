@@ -1,0 +1,107 @@
+name: CDN gate Worker
+
+# The last deploy path that did not follow git.
+#
+# Migrations and edge functions have deployed from `main` since db.yml existed, and the portal is
+# Vercel's git integration. The Worker was the exception: `wrangler deploy` publishes whatever is in
+# the working directory of whoever runs it. That is fine until it is not — deploy with an
+# uncommitted edit and production is running code that exists in no commit, and "what is live?"
+# stops being answerable from the repo.
+#
+# Same branch model as db.yml: staging deploys the staging Worker, main deploys production.
+#
+# No path filter on push, matching db.yml's reasoning: deploy jobs run on every merge so
+# "merged to main = production reconciled" always holds. `wrangler deploy` is idempotent and
+# uploads ~14 KiB, so the cost of a redundant run is a few seconds.
+#
+# Worker SECRETS are not touched here. CDN_COOKIE_SECRET, SUPABASE_URL and SUPABASE_ANON_KEY are
+# set once with `wrangler secret put` and survive deploys — a deploy replaces the script, not its
+# secrets. Rotating one stays a deliberate manual act.
+
+on:
+  pull_request:
+    paths: ['workers/**', 'packages/domain/**']
+  push:
+    branches: [main, staging]
+
+concurrency:
+  group: worker-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # On a PR: prove it builds and the security matrix still holds, without deploying.
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Authorization matrix and token handling
+        run: npx vitest run workers/cdn-gate
+      - run: npm run typecheck:worker
+      # Catches a broken wrangler.jsonc — a missing binding or a malformed route — without
+      # publishing. `packages/domain` is in the path filter because the Worker bundles it: a change
+      # to the object-key rules is a change to what the gate will authorize.
+      - name: Bundle without publishing
+        run: npx wrangler deploy --dry-run --outdir /tmp/worker-build --env production
+        working-directory: workers/cdn-gate
+
+  deploy-staging:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npx wrangler deploy --env staging
+        working-directory: workers/cdn-gate
+        env:
+          # wrangler reads CLOUDFLARE_API_TOKEN by convention; the SECRET is named for what it
+          # does, so nobody has to remember which of two Cloudflare tokens this one is.
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_WORKERS_TOKEN }}
+
+  deploy-production:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npx wrangler deploy --env production
+        working-directory: workers/cdn-gate
+        env:
+          # wrangler reads CLOUDFLARE_API_TOKEN by convention; the SECRET is named for what it
+          # does, so nobody has to remember which of two Cloudflare tokens this one is.
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_WORKERS_TOKEN }}
+
+# ── Setup, once ───────────────────────────────────────────────────────────────
+#
+# Settings -> Environments -> staging AND production -> Environment secrets:
+#
+#   CF_WORKERS_TOKEN
+#
+# NOT the same token as CF_R2_TOKEN. That one mints R2 temporary credentials and has no Workers
+# permission — deploying with it fails on authorization, which reads like a bad token rather than a
+# missing scope. Two Cloudflare tokens, named for their jobs:
+#
+#   CF_R2_TOKEN       mints short-lived R2 credentials   (Supabase function secret)
+#   CF_WORKERS_TOKEN  publishes this Worker              (GitHub environment secret)
+#
+# Create the second at
+# https://dash.cloudflare.com/profile/api-tokens with:
+#
+#   Account · Workers Scripts   : Edit      (publish the script)
+#   Account · Workers R2 Storage: Edit      (the GATED bucket binding)
+#   Zone    · Workers Routes    : Edit      (the files.* custom domain)
+#
+# Until it is set the deploy jobs fail and everything else carries on — the Worker simply stays at
+# whatever was last published by hand, which is the behaviour this workflow is replacing.

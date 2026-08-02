@@ -1,16 +1,17 @@
 /* Where an asset's bytes live — the single answer, shared by everything that needs it.
  *
- * Three callers have to agree, and if any two of them disagree the symptom is a broken image or a
+ * Four callers have to agree, and if any two of them disagree the symptom is a broken image or a
  * leak rather than a type error:
  *
  *   the desktop pipeline   decides where to UPLOAD
  *   the re-key script      decides where to MOVE existing objects
+ *   the cdn-reconcile fn   moves them when a level changes
  *   the cdn-gate Worker    parses the key back to decide WHO MAY FETCH it
  *
- * The Worker cannot import this (it is a separate deployment with its own bundle), so its parser
- * carries the same shape written out by hand — `workers/cdn-gate/src/authz.ts`, `parseGatedKey`.
- * Change the key shape here and that must change with it; `assetStorage.test.ts` states the shape
- * explicitly so the mismatch is at least visible.
+ * All four import THIS module. The Worker was the exception — it restated the parse by hand,
+ * because it lives in its own bundle — until workers/cdn-gate joined the npm workspace and could
+ * resolve @dc-hub/domain like everyone else. `parseObjectPath` below is that parser, and it is now
+ * the only copy: a change to the key shape can no longer be half-made.
  *
  * Two tiers of delivery, four levels of access:
  *
@@ -108,6 +109,61 @@ export function assetUrl(domain: string, objectKey: string, contentHash?: string
   const base = `${domain.replace(/\/+$/, '')}/${objectKey}`;
   if (!contentHash) return base;
   return `${base}?v=${contentHash.slice(0, 12)}`;
+}
+
+/* ── Reading a key back ────────────────────────────────────────────────────── */
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export interface ParsedObjectPath {
+  level: AccessLevel;
+  clientId: string;
+  /** Everything after the client segment — `thumbnails/<stable>/<child>.webp` and friends. */
+  rest: string;
+  /** The full object key, decoded. What actually gets fetched. */
+  key: string;
+}
+
+/**
+ * Split a gated request path into its parts, or return null if it is not one.
+ *
+ *     /client/8f3e…/thumbnails/a1000001/c1.webp
+ *      ^level ^client_id       ^rest
+ *
+ * Null must mean 404, never "allow": a path whose level cannot be determined is not a public one.
+ * This is the Worker's whole authorization input, so it is deliberately strict — a client segment
+ * that is not a uuid means the key was not written by this pipeline, and a `..` segment must never
+ * be able to walk from one level into another.
+ */
+export function parseObjectPath(pathname: string): ParsedObjectPath | null {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    return null; // malformed percent-encoding
+  }
+
+  const key = decoded.replace(/^\/+/, '');
+  const segments = key.split('/');
+  if (segments.length < 3) return null;
+  if (segments.some(s => s === '' || s === '.' || s === '..')) return null;
+
+  const [level, clientId, ...rest] = segments;
+  if (!LEVELS.has(level)) return null;
+  if (!UUID.test(clientId)) return null;
+
+  return { level: level as AccessLevel, clientId, rest: rest.join('/'), key };
+}
+
+/**
+ * Would the Worker be able to serve an object written at this key?
+ *
+ * Anything that WRITES a gated key checks this first. It is cheap and exact, and its absence let
+ * nine production objects land at addresses the gate could not parse — a 404 on a file the portal
+ * was offering. Asserting the reader's contract at the moment of writing is the whole point.
+ */
+export function isServableGatedKey(key: string): boolean {
+  return parseObjectPath(key) !== null;
 }
 
 /** Strip the cache-busting stamp — for comparing a stored URL against a computed target. */

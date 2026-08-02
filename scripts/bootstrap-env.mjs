@@ -119,7 +119,7 @@ try {
   sh(`supabase functions deploy`, 'Deploy edge functions');
 
   // Function secrets: env-level R2 + Cloudflare grant creds.
-  if (cfg.CF_API_TOKEN && cfg.CF_ACCOUNT_ID && cfg.R2_PARENT_ACCESS_KEY_ID && cfg.R2_BUCKET && cfg.R2_PUBLIC_DOMAIN) {
+  if ((cfg.CF_R2_TOKEN ?? cfg.CF_API_TOKEN) && cfg.CF_ACCOUNT_ID && cfg.R2_PARENT_ACCESS_KEY_ID && cfg.R2_BUCKET && cfg.R2_PUBLIC_DOMAIN) {
     console.log('\n▸ Set function secrets (R2 + Cloudflare grant)');
     if (!EXECUTE) {
       console.log('  [dry-run] supabase secrets set --env-file <temp>');
@@ -128,7 +128,7 @@ try {
       writeFileSync(tmp, [
         `R2_BUCKET=${cfg.R2_BUCKET}`,
         `R2_PUBLIC_DOMAIN=${cfg.R2_PUBLIC_DOMAIN.replace(/\/+$/, '')}`,
-        `CF_API_TOKEN=${cfg.CF_API_TOKEN}`,
+        `CF_R2_TOKEN=${cfg.CF_R2_TOKEN ?? cfg.CF_API_TOKEN}`,
         `CF_ACCOUNT_ID=${cfg.CF_ACCOUNT_ID}`,
         `R2_PARENT_ACCESS_KEY_ID=${cfg.R2_PARENT_ACCESS_KEY_ID}`,
         '',

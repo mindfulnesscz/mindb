@@ -1,0 +1,50 @@
+# Browsing assets in the desktop app
+
+**Status:** deferred, 2026-08-02 — wanted, but other features come first.
+
+Today the desktop publishes assets and never shows them back. Browsing the library from the app —
+thumbnails, search, opening an asset — would close that loop, and it is the natural place for it
+since the desktop already holds folder identity and the source files.
+
+## What actually blocks it
+
+Not the UI. **The CDN gate authenticates by cookie only.**
+
+`workers/cdn-gate/src/index.ts` reads `dch_cdn` and nothing else. That works because the portal is a
+browser on a sibling subdomain of `files.disruptcollective.com`, so the cookie rides along on
+`<img>` requests automatically. A Tauri app has no such relationship: it is not same-site with the
+CDN host, and its requests go through Rust rather than a browser context that holds the cookie.
+
+So a desktop client cannot currently fetch a gated object at all. Every thumbnail would 403.
+
+## What it would take
+
+**A bearer path on the Worker.** Accept `Authorization: Bearer <cdn-token>` as an alternative to the
+cookie, verifying the same signed token. The cookie stays — it is the only thing that makes `<img>`
+work in a browser, and it is what keeps the edge cache shared and un-fragmented. Bearer becomes the
+programmatic path.
+
+**A way for the desktop to mint one.** `POST /auth` already returns the token as a `Set-Cookie`, and
+deliberately does not put it in the response body — that was to stop it ending up in a query string
+and fragmenting the cache per user. A desktop caller needs the value itself, so this wants a
+separate response shape for non-browser clients rather than loosening the browser one.
+
+The desktop already has the right shape to copy: `requestR2Grant` in
+`desktop/src/services/supabase/r2Grant.ts`, including its gateway-versus-refusal error split.
+
+**Then the UI**, which is the part with no unknowns.
+
+## Do not
+
+**Do not put the token in the URL.** It gives every user a distinct cache key, fragments the edge
+cache to near-zero hit rate, and defeats the `?v=<hash>` immutability the pipeline relies on. This
+is written down in three places already because it is the tempting shortcut.
+
+**Do not have the desktop read from the public bucket instead.** It would work, and it would mean
+the desktop only ever sees `public` assets — which after the 2026-08-01 reclassification is none of
+them.
+
+## See also
+
+- [Access levels and gated delivery](/cloud-storage/access-levels)
+- `workers/cdn-gate/README.md` — the performance contract the bearer path must not break
