@@ -22,7 +22,7 @@ import { runPipeline, scanVersionMap, deleteCdnObjects, type RunContext } from '
 import type { CloudUrlEntry } from '../../services/pipelineService';
 import {
   exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary, requestR2Grant, processRenameTasks,
-  fetchAssetLevels,
+  fetchAssetLevels, reconcileCdnObjects,
 } from '../../services/supabaseService';
 import { loadVocabulary } from '../../services/vocabService';
 import { notifyRunComplete } from '../../services/notifyService';
@@ -192,6 +192,11 @@ async function syncRunToPortal(a: {
         sbResult.created + sbResult.updated, a.effectiveSettings.allowLargeDeletions,
       );
     }
+
+    /* This run changed `status` — new rows published, absent files disconnected — and status is
+       half of the access level, so some objects now belong at a different key. The trigger queued
+       them; drain it here rather than leaving it for whoever next opens the portal. */
+    await reconcileCdnObjects(a.sbConfig, a.log);
 
     await processRenameTasks(a.sbConfig, a.clientId, a.log);
     // Only push leaves when desktop has unpublished edits — otherwise portal renames (the label

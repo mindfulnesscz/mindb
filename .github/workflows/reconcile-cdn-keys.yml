@@ -20,9 +20,13 @@ name: Reconcile CDN object keys
 # GitHub's scheduled runs are best-effort and are commonly late under load. Treat the interval as
 # "within about half an hour", not a guarantee.
 
+# SCHEDULE DISABLED, deliberately — see the note at the bottom of this file.
+# Reconciliation is being moved into Supabase (pg_cron + an edge function), where the rest of this
+# project's scheduling already lives. A product should not need GitHub Actions to be correct.
+# Until then this is a MANUAL tool: run it from the Actions tab when you need it.
 on:
-  schedule:
-    - cron: '*/15 * * * *'
+  # schedule:
+  #   - cron: '*/15 * * * *'
   workflow_dispatch:
     inputs:
       environment:
@@ -53,8 +57,8 @@ jobs:
         environment: ${{ github.event_name == 'schedule' && fromJSON('["staging","production"]') || fromJSON(format('["{0}"]', github.event.inputs.environment)) }}
     environment: ${{ matrix.environment }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           # 24 for type stripping on import: the script imports assetStorage.ts directly rather
           # than restating the key rules, and that only works from Node 22.6 onwards.
@@ -99,3 +103,23 @@ jobs:
 # Everything else (project ref, bucket names, public hostnames) lives in the COMMITTED
 # scripts/environments/<env>.public.env, because none of it is secret and a value hand-copied
 # into a settings page is a value that can silently disagree with wrangler.jsonc.
+
+# ── Why the schedule is off ───────────────────────────────────────────────────
+#
+# This job was the wrong home for reconciliation and the repo already showed why: the error digest
+# is scheduled with pg_cron and pg_net INSIDE Supabase (20260730180000), next to the data it acts
+# on. Putting the CDN reconciler in GitHub Actions instead made a core correctness property —
+# "an asset's bytes sit at the level its row claims" — depend on a CI provider, a checked-out
+# branch, and a set of secrets pasted into a settings page.
+#
+# It also ran the script FROM THE CHECKED-OUT BRANCH, so a fix to the script only reached
+# production when someone merged to main.
+#
+# The justification for it was that an edge function could not import
+# packages/domain/src/assetStorage.ts and would need a third copy of the key rules. That was an
+# assumption, not a finding — the module is dependency-free TypeScript and Deno resolves relative
+# imports outside the function directory (which is how Supabase's own _shared/ convention works).
+#
+# The replacement is a `cdn-reconcile` edge function on a pg_cron schedule, plus a portal-triggered
+# call so a visibility change moves its bytes in seconds rather than within a quarter of an hour.
+# This file stays as a manual escape hatch and for one-off environment work.

@@ -18,6 +18,7 @@
 import { useEffect, useState } from 'react'
 import type { Asset } from '@dc-hub/asset-library'
 import { updateAssetStatus, updateAssetPerm, deleteAsset } from '../../../services/assetService'
+import { reconcileCdnObjects } from '../../../services/cdnReconcile'
 import { reportError } from '../../../lib/reportError'
 
 export function useAssetLifecycle(
@@ -66,6 +67,9 @@ export function useAssetLifecycle(
     try {
       await updateAssetStatus(asset.id, newStatus)
       setCurrentStatus(newStatus)
+      /* Status is half of the access level — draft or review makes an asset staff-only whatever
+         `perm` says — so a status change moves bytes exactly as a visibility change does. */
+      void reconcileCdnObjects()
       onStatusChange?.()
     } catch (err) {
       setStatusError(err instanceof Error ? err.message : 'Failed to update status')
@@ -89,6 +93,11 @@ export function useAssetLifecycle(
         applyToVariants ? variantFamilyPrimaryId : null,
       )
       setCurrentPerm(newPerm)
+      /* The row is correct now; the OBJECT still sits at the old level's key until it is moved.
+         Not awaited: the move takes as long as copying the bytes, and the person who just chose a
+         visibility level should not watch a spinner for it. The queue is durable, so the worst case
+         is that it completes a moment later. */
+      void reconcileCdnObjects()
       /* Always refetch, not only on a family change. The grid holds its own copy of these rows,
          and a level it thinks is stale is a level it will keep showing — including to the person
          who just changed it, which is exactly how a change that DID apply looks like one that
