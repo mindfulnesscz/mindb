@@ -742,10 +742,15 @@ missed. Scoping to files touched this run would make a miss permanent.
 
 **Two things worth carrying into Phase 9.**
 
-`VITE_STREAM_DOMAIN` is set in `.env.staging` and `.env.production` and needs adding to **Vercel**
-for both environments. Unset is not a failure — delivery falls back to `videodelivery.net`, which
-is account-agnostic and was checked against a real video on this account — so previews keep working
-either way.
+`VITE_STREAM_DOMAIN` needs **nothing done in Vercel** — `scripts/vercel-build.mjs` reads the
+committed `.env.<mode>` file and forces those values over the dashboard's, deliberately, so a stale
+Vercel variable cannot point staging at production Auth. Adding it to `.env.staging` and
+`.env.production` is the whole job. (Unset would not have been a failure either: delivery falls
+back to `videodelivery.net`, account-agnostic and checked against a real video on this account.)
+
+The value is the account's Stream subdomain, `customer-<code>.cloudflarestream.com` — visible in
+the embed code of any video in **Cloudflare dashboard -> Stream**, and in the `thumbnail` field of
+any `GET /accounts/{id}/stream` response.
 
 `CF_STREAM_TOKEN` is now needed by a second function, `stream-token`. It is already set on both
 projects, so nothing to do; noted because a future project will need it before video works there.
