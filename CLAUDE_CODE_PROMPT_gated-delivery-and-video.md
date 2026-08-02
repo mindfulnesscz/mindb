@@ -519,6 +519,78 @@ live there. `check_email_auth(text)` is already granted to `anon` and may be reu
 
 # Part B — video on Cloudflare Stream
 
+## Findings, 2026-08-02 — answers to the "verify before writing code" list
+
+**Scope confirmed with Petr: FULL Stream** — playback, thumbnails and hover previews. The
+alternative was tempting and was considered: the cdn-gate Worker now serves Range requests, honours
+ETags and streams bodies without buffering, so a plain `<video>` pointed at the gate already plays a
+380 MB file with seeking. Stream is taken for adaptive bitrate and for the previews, not because
+playback is otherwise impossible.
+
+**The real problem, measured.** Production holds **10 videos and 9 of them have no thumbnail** —
+blank cards in the portal. Staging has 2, one blank. `generate_thumbnail` errors on unknown
+extensions, so `runCdnUpload` counts videos as `skipped` and the row keeps a null `thumbnail_url`.
+
+### The three extension sets — do NOT change all three
+
+The brief says to add video extensions to `GALLERY_THUMB_EXTS`, `IMAGE_EXTS` and `THUMB_EXTS`, and
+to confirm which actually need it. Confirmed, and the answer is that one of them must be left alone.
+(All three moved: they are in `desktop/src/services/`, not `packages/domain/src/`.)
+
+| Set | Where | Drives | Add video? |
+|---|---|---|---|
+| `THUMB_EXTS` | `pipeline/naming.ts:46` | which files `runThumbnails` hands to the Rust `generate_thumbnail` | **NO** |
+| `GALLERY_THUMB_EXTS` | `dam/thumbs.ts:16` | which files get a thumbnail in the Obsidian vault gallery | yes, once a URL exists |
+| `IMAGE_EXTS` | `dam/scan.ts:25` | whether a folder counts as a gallery (`isGalleryFolder`) | only if video galleries are wanted — a product call |
+
+`THUMB_EXTS` is the trap. It feeds the LOCAL generator, which cannot decode video — that is why
+videos have no thumbnails today. Adding video extensions there does not produce thumbnails, it
+produces an error per video on every run. Stream generates the frame remotely; the pipeline stores
+a URL rather than generating a file.
+
+### Does `requireSignedURLs` cover thumbnails? — docs say probably, not certainly
+
+This is the one that could undermine Part A for video, so it gets a straight answer about what is
+and is not known.
+
+- The **thumbnails** page says: *"If signed URLs are required, you must use a signed URL instead of
+  video UIDs."* That implies thumbnails ARE covered, and that the mechanism is the same one used
+  everywhere else — **the token replaces the video UID in the path**, e.g.
+  `customer-<CODE>.cloudflarestream.com/<TOKEN>/thumbnails/thumbnail.jpg`.
+- The **securing-your-stream** page enumerates what `requireSignedURLs` protects — manifests, the
+  iframe player, MP4 downloads — and **does not mention thumbnails at all**.
+
+Two pages, one implying coverage and one silent. That is not good enough to bet a client's
+confidentiality on, so the empirical test stands and must happen before integration code:
+
+> Upload one throwaway video, set `requireSignedURLs: true`, then fetch
+> `/<uid>/thumbnails/thumbnail.jpg` and `/thumbnails/thumbnail.gif` **unsigned**. If either returns
+> a frame, gated videos leak their contents as stills and Stream thumbnails cannot be used for
+> anything above `public`.
+
+### Thumbnail parameters, confirmed from the docs
+
+| | still `.jpg` | animated `.gif` |
+|---|---|---|
+| `time` | default `0s` | default `0s` |
+| `height` / `width` | default `640` | default `640` |
+| `fit` | `crop` (default), `clip`, `scale`, `fill` | same |
+| `duration` | — | default `5s` |
+| `fps` | — | default `8` |
+
+`time` accepts a percentage as well as a duration, which is what a poster frame wants — `time=50%`
+picks the midpoint without knowing the video's length.
+
+### Blocked on
+
+1. **Stream enabled on the Cloudflare account.** The API answers 403 to the R2 token, which is
+   R2-scoped, so whether Stream is provisioned at all is unknown from here.
+2. **A token with `Stream:Edit`.** Neither `CF_R2_TOKEN` nor `CF_WORKERS_TOKEN` carries it. Name it
+   `CF_STREAM_TOKEN`, matching the scheme.
+
+---
+
+
 Pick up only once Part A is live. Goal: videos in a client library get uploaded to Stream for
 playback, get automatic thumbnails, and show a short frame preview on hover.
 
