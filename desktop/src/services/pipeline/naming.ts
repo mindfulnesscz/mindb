@@ -43,4 +43,7 @@ export function isPublishableFile(name: string): boolean {
   return name.includes('.') && !name.startsWith('.') && !name.startsWith('~$');
 }
 
+/* What the Rust `generate_thumbnail` command can actually decode. Video is deliberately absent —
+   adding it would not produce video thumbnails, it would produce one error per video per run.
+   A video's still comes from Cloudflare Stream instead, built from `stream_uid` in the portal. */
 export const THUMB_EXTS = new Set(['.pptx', '.pptm', '.ppt', '.pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.tif', '.tiff']);

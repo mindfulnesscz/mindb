@@ -13,6 +13,15 @@ import {
   listDir, fileExists, isUnchanged,
 } from './fs';
 
+/* VIDEO IS DELIBERATELY ABSENT, and adding it would be a regression rather than an improvement.
+   This set feeds `galleryFirstThumbnable`, which picks ONE file alphabetically to represent the
+   whole folder and then asks Rust to render it. Rust cannot decode video, so a mixed folder whose
+   first file happened to be `A-roll.mp4` would stop producing the still it produces today and
+   produce nothing instead.
+
+   Stream can render a video still, but only through a URL — and for anything above `public` that
+   URL needs a signed token, which expires. A markdown note in the vault is static, so it has
+   nowhere to put one. Video thumbnails belong in the portal, where a token can be minted per view. */
 export const GALLERY_THUMB_EXTS = new Set([
   '.jpg', '.jpeg', '.png', '.webp', '.gif', '.tif', '.tiff',
   '.pdf', '.pptx', '.pptm', '.ppt',

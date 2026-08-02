@@ -56,6 +56,8 @@ function toAsset(row: AssetRowWithStats): Asset {
     thumbnailUrl: row.thumbnail_url ? encodeURI(row.thumbnail_url) : undefined,
     downloadUrl: row.download_url ? encodeURI(row.download_url) : undefined,
     downloadUrls: parseDownloadUrls(row.download_urls),
+    streamUid: row.stream_uid ?? null,
+    streamStatus: row.stream_status ?? null,
     stableId: row.stable_id ?? null,
     updatedAt: row.updated_at,
   }

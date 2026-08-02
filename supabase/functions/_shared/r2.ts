@@ -5,6 +5,11 @@
  *
  * Deliberately Web Crypto rather than a Node shim — this runs on Deno, and the async HMAC is the
  * only real difference from the copy in scripts/rekey-gated-objects.mjs.
+ *
+ * In `_shared/` because two functions now sign R2 requests: cdn-reconcile moves objects between
+ * tiers, and stream-upload presigns a read so Cloudflare Stream can pull a master out of the gated
+ * bucket. SigV4 is unpleasant enough to get right once; a second copy would be a second place for
+ * the RFC 3986 bug below to be reintroduced.
  */
 
 const enc = new TextEncoder();
@@ -97,6 +102,60 @@ export async function s3(
     }
   }
   throw lastErr;
+}
+
+/* A presigned GET: the signature travels in the query string instead of a header, so the URL is
+   self-contained and can be handed to something that knows nothing about us.
+ *
+ * This exists for exactly one caller — Cloudflare Stream pulling a master out of the GATED bucket.
+ * Stream cannot fetch through the cdn-gate Worker, which refuses anonymous requests by design, and
+ * the alternative is downloading the whole video into an edge function and posting it back up.
+ *
+ * IT MUST ANSWER A RANGE GET. `POST /stream/copy` needs the object's total size before it starts;
+ * it tries HEAD and a range GET, and needs only one of them to answer. That distinction matters
+ * here, because R2 binds a presigned URL to the method it was signed for — a GET-presigned URL
+ * returns 403 to HEAD (measured on staging, both directions). The range GET carries the total in
+ * `Content-Range: bytes 0-9/359046`, which is enough, and Stream was confirmed to accept a
+ * GET-only presigned source. A source that answers NEITHER fails with "could not determine the
+ * size of the file", which says nothing about the real cause — hence this note.
+ *
+ * SERVER TO SERVER, NEVER SHOWN TO A USER. This is the one place in the product where an expiring
+ * URL is the right answer: it grants read on a gated object to whoever holds it, which is precisely
+ * what Part A exists to prevent for anything user-facing.
+ */
+export async function presignGet(
+  accountId: string, creds: TempCreds, bucket: string, key: string, expiresIn: number,
+): Promise<string> {
+  const host = `${accountId}.r2.cloudflarestorage.com`;
+  const canonicalUri = `/${bucket}/${key.split('/').map(rfc3986).join('/')}`;
+  const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, '');
+  const dateStamp = amzDate.slice(0, 8);
+  const scope = `${dateStamp}/auto/s3/aws4_request`;
+
+  /* The session token is signed as a query parameter, not sent as a header. Omitting it produces a
+     URL that authenticates and then fails authorization, because temporary credentials mean
+     nothing without it. */
+  const params: Record<string, string> = {
+    'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+    'X-Amz-Credential': `${creds.accessKeyId}/${scope}`,
+    'X-Amz-Date': amzDate,
+    'X-Amz-Expires': String(expiresIn),
+    'X-Amz-SignedHeaders': 'host',
+    'X-Amz-Security-Token': creds.sessionToken,
+  };
+  const canonicalQuery = Object.keys(params).sort()
+    .map(k => `${rfc3986(k)}=${rfc3986(params[k])}`).join('&');
+
+  /* UNSIGNED-PAYLOAD, because a presigned GET has no body to hash and the signer cannot know what
+     the eventual request will look like. This is the documented literal, not a placeholder. */
+  const canonical = ['GET', canonicalUri, canonicalQuery, `host:${host}\n`, 'host', 'UNSIGNED-PAYLOAD'].join('\n');
+  const toSign = ['AWS4-HMAC-SHA256', amzDate, scope, await sha256hex(enc.encode(canonical))].join('\n');
+
+  let k = await hmac(enc.encode(`AWS4${creds.secretAccessKey}`), dateStamp);
+  for (const part of ['auto', 's3', 'aws4_request']) k = await hmac(k, part);
+  const signature = [...(await hmac(k, toSign))].map(b => b.toString(16).padStart(2, '0')).join('');
+
+  return `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
 }
 
 /** Copy one object between buckets, carrying the metadata the pipeline recognises. */
