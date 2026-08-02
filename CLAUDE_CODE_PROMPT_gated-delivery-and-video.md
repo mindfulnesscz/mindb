@@ -594,8 +594,21 @@ Stream thumbnails are safe to use at every access level. Part B proceeds as desi
 failed with *"Performed a HTTP HEAD and HTTP GET range request, could not determine the size of
 the file"* against a source that would not serve ranges. Our gated R2 objects are behind the
 Worker and reject anonymous requests, which is the whole point of Part A — so the plan below
-(mint a short-lived **signed R2 URL** for Stream to pull from, never hand it a gated URL) is the
-right shape, and the signed URL must support `HEAD` and `Range`. Plain S3 presigned GETs do.
+(mint a short-lived **presigned R2 URL** for Stream to pull from, never hand it a gated URL) is
+the right shape.
+
+**A range GET is enough; HEAD is not required.** Worth stating precisely, because R2 binds a
+presigned URL to the method it was signed for — measured on staging, in both directions:
+
+| | `HEAD` | range `GET` |
+|---|---|---|
+| signed as `GET` | **403** | 206 · `Content-Range: bytes 0-9/359046` |
+| signed as `HEAD` | 200 · `Content-Length: 359046` | **403** |
+
+So one presigned URL cannot answer both, and the obvious reading of Stream's error — "it needs
+HEAD, therefore this approach is impossible" — is wrong. The range response carries the total
+size, which is all Stream is after. Confirmed by handing `POST /stream/copy` a GET-only presigned
+staging object: it returned 200 and went to `downloading`. That probe was deleted.
 
 ### Thumbnail parameters, confirmed from the docs
 
@@ -636,10 +649,10 @@ never seen by a user.
 - [ ] Edge function `supabase/functions/stream-upload/`, modelled on `r2-grant`: same auth
       chain, same 503-when-unprovisioned. Input `client_id`, asset identity. Output
       `stream_uid` + status. Secrets into `.env` and `.env.example`.
-- [ ] Mint the signed R2 ingestion URL inside that function; never hand Stream a gated URL. It
-      **must answer `HEAD` and `Range`** — `POST /stream/copy` probes with both and fails with
-      *"could not determine the size of the file"* otherwise. An S3 presigned GET does; the
-      Worker-gated URL does not, which is why it is presigned and not just fetched.
+- [x] Mint the presigned R2 ingestion URL inside that function; never hand Stream a gated URL.
+      It **must answer a range `GET`** — that is where Stream reads the size from. HEAD is
+      attempted and may 403; R2 binds a presigned URL to one method (table above). Verified
+      end to end against staging.
 - [ ] Set `requireSignedURLs` on any video whose `effective_level != 'public'` — as **its own
       `POST /stream/{uid}` after upload, and assert the response says `true`**. The field is
       silently ignored when passed in the upload form (measured). Treating "uploaded" as

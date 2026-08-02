@@ -17,6 +17,7 @@
  * - `vocabulary`    — the three-dimension taxonomy and the shortcode string it renders.
  * - `filenameTranslator` — shortcodes ⇄ human labels. The portal shows what the pipeline wrote.
  * - `assetGrouping` — OUT paths → single assets vs gallery groups.
+ * - `video`         — which extensions are video, and therefore go to Cloudflare Stream.
  */
 
 export * from './stableId';
@@ -26,3 +27,4 @@ export * from './vocabulary';
 export * from './filenameTranslator';
 export * from './assetGrouping';
 export * from './assetStorage';
+export * from './video';

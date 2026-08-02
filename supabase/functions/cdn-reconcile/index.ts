@@ -15,11 +15,13 @@
 //
 // Secrets: R2_BUCKET, R2_PUBLIC_DOMAIN, R2_GATED_BUCKET, R2_GATED_DOMAIN, CF_R2_TOKEN,
 //          CF_ACCOUNT_ID, R2_PARENT_ACCESS_KEY_ID  — all already set on both projects.
+//          CF_STREAM_TOKEN is needed only once videos exist: it reconciles Stream's
+//          requireSignedURLs alongside the object key, since a video's level lives in that flag.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import {
   effectiveLevel, tierFor, assetUrl, stripVersion, type AccessLevel,
 } from '../../../packages/domain/src/assetStorage.ts';
-import { tempCredentials, copyObject, type TempCreds } from './r2.ts';
+import { tempCredentials, copyObject, type TempCreds } from '../_shared/r2.ts';
 
 /** How many assets one invocation will move. Bounded so a large backlog cannot exceed the
  *  function's wall-clock limit; the queue keeps the rest for the next call. */
@@ -80,7 +82,7 @@ Deno.serve(async (req) => {
   if (!queued.length) return json(200, { moved: 0, skipped: 0, failed: 0, remaining: 0 });
 
   const { data: assets } = await db.from('assets')
-    .select('id,client_id,stable_id,child_id,perm,status,thumbnail_url,download_url')
+    .select('id,client_id,stable_id,child_id,perm,status,thumbnail_url,download_url,stream_uid')
     .in('id', queued.map(q => q.asset_id));
 
   const accountId = env('CF_ACCOUNT_ID');
@@ -91,8 +93,54 @@ Deno.serve(async (req) => {
   const bucketOf = (t: 'public' | 'gated') => (t === 'public' ? env('R2_BUCKET') : env('R2_GATED_BUCKET'));
   const domainOf = (t: 'public' | 'gated') => (t === 'public' ? env('R2_PUBLIC_DOMAIN') : env('R2_GATED_DOMAIN'));
 
-  let moved = 0, skipped = 0, failed = 0;
+  let moved = 0, skipped = 0, failed = 0, reflagged = 0;
   const done: string[] = [];
+
+  /* ── Video protection follows the level too ───────────────────────────────────
+     A gated video is protected by Stream's `requireSignedURLs`, set per video through Cloudflare's
+     API. So the access level is baked into the delivery object here exactly as it is baked into an
+     R2 object key, and a `public` -> `client` demotion has to propagate or the video keeps serving
+     to anyone holding the uid. Cheaper than the R2 case — one call, no bytes move — and this queue
+     already knows precisely which assets changed level.
+
+     Returns false on any failure so the asset stays queued and is retried. Never silently true:
+     "we could not tell whether that video is protected" must not be recorded as reconciled. */
+  const streamToken = env('CF_STREAM_TOKEN');
+  async function reconcileStreamFlag(uid: string, wantSigned: boolean): Promise<boolean> {
+    /* Absent token with a video to protect is a failure, not a skip. Making it a hard 503 for the
+       whole function instead would stop image re-keying working on any project that has not set
+       the secret yet, which is a bigger outage for a smaller problem. */
+    if (!streamToken) {
+      console.error(`CF_STREAM_TOKEN not set — cannot verify protection of stream video ${uid}`);
+      return false;
+    }
+    const api = `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${uid}`;
+    const headers = { Authorization: `Bearer ${streamToken}`, 'Content-Type': 'application/json' };
+
+    const current = await fetch(api, { headers });
+    if (current.status === 404) {
+      // The row points at a video that no longer exists. Not this function's job to repair, but it
+      // must not be reported as protected.
+      console.error(`stream video ${uid} is gone; row still references it`);
+      return false;
+    }
+    const currentBody = await current.json().catch(() => null);
+    if (!current.ok) { console.error(`stream GET ${uid}: ${current.status}`); return false; }
+    if (currentBody?.result?.requireSignedURLs === wantSigned) return true;
+
+    const set = await fetch(api, {
+      method: 'POST', headers, body: JSON.stringify({ requireSignedURLs: wantSigned }),
+    });
+    const setBody = await set.json().catch(() => null);
+    // Read the flag back rather than trusting the status. A 200 that did not apply the change is
+    // exactly the behaviour the creation API has, and it is what makes this whole check necessary.
+    if (!set.ok || setBody?.result?.requireSignedURLs !== wantSigned) {
+      console.error(`could not set requireSignedURLs=${wantSigned} on ${uid}: ${set.status}`);
+      return false;
+    }
+    reflagged++;
+    return true;
+  }
 
   for (const a of assets ?? []) {
     const level = effectiveLevel(a) as AccessLevel;
@@ -139,6 +187,10 @@ Deno.serve(async (req) => {
       moved++;
     }
 
+    if (a.stream_uid && !(await reconcileStreamFlag(a.stream_uid, tierFor(level) !== 'public'))) {
+      failed++; assetFailed = true;
+    }
+
     if (Object.keys(patch).length) {
       const { error } = await db.from('assets').update(patch).eq('id', a.id);
       if (error) { failed++; assetFailed = true; }
@@ -157,5 +209,5 @@ Deno.serve(async (req) => {
   }
 
   const { count } = await db.from('cdn_move_queue').select('*', { count: 'exact', head: true });
-  return json(200, { moved, skipped, failed, remaining: count ?? 0 });
+  return json(200, { moved, skipped, failed, reflagged, remaining: count ?? 0 });
 });
