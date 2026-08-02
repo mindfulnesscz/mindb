@@ -4,7 +4,8 @@
  * mount the same card once the display layer is shared. Keep data fetching out of here.
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useReducedMotion } from 'motion/react'
 import { canDownload, canSeeStats, canReadComments, type Asset, type Role } from '@dc-hub/asset-library'
 import { assetFacetLabels } from '../../services/assetService'
 import { webAssetActions } from '../../lib/assetActions'
@@ -16,15 +17,34 @@ export function AssetCard({
   onOpen,
   role,
   accent,
+  animatedThumbUrl,
 }: {
   asset: Asset
   onOpen: (focusId?: string, opts?: { lightbox?: boolean }) => void
   role: Role
   accent: string
+  /** Cloudflare Stream animated preview, for video. Resolved upstream — see GalleryView. */
+  animatedThumbUrl?: string
 }) {
   const isMulti = (asset.childCount ?? 0) > 0
   const [pointerIn, setPointerIn] = useState(false)
   const hovered = useDelayedHover(pointerIn, 100)
+
+  /* The animated preview is LAZY, and the reason is that its size is unpredictable. Measured on
+     two real videos: 37 KB for a simple clip at the parameters used here, and 2.7 MB for a
+     detailed one at Stream's defaults. Two orders of magnitude apart, decided by content nobody
+     controls — so a grid that loaded them eagerly would be fine in testing and ruinous on the
+     wrong shoot. The <img> is not rendered until the card has been hovered once, and once
+     rendered it stays mounted and fades, so a second hover is instant off the browser cache.
+
+     Reduced motion holds the still. An auto-playing loop is exactly what that preference is for,
+     and the card is still fully usable without it. */
+  const reduceMotion = useReducedMotion()
+  const [everHovered, setEverHovered] = useState(false)
+  useEffect(() => { if (hovered) setEverHovered(true) }, [hovered])
+  // Not on multi cards: their hover belongs to the sibling grid, which covers this anyway, so
+  // fetching a preview underneath it would be paid for and never seen.
+  const showPreview = !!animatedThumbUrl && !reduceMotion && !isMulti && everHovered
   // Prefetch siblings for multi cards so a click (even before hover) can focus the first child.
   const { siblings, loading } = useSiblingPreviews(asset, isMulti)
   const restingThumb =
@@ -72,6 +92,30 @@ export function AssetCard({
           )
           : <div className="relative z-[1] w-full h-full bg-gray-150" />
         }
+
+        {showPreview && (
+          <img
+            referrerPolicy="no-referrer"
+            src={animatedThumbUrl}
+            alt=""
+            aria-hidden
+            className={`absolute inset-0 z-[2] w-full h-full object-cover pointer-events-none transition-opacity duration-base ${
+              hovered ? 'opacity-100' : 'opacity-0'
+            }`}
+          />
+        )}
+
+        {/* A video card is otherwise indistinguishable from an image one until you open it. */}
+        {asset.streamUid && (
+          <span
+            aria-hidden
+            className="absolute inset-0 z-[3] flex items-center justify-center pointer-events-none"
+          >
+            <span className="w-9 h-9 rounded-full bg-cosmos-black/55 flex items-center justify-center transition-opacity duration-base group-hover:opacity-0">
+              <span className="ml-[3px] border-y-[7px] border-y-transparent border-l-[11px] border-l-clear-white" />
+            </span>
+          </span>
+        )}
 
         {isMulti && (
           <MultiAssetHoverGrid

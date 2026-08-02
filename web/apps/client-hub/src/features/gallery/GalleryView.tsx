@@ -47,9 +47,16 @@ export default function GalleryView() {
   const resolveStream = useStreamMedia(assets)
   const cardAssets = useMemo(
     () => assets.map(a => {
-      if (a.thumbnailUrl || !a.streamUid) return a
+      if (!a.streamUid) return { asset: a, animated: undefined }
       const media = resolveStream(a)
-      return media ? { ...a, thumbnailUrl: media.still } : a
+      if (!media) return { asset: a, animated: undefined }
+      return {
+        asset: a.thumbnailUrl ? a : { ...a, thumbnailUrl: media.still },
+        /* Only the URL is built here. Nothing is fetched until the card mounts the <img>, which
+           it does on first hover — measured payloads range from 37 KB to 2.7 MB depending
+           entirely on the footage, so a grid of them is not a cost worth guessing at. */
+        animated: media.animated(),
+      }
     }),
     [assets, resolveStream],
   )
@@ -193,10 +200,11 @@ export default function GalleryView() {
             <EmptyState reason={emptyReason()} />
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {cardAssets.map(asset => (
+              {cardAssets.map(({ asset, animated }) => (
                 <AssetCard
                   key={asset.id}
                   asset={asset}
+                  animatedThumbUrl={animated}
                   onOpen={(focusId, opts) => { void openAsset(asset, focusId, opts) }}
                   role={role}
                   accent={accent}

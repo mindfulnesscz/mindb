@@ -80,8 +80,10 @@ export interface AnimatedOptions extends StillOptions {
 /**
  * An animated GIF preview — the hover state.
  *
- * These are LARGE: a default-quality 5s preview measured 2.7 MB against a real video. Never load
- * one eagerly for a grid; fetch on first hover and let the browser cache it after that.
+ * Size is unpredictable, which is the thing to design around. Measured against two real videos: a
+ * detailed one came back at 2.7 MB with Stream's defaults, a simple one at 37 KB with `fps=2` and
+ * `height=480`. Two orders of magnitude, decided by content. Never load one eagerly for a grid —
+ * fetch on first hover and let the browser cache it after that.
  */
 export function streamAnimatedUrl(
   domain: string | null | undefined, ref: StreamRef, opts: AnimatedOptions = {},

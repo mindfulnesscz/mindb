@@ -755,16 +755,31 @@ any `GET /accounts/{id}/stream` response.
 `CF_STREAM_TOKEN` is now needed by a second function, `stream-token`. It is already set on both
 projects, so nothing to do; noted because a future project will need it before video works there.
 
-## Phase 9 — hover preview (~half a day)
+## Phase 9 — hover preview (~half a day) — DONE 2026-08-03
 
-- [ ] Start with Stream's animated thumbnail: one `<img>` swapped in on hover, `fps=2`, wired
+- [x] Start with Stream's animated thumbnail: one `<img>` swapped in on hover, `fps=2`, wired
       into the hover state already in `MultiAssetHover`/`GalleryView`.
-- [ ] Lazy-load on first hover — never eagerly for a whole grid.
-- [ ] Hold a static frame when `useReducedMotion()` is true. The codebase is consistent about
+- [x] Lazy-load on first hover — never eagerly for a whole grid.
+- [x] Hold a static frame when `useReducedMotion()` is true. The codebase is consistent about
       this and an auto-playing preview is exactly what that rule is for.
-- [ ] Only if GIF quality disappoints: N stills at computed timestamps stepped by an interval.
-      Same hover plumbing, ~1 day. A sprite sheet would be better but needs local ffmpeg — see
-      "Do not do this".
+- [ ] **Still open, deliberately:** only if GIF quality disappoints — N stills at computed
+      timestamps stepped by an interval. Not judged yet, because that needs real client footage
+      rather than a test clip. Same hover plumbing, ~1 day. A sprite sheet would be better but
+      needs local ffmpeg — see "Do not do this".
+
+**Measured, because the size is the whole design constraint.** The same 5-second preview came
+back at **2.7 MB** for a detailed clip at Stream's defaults and **37 KB** for a simple one at
+`fps=2, height=480` — two orders of magnitude, decided entirely by the footage. A grid that loaded
+them eagerly would look fine against a test library and fall over on a real shoot, which is why the
+`<img>` is not rendered until a card has been hovered once. It stays mounted afterwards and only
+fades, so returning to a card is instant off the browser cache.
+
+The last item stays open on purpose: **GIF quality has not been judged against real client footage
+yet.** The N-stills fallback is still the right escalation if it disappoints, and nothing here
+blocks it — it reuses the same hover plumbing.
+
+Also added, not in the plan: a play marker on video cards. Without one a video is indistinguishable
+from an image until it is opened, which made the new stills read as ordinary photographs.
 
 ---
 
