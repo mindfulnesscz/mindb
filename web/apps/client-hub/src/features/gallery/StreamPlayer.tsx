@@ -15,6 +15,7 @@
 import type { Asset } from '@dc-hub/asset-library'
 import { isStreamReady } from '@dc-hub/domain'
 import { useStreamMediaFor } from './hooks/useStreamMedia'
+import { freshStreamStatus } from '../../services/streamTokens'
 
 export function StreamPlayer({ asset, accent }: { asset: Asset; accent: string }) {
   const media = useStreamMediaFor(asset)
@@ -25,7 +26,10 @@ export function StreamPlayer({ asset, accent }: { asset: Asset; accent: string }
     /* Encoding, or waiting on a token. Both are transient and neither is the viewer's problem, so
        they read the same: the asset is here, the video is not playable yet. Reusing the grid's
        resting tone rather than inventing an error state for something that fixes itself. */
-    const encoding = !isStreamReady(asset.streamStatus)
+    /* The override, not the row: `stream_status` is written once at upload and the row the page
+       fetched is stale for the length of the encode. Reading it alone is what left a finished
+       video saying "processing". */
+    const encoding = !isStreamReady(freshStreamStatus(asset.id) ?? asset.streamStatus)
     return (
       <div
         className="aspect-video w-full rounded-sm overflow-hidden flex items-center justify-center"
