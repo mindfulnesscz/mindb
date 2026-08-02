@@ -160,15 +160,25 @@ repointing URLs; after it, undoing means re-uploading from the desktop.
 
 It does **not** make old URLs private. Anyone who already has one has the bytes.
 
-## 10. Turn on the reconciler
+## 10. Deploy the reconciler
 
-GitHub → Settings → Environments → **production** → four secrets:
-`SUPABASE_SERVICE_KEY`, `CF_API_TOKEN`, `CF_ACCOUNT_ID`, `R2_PARENT_ACCESS_KEY_ID`.
+```bash
+supabase functions deploy cdn-reconcile --project-ref <ref>
+```
 
-Everything else comes from the committed `scripts/environments/production.public.env`.
+Nothing else. It uses the `R2_*` and `CF_*` function secrets already set in step 4, and it is
+called by the portal after an edit and by the desktop at the end of a run — there is no schedule
+and no separate credentials to configure.
 
-Run `.github/workflows/reconcile-cdn-keys.yml` manually first, with **dry run** ticked, and read the
-summary before letting the schedule take over.
+This replaced a GitHub Actions cron. The four GitHub environment secrets that job wanted are **not
+required**: `.github/workflows/reconcile-cdn-keys.yml` survives only as a manual escape hatch for
+bulk work, and needs them only if you choose to run it.
+
+Confirm it is working by checking the queue drains:
+
+```sql
+select count(*) from public.cdn_move_queue;   -- falls to 0 as the portal is used
+```
 
 ---
 

@@ -26,13 +26,13 @@ const packageFiles = [
 // npm lockfiles: file → the `packages` entries that carry a version.
 // ONE lockfile: desktop/ and docs/ became workspace members (see REFACTOR_PLAN.md "Target
 // architecture"), so their versions are recorded here rather than in per-tree lockfiles.
-// The CDN gate keeps its own lockfile for the same reason docs does: it installs a toolchain
-// (wrangler) that nothing else in the repo needs, and hoisting it into the root tree would make
-// every desktop and web install pay for it.
+// ONE lockfile for the workspace. docs/ keeps its own — it is a Next.js site with a dependency
+// tree nothing else shares. workers/cdn-gate joined the workspace so the Worker can import
+// @dc-hub/domain and stop restating the object-key rules by hand.
 const lockFiles = {
-  'package-lock.json': ['', 'desktop', 'web/apps/client-hub', 'packages/asset-library'],
+  'package-lock.json': ['', 'desktop', 'web/apps/client-hub', 'packages/asset-library',
+                        'workers/cdn-gate'],
   'docs/package-lock.json': [''],
-  'workers/cdn-gate/package-lock.json': [''],
 }
 
 function cargoPackageVersion(source) {

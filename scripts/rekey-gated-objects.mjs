@@ -75,13 +75,17 @@ const env = {
   ...Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== undefined && v !== '')),
 };
 
+/* CF_R2_TOKEN was CF_API_TOKEN. Applied BEFORE the required-keys check below, or that check
+   reports a token missing that the fallback was about to supply. */
+env.CF_R2_TOKEN ??= env.CF_API_TOKEN;
+
 /* Every value is named explicitly, including the gated pair. An earlier draft derived the gated
    bucket from the public one and got it wrong — `dc-hub-staging` would have produced
    `dc-hub-staging-gated`, while the bucket that exists is `dc-hub-gated-staging`. A clever
    derivation that is wrong writes objects into a bucket nobody is serving. */
 const need = ['PROJECT_REF', 'SUPABASE_SERVICE_KEY', 'R2_BUCKET', 'R2_PUBLIC_DOMAIN',
               'R2_GATED_BUCKET', 'R2_GATED_DOMAIN',
-              'CF_API_TOKEN', 'CF_ACCOUNT_ID', 'R2_PARENT_ACCESS_KEY_ID'];
+              'CF_R2_TOKEN', 'CF_ACCOUNT_ID', 'R2_PARENT_ACCESS_KEY_ID'];
 const missing = need.filter(k => !env[k] || String(env[k]).startsWith('PASTE_'));
 if (missing.length) {
   console.error(`Missing for "${envName}": ${missing.join(', ')}`);
@@ -122,7 +126,7 @@ async function tempCredentials(bucket) {
     `https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/r2/temp-access-credentials`,
     {
       method: 'POST',
-      headers: { Authorization: `Bearer ${env.CF_API_TOKEN}`, 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${env.CF_R2_TOKEN}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         bucket, parentAccessKeyId: env.R2_PARENT_ACCESS_KEY_ID,
         permission: 'object-read-write', ttlSeconds: 3600,

@@ -154,13 +154,13 @@ Missing **any** of the five names causes `r2-grant` **503** — common partial s
 |--------|--------|
 | `R2_BUCKET` | Bucket name (e.g. `dc-hub-staging`) |
 | `R2_PUBLIC_DOMAIN` | Public origin, no trailing slash (r2.dev or custom domain) |
-| `CF_API_TOKEN` | R2 account API token value |
+| `CF_R2_TOKEN` | R2 account API token value |
 | `CF_ACCOUNT_ID` | R2 account ID |
 | `R2_PARENT_ACCESS_KEY_ID` | Access Key ID from the same token create screen |
 
 ```bash
 supabase link --project-ref <env-ref>
-supabase secrets set R2_BUCKET=… R2_PUBLIC_DOMAIN=… CF_API_TOKEN=… CF_ACCOUNT_ID=… R2_PARENT_ACCESS_KEY_ID=…
+supabase secrets set R2_BUCKET=… R2_PUBLIC_DOMAIN=… CF_R2_TOKEN=… CF_ACCOUNT_ID=… R2_PARENT_ACCESS_KEY_ID=…
 supabase secrets list   # names only — values are never shown again
 supabase functions deploy
 ```

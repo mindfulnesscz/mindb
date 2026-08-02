@@ -12,5 +12,6 @@
   "portals": "Client portals",
   "admin": "Admin dashboard",
   "database": "Database (overview)",
-  "pipeline": "Pipeline (overview)"
+  "pipeline": "Pipeline (overview)",
+  "ideas": "Ideas & deferred work"
 }

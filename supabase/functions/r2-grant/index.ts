@@ -3,7 +3,7 @@
 // Bucket + public domain are environment-level secrets (R2_BUCKET, R2_PUBLIC_DOMAIN).
 // Each grant is scoped to one client_id; object keys use prefix `{client_id}/`.
 //
-// Secrets: CF_API_TOKEN, CF_ACCOUNT_ID, R2_PARENT_ACCESS_KEY_ID,
+// Secrets: CF_R2_TOKEN, CF_ACCOUNT_ID, R2_PARENT_ACCESS_KEY_ID,
 //           R2_BUCKET, R2_PUBLIC_DOMAIN
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
@@ -80,11 +80,12 @@ Deno.serve(async (req) => {
     });
   }
 
-  const cfToken   = Deno.env.get('CF_API_TOKEN');
+  // CF_R2_TOKEN, with the old CF_API_TOKEN accepted during the rename. See cdn-reconcile.
+  const cfToken   = Deno.env.get('CF_R2_TOKEN') ?? Deno.env.get('CF_API_TOKEN');
   const accountId = Deno.env.get('CF_ACCOUNT_ID');
   const parentKey = Deno.env.get('R2_PARENT_ACCESS_KEY_ID');
   if (!cfToken || !accountId || !parentKey) {
-    return json(503, { error: 'Storage backend not provisioned — set CF_API_TOKEN / CF_ACCOUNT_ID / R2_PARENT_ACCESS_KEY_ID' });
+    return json(503, { error: 'Storage backend not provisioned — set CF_R2_TOKEN / CF_ACCOUNT_ID / R2_PARENT_ACCESS_KEY_ID' });
   }
 
   /* Temporary credentials are scoped to ONE bucket, so the two tiers need one grant each. */
