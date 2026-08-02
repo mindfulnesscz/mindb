@@ -186,8 +186,13 @@ the URL — the leaked-URL case that re-keying cannot address anyway.
 | what is exposed today | `supabase/audit/perm_exposure.sql` |
 | families whose levels disagree | `supabase/audit/perm_family_mismatch.sql` |
 
-Four programs must agree on the key shape and none can import the others: the pipeline writes keys,
-the reconciler and the re-key script move them, and the Worker parses them back. Three share
-`assetStorage.ts`. The Worker restates the shape by hand because it is a separate deployment — so
-if you change the key format, `workers/cdn-gate/src/authz.ts` changes with it, and
-`assetStorage.test.ts` spells the shape out literally to make that visible.
+Four programs must agree on the key shape: the pipeline writes keys, the reconciler and the re-key
+script move them, and the Worker parses them back to decide access. **All four import
+`assetStorage.ts`** — including the Worker, since `workers/cdn-gate` is an npm workspace member and
+wrangler resolves `@dc-hub/domain` through it at bundle time.
+
+That was not always true. The Worker carried its own copy of the parser on the assumption that a
+separate deployment could not share code, and `parseObjectPath` exists as one function because that
+assumption turned out to be wrong. There is now no second place to change the key format, which
+matters more than it sounds: a half-made change to that shape is a 404 on a file the portal is
+offering, or bytes served to someone who should not have them.

@@ -6,10 +6,11 @@
   "workspaces": [
     "packages/*",
     "web/apps/*",
-    "desktop"
+    "desktop",
+    "workers/*"
   ],
   "scripts": {
-    "setup": "npm ci && npm ci --prefix docs && npm ci --prefix workers/cdn-gate",
+    "setup": "npm ci && npm ci --prefix docs",
     "dev": "node scripts/dev.mjs",
     "dev:desktop": "npm --prefix desktop run tauri dev",
     "dev:web": "npm run dev --workspace=web/apps/client-hub",
@@ -55,7 +56,7 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:coverage:ci": "npm --prefix desktop run test:coverage:ci",
-    "typecheck:worker": "npm --prefix workers/cdn-gate run typecheck"
+    "typecheck:worker": "npm --workspace @dc-hub/cdn-gate run typecheck"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

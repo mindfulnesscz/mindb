@@ -1,0 +1,42 @@
+# Creating assets from the portal
+
+**Status:** idea, 2026-08-02 — raised alongside desktop browsing; not scheduled.
+
+Everything reaches the library through the desktop pipeline today: folder identity, thumbnails,
+R2 upload, the Supabase rows. Letting someone add an asset from the web portal would suit one-off
+additions that do not warrant opening the app.
+
+## What it would touch — and it is not the Worker
+
+Worth stating plainly because it is easy to assume otherwise: the `cdn-gate` Worker is a **read**
+path. Creating assets does not involve it. The piece that would need to change is **`r2-grant`**,
+the edge function that issues short-lived R2 credentials.
+
+Two things about it as it stands:
+
+**It is desktop-shaped.** It assumes a pipeline caller with an `editor`/`admin` role and a
+`client_id`, and returns credentials plus a key prefix for a whole run.
+
+**Its credentials are bucket-wide.** `permission: 'object-read-write'` scoped to the bucket, which
+is defensible for a trusted operator running a publish, and much less so for something a browser
+holds. The Cloudflare temp-credentials API supports narrowing by prefix or object, and a browser
+grant should use that.
+
+## The harder half is identity, not upload
+
+Object keys derive from **folder identity** — `stable_id` from the ` __<hash>` package folder, and
+`child_id` from `.dchub.json`. Both live on disk, and the pipeline is what mints them. An asset
+created in the portal has no folder, so something has to decide what its identity is, and what
+happens when a folder for it later appears on disk.
+
+That is the real design question, and it is why this is an idea rather than a task. Getting it wrong
+reintroduces the failure v3.0.0 removed: two things claiming one identity, one silently overwriting
+the other.
+
+`packages/domain/src/stableId.ts` and `desktop/src/services/supabase/manifest.ts` are where the
+current rules live. Anything new keys on `stable_id` + `child_id`, never on a filename.
+
+## See also
+
+- [Access levels and gated delivery](/cloud-storage/access-levels)
+- `CHANGELOG.md` 3.0.0 — why filename-keyed identity was removed

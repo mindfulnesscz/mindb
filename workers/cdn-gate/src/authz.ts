@@ -7,6 +7,11 @@
  * access level, and a `perm` or `status` change MOVES the object rather than changing a lookup.
  * That cost was bought deliberately.
  *
+ * The key parser lives in @dc-hub/domain, imported rather than restated — this Worker used to
+ * carry its own copy because it is a separate bundle, until workers/cdn-gate joined the npm
+ * workspace. One definition now serves the pipeline, the re-key script, the reconcile function and
+ * this.
+ *
  * The four levels, in ascending restriction:
  *
  *   public    anyone with the URL          — lives in the OTHER bucket, served without this Worker
@@ -19,9 +24,10 @@
  * same value in a generated column, so discovery and delivery cannot disagree.
  */
 
-export type Level = 'public' | 'guest' | 'client' | 'internal';
+import { parseObjectPath, type AccessLevel, type ParsedObjectPath } from '@dc-hub/domain/assetStorage';
 
-const LEVELS: readonly string[] = ['public', 'guest', 'client', 'internal'];
+/** The four levels, defined once in @dc-hub/domain. Aliased so this module reads as it always did. */
+export type Level = AccessLevel;
 
 /** Claims carried by the signed CDN cookie. Names are short because this cookie rides on every
  *  single image request in a grid — `st` is is_staff, `cid` the caller's client, `lvl` the
@@ -34,49 +40,18 @@ export interface CdnClaims {
   exp: number;
 }
 
-/** An object key, split into the parts authorization cares about. */
-export interface GatedKey {
-  level: Level;
-  clientId: string;
-  /** Everything after the client segment — `thumbnails/<stable>/<child>.webp` and friends. */
-  rest: string;
-  /** The full R2 key, decoded. What actually gets fetched. */
-  key: string;
-}
+/** An object key, split into the parts authorization cares about. Defined in @dc-hub/domain, so
+ *  the shape this Worker authorizes on is the same one the writers construct. */
+export type GatedKey = ParsedObjectPath;
 
 /**
  * Split a request path into a gated object key, or return null if it is not one.
  *
- *     /client/8f3e…/thumbnails/a1000001/c1.webp
- *      ^level ^client_id       ^rest
- *
- * Returning null must mean 404, never "allow": a path this cannot parse is a path whose level
- * this cannot determine, and an undetermined level is not a public one.
+ * Returning null must mean 404, never "allow": a path this cannot parse is a path whose level this
+ * cannot determine, and an undetermined level is not a public one.
  */
 export function parseGatedKey(pathname: string): GatedKey | null {
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(pathname);
-  } catch {
-    return null; // malformed percent-encoding
-  }
-
-  const key = decoded.replace(/^\/+/, '');
-  const segments = key.split('/');
-
-  // A level, a client, and at least one more segment. Empty or dot segments are rejected
-  // outright: `client/x/../../internal/y` must not become a path to another level. R2 keys are
-  // flat strings so `..` has no meaning to the bucket, but it very much has one to the regex
-  // below, and defence here is cheaper than reasoning about that later.
-  if (segments.length < 3) return null;
-  if (segments.some(s => s === '' || s === '.' || s === '..')) return null;
-
-  const [level, clientId, ...rest] = segments;
-  if (!LEVELS.includes(level)) return null;
-  // Client ids are uuids. Anything else means the key was not written by this pipeline.
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clientId)) return null;
-
-  return { level: level as Level, clientId, rest: rest.join('/'), key };
+  return parseObjectPath(pathname);
 }
 
 /**
