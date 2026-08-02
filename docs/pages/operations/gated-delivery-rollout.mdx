@@ -1,0 +1,189 @@
+# Rolling gated delivery out to production
+
+The staging rehearsal is done and this is the same sequence against real client assets. Two things
+differ and both raise the stakes:
+
+- `cdn.disruptcollective.com` is a **live custom domain** with client traffic on it. It stays
+  exactly as it is. Nothing in this runbook touches the public bucket or its domain.
+- The re-key moves **real client files**, and the reclassification step changes **what clients can
+  see**. On staging that was free. Here it is not.
+
+Every step before step 9 is reversible. Step 9 is not, and it is deliberately last and optional.
+
+## Before you start
+
+`supabase link` currently points at **production**, so a stray CLI command lands there. Pass
+`--project-ref` explicitly throughout, including when you mean staging.
+
+---
+
+## 1. Get the code to `main`
+
+Production deploys ride `main`, so the work has to arrive there through the normal ritual:
+feature branch → `staging` → verify → `staging` → `main`.
+
+**Gate:** the `staging` deploy is green and the portal behaves.
+
+## 2. Create the gated bucket
+
+```bash
+cd workers/cdn-gate
+npx wrangler r2 bucket create dc-hub-gated
+npx wrangler r2 bucket dev-url get dc-hub-gated     # want: disabled
+npx wrangler r2 bucket domain list dc-hub-gated     # want: empty
+```
+
+**Do not** attach a custom domain to this bucket. That is how a bucket is published, and it is the
+one mistake that quietly undoes the entire tier. The hostname belongs to the Worker.
+
+**Gate:** both commands report no public access.
+
+## 3. Worker secrets, then deploy
+
+A **different** signing secret from staging, so a staging cookie can never open production bytes:
+
+```bash
+openssl rand -base64 48 | npx wrangler secret put CDN_COOKIE_SECRET --env production
+
+cd ../..
+read_env () { node -p "require('fs').readFileSync('$1','utf8').match(/^$2=(.*)\$/m)[1].trim()"; }
+W () { npx --prefix workers/cdn-gate wrangler --config workers/cdn-gate/wrangler.jsonc "$@"; }
+read_env web/apps/client-hub/.env.production VITE_SUPABASE_URL      | W secret put SUPABASE_URL      --env production
+read_env web/apps/client-hub/.env.production VITE_SUPABASE_ANON_KEY | W secret put SUPABASE_ANON_KEY --env production
+
+npm --prefix workers/cdn-gate run deploy:production
+```
+
+The deploy provisions `files.disruptcollective.com` and its certificate. Certificate issuance takes
+a minute or two; SSL errors before then are provisioning, not misconfiguration.
+
+**Gate:**
+
+```bash
+H=https://files.disruptcollective.com
+curl -so /dev/null -w '%{http_code}\n' "$H/"                      # 404
+curl -so /dev/null -w '%{http_code}\n' "$H/nonsense/path"         # 404
+curl -so /dev/null -w '%{http_code}\n' -X POST "$H/auth"          # 401
+```
+
+## 4. Tell the pipeline the gated tier exists
+
+```bash
+supabase secrets set --project-ref knbxyaplaoenrxrpgwcg \
+  R2_GATED_BUCKET=dc-hub-gated \
+  R2_GATED_DOMAIN=https://files.disruptcollective.com
+```
+
+Until this is set, `r2-grant` refuses a pipeline grant with a 503 — by design, so a
+half-provisioned environment cannot publish client assets to the public domain and call it success.
+
+Nothing to do in Vercel: `VITE_CDN_GATE_URL` is baked into `.env.production`.
+
+## 5. Record what is exposed today — before changing anything
+
+Supabase dashboard → **production** project → SQL Editor → paste
+`supabase/audit/perm_exposure.sql`, select a block, Run.
+
+Keep the output. Section 5 counts the objects already served on the public domain: that set is
+**permanently public** whatever happens next, because a URL that has been published cannot be
+un-published. Section 1 is the headline — how many rows anonymous visitors can discover.
+
+**Gate:** you have the numbers written down somewhere.
+
+## 6. Decide the reclassification — the real decision
+
+On staging, `--reclassify-public` swept every legacy `perm='public'` row to `client`. **Do not
+assume that is right here.** Those rows are public because the old pipeline hardcoded it, but some
+of them may now be load-bearing: anything a client shares as a public link, anything an anonymous
+portal page displays.
+
+Reclassifying them makes those links show nothing to a signed-out visitor.
+
+Work from the audit. The options:
+
+- **Sweep, then re-promote.** Run with `--reclassify-public`, then set genuinely public assets back
+  to `public` in the portal one at a time. Safest for exposure, most disruptive to anyone holding a
+  link today.
+- **Promote first, then sweep.** Identify the assets that must stay public, and reclassify the
+  remainder with a targeted `UPDATE`. More work, no visible disruption.
+- **Neither yet.** Re-key only what is already non-public, and treat reclassification as its own
+  change. The gate then protects little, but the machinery is proven end to end on production.
+
+There is no correct default. Decide it with the numbers in front of you, and write down what you
+chose.
+
+## 7. Re-key — dry run first
+
+```bash
+node scripts/rekey-gated-objects.mjs production                       # changes nothing
+node scripts/rekey-gated-objects.mjs production --reclassify-public   # only if step 6 said so
+```
+
+Read the plan. Confirm the object count matches the audit, and that no **public** asset is being
+moved — public keys never change.
+
+`scripts/environments/production.env` needs the four secrets (copy the shape from `staging.env`);
+the non-secret half is already committed in `production.public.env`.
+
+**Gate:** the dry run's numbers are what you expect.
+
+## 8. Re-key — execute
+
+```bash
+node scripts/rekey-gated-objects.mjs production --execute
+```
+
+Copies bytes and repoints rows. **Source objects stay in place**, so nothing 404s and rollback is
+repointing the URLs back.
+
+**Gate:**
+
+- `node scripts/rekey-gated-objects.mjs production` → `0 copied`
+- open `hub.disruptcollective.com` signed in: thumbnails and downloads work
+- a private window: gated assets are gone, public ones still load
+- a gated URL fetched signed-out → **403**
+
+Then run the pipeline once against production. Expect **0 uploaded, mostly cached** — that is the
+proof that the pipeline agrees with the gate about where bytes live. A large upload count means
+they disagree; stop and investigate rather than letting it run.
+
+## 9. Delete the superseded originals — the irreversible step
+
+Only after living with step 8 for a while.
+
+```bash
+node scripts/rekey-gated-objects.mjs production --execute --delete-source
+```
+
+Removes only objects no row references any more. Until this runs, the whole move is undone by
+repointing URLs; after it, undoing means re-uploading from the desktop.
+
+It does **not** make old URLs private. Anyone who already has one has the bytes.
+
+## 10. Turn on the reconciler
+
+GitHub → Settings → Environments → **production** → four secrets:
+`SUPABASE_SERVICE_KEY`, `CF_API_TOKEN`, `CF_ACCOUNT_ID`, `R2_PARENT_ACCESS_KEY_ID`.
+
+Everything else comes from the committed `scripts/environments/production.public.env`.
+
+Run `.github/workflows/reconcile-cdn-keys.yml` manually first, with **dry run** ticked, and read the
+summary before letting the schedule take over.
+
+---
+
+## If something is wrong
+
+**Thumbnails broken for everyone, signed in included.** The cookie is not being set or not sent.
+Check `POST files.disruptcollective.com/auth` returns 200 in devtools and that `dch_cdn` exists with
+`Domain=.disruptcollective.com`. Nothing has been lost — repoint the URLs back to the public domain
+to restore service while you debug.
+
+**Some assets 403 for people who should see them.** Object keys and database levels disagree. Run
+the reconciler; it is exactly this.
+
+**The pipeline re-uploads everything.** Objects are missing their `x-amz-meta-sha256`. A re-key run
+repairs it — the copy sets it from the bytes it writes.
+
+**A whole client's gallery is empty.** Check the gallery parent's level: children inherit it, so a
+parent narrowed by the reconciliation takes its images with it.
