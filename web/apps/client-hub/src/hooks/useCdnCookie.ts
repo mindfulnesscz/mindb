@@ -8,6 +8,7 @@
 
 import { useEffect, useRef } from 'react'
 import { clearCdnCookie, refreshDelayMs, requestCdnCookie } from '../services/cdnGate'
+import { clearStreamTokens } from '../services/streamTokens'
 
 export function useCdnCookie(accessToken: string | undefined): void {
   // Survives the effect's own teardown, so a re-run mid-flight cannot let a stale response
@@ -19,6 +20,11 @@ export function useCdnCookie(accessToken: string | undefined): void {
 
     if (!accessToken) {
       void clearCdnCookie()
+      /* Video's equivalent of the cookie. Stream is a different registrable domain, so no cookie of
+         ours reaches it and each gated video carries its credential in the URL path instead — which
+         means signing out has to drop them here, or the next account to use this tab inherits
+         working links to the previous one's videos. */
+      clearStreamTokens()
       return
     }
 

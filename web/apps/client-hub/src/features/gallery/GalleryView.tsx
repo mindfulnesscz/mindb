@@ -14,6 +14,7 @@ import AssetDetail from './AssetDetail'
 import { AssetCard } from './AssetCard'
 import { CardSkeleton, EmptyState, type EmptyReason } from './GalleryStates'
 import { FiltersRail } from './FiltersRail'
+import { useStreamMedia } from './hooks/useStreamMedia'
 import { STATUS_KEYS_STAFF, STATUS_KEYS_CLIENT } from './statusLabels'
 import { DEFAULT_DIMENSION_LABELS } from '@dc-hub/database'
 
@@ -38,6 +39,20 @@ export default function GalleryView() {
 
   const { assets, total, loading, error, usingMock, reload } = useAssets(filters, role, clientId)
   const tags = useTags(clientId)
+
+  /* Video cards. Their frame lives on Cloudflare Stream rather than in R2, so `thumbnail_url` is
+     null for them and the grid showed a grey tile — 9 of production's 10 videos, before this.
+     Resolved here rather than in AssetCard because a gated video's URL needs a token that arrives
+     asynchronously, and the card is presentational by contract. */
+  const resolveStream = useStreamMedia(assets)
+  const cardAssets = useMemo(
+    () => assets.map(a => {
+      if (a.thumbnailUrl || !a.streamUid) return a
+      const media = resolveStream(a)
+      return media ? { ...a, thumbnailUrl: media.still } : a
+    }),
+    [assets, resolveStream],
+  )
 
   const statusCounts = assets.reduce<Record<string, number>>((acc, a) => {
     acc[a.status] = (acc[a.status] ?? 0) + 1
@@ -178,7 +193,7 @@ export default function GalleryView() {
             <EmptyState reason={emptyReason()} />
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {assets.map(asset => (
+              {cardAssets.map(asset => (
                 <AssetCard
                   key={asset.id}
                   asset={asset}

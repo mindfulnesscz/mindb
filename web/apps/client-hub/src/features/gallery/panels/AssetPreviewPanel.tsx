@@ -13,6 +13,7 @@ import type { Dispatch, SetStateAction } from 'react'
 import { canDownload, type Asset, type Role } from '@dc-hub/asset-library'
 import type { PortalDestination } from '../../../services/destinationService'
 import { ImageLightbox } from '../ImageLightbox'
+import { StreamPlayer } from '../StreamPlayer'
 import { webAssetActions } from '../../../lib/assetActions'
 import { trackEvent } from '../../../services/eventService'
 
@@ -41,8 +42,13 @@ export function AssetPreviewPanel({
 }: AssetPreviewPanelProps) {
   return (
     <>
-        {/* Preview: show children grid/carousel if they exist, else parent thumbnail */}
-        {children.length > 0 ? (
+        {/* Preview: a player for video, else children grid/carousel, else the parent thumbnail.
+            Video comes first because a video asset has no children and would otherwise fall through
+            to the thumbnail branch — where it would render a still of itself that opens a lightbox
+            and cannot be played. */}
+        {selectedAsset.streamUid ? (
+          <StreamPlayer asset={selectedAsset} accent={accent} />
+        ) : children.length > 0 ? (
           <div>
             <div className="flex items-center justify-between mb-2">
               <p className="text-[10px] font-sans font-bold uppercase tracking-label text-text-muted">

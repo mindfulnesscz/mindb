@@ -18,6 +18,7 @@ import { useAssetEvents } from './hooks/useAssetEvents'
 import { useAssetComments } from './hooks/useAssetComments'
 import { useAssetLifecycle } from './hooks/useAssetLifecycle'
 import { useAssetDestinations } from './hooks/useAssetDestinations'
+import { useStreamMedia } from './hooks/useStreamMedia'
 // Good-practice naming convention: variants of one asset share the same tags and differ
 // only in a distinguishing bit of text/tag before the version. So the asset's displayed
 // name is the tags common to every variant, and each variant's own label is just its
@@ -72,6 +73,19 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
     })
   }, [variants, activeFacets])
   const selectedAsset = sortedVariants.find(v => v.id === selectedVariantId) ?? asset
+
+  /* Gallery children that are videos. A folder of cuts is now recognised as a gallery (see
+     dam/scan.ts), so the children grid can hold videos whose frame lives on Stream rather than in
+     R2 — without this they render as empty tiles, the same way top-level video cards did. */
+  const resolveStream = useStreamMedia(children)
+  const previewChildren = useMemo(
+    () => children.map(c => {
+      if (c.thumbnailUrl || !c.streamUid) return c
+      const media = resolveStream(c)
+      return media ? { ...c, thumbnailUrl: media.still } : c
+    }),
+    [children, resolveStream],
+  )
   const shared      = sortedVariants.length > 0 ? sharedLabels([asset, ...sortedVariants]) : []
   const displayName = shared.length > 0 ? shared.join(' ') : asset.name
 
@@ -117,7 +131,7 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
         <AssetPreviewPanel
           asset={asset}
           selectedAsset={selectedAsset}
-          children={children}
+          children={previewChildren}
           childView={childView}
           setChildView={setChildView}
           carouselIdx={carouselIdx}
