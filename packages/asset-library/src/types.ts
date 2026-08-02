@@ -43,6 +43,12 @@ export interface Asset {
   thumbnailUrl?: string
   /** CDN original — primary Download button. */
   downloadUrl?: string
+  /* ── Video ────────────────────────────────────────────────────────────────
+     Cloudflare Stream carries playback and stills; R2 still holds the master, which is what
+     `downloadUrl` points at. Both absent for everything that is not a video. */
+  streamUid?: string | null
+  /** Stream's own encoding state. Only `ready` means its delivery URLs resolve. */
+  streamStatus?: string | null
   /** Cloud share links (Dropbox / OneDrive / Drive) from pipeline export. */
   downloadUrls?: { destId?: string; provider: string; name: string; url: string }[]
   /** Rename-proof package identity — used for Reveal in Finder via desktop bridge. */

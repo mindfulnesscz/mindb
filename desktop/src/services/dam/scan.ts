@@ -10,7 +10,7 @@ import {
 import { join } from '@tauri-apps/api/path';
 import type { AppSettings } from '../../store/settingsStore';
 import {
-  parseFilename, type VocabMap,
+  parseFilename, isVideoFile, type VocabMap,
 } from '@dc-hub/domain';
 import {
   relativeTo, pathParts, isPublishable,
@@ -24,6 +24,11 @@ import {
 
 export const IMAGE_EXTS = new Set(['.jpg','.jpeg','.png','.webp','.gif','.tif','.tiff','.bmp']);
 
+/* A folder is a gallery when it holds displayable media. Video counts — a folder of cuts is as much
+   a gallery as a folder of stills, and before this it got no vault note at all.
+ *
+ * Video is tested separately rather than being added to IMAGE_EXTS, which is used elsewhere as
+ * literally "is this an image" and would start quietly lying. */
 export async function isGalleryFolder(path: string, vocab: VocabMap): Promise<boolean> {
   try {
     const parsed = parseFilename(path.split('/').pop()!, vocab);
@@ -32,7 +37,7 @@ export async function isGalleryFolder(path: string, vocab: VocabMap): Promise<bo
     return entries.some(e => {
       if (!e.isFile || e.name.startsWith('.')) return false;
       const ext = '.' + (e.name.split('.').pop() || '').toLowerCase();
-      return IMAGE_EXTS.has(ext);
+      return IMAGE_EXTS.has(ext) || isVideoFile(e.name);
     });
   } catch { return false; }
 }

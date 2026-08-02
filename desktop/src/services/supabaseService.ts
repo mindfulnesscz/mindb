@@ -40,6 +40,8 @@ export { cdnStemKey, resolveCdnIdentity } from './supabase/identity';
 /* ── Queries ──────────────────────────────────────────────────────────────── */
 export { fetchExistingStableIds, fetchAssetStats, fetchAssetLevels } from './supabase/assetQueries';
 export { reconcileCdnObjects } from './supabase/cdnReconcile';
+export { syncStreamVideos } from './supabase/streamSync';
+export { requestStreamUpload, type StreamUploadResult } from './supabase/streamUpload';
 export { resolveTagId, createDraftAsset, type DraftAssetInput } from './supabase/draftAssets';
 export { fetchCloudDestinationDefs, saveCloudDestinationDefs } from './supabase/destinations';
 export { syncTagsFromVocabulary } from './supabase/tagSync';
