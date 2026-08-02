@@ -1,5 +1,6 @@
 import type { SupabaseConfig } from './rest';
 import { makeHeaders, sbFetch } from './rest';
+import { edgeFunctionError } from './edgeErrors';
 
 export interface StreamUploadResult {
   stream_uid: string;
@@ -29,24 +30,6 @@ export async function requestStreamUpload(
     headers: await makeHeaders(config.anonKey),
     body:    JSON.stringify({ asset_id: assetId, replace: opts.replace ?? false }),
   });
-  if (!res.ok) {
-    const body = await res.text();
-    // Same split as requestR2Grant: the function reports its own refusals in `error`, while the API
-    // gateway reports upstream trouble in `message`. Without naming the difference, an edge runtime
-    // that is simply not up reads as a video-provisioning problem and sends you to the wrong place.
-    let msg = body, gateway = false;
-    try {
-      const parsed = JSON.parse(body) as { error?: string; message?: string };
-      if (parsed.error) msg = parsed.error;
-      else if (parsed.message) { msg = parsed.message; gateway = true; }
-    } catch { /* raw body */ }
-    if (gateway || res.status === 502 || res.status === 504) {
-      throw new Error(
-        `Video upload unreachable (${res.status}): ${msg} — the stream-upload function did not respond. `
-        + `Locally, check the edge runtime is running (\`docker start supabase_edge_runtime_<project>\`).`,
-      );
-    }
-    throw new Error(`Video upload refused (${res.status}): ${msg}`);
-  }
+  if (!res.ok) throw edgeFunctionError('stream-upload', res.status, await res.text());
   return await res.json<StreamUploadResult>();
 }
