@@ -726,19 +726,29 @@ The stage asks the DATABASE which videos need work, not the run. A video missed 
 token not yet set, Stream down — is picked up by the next run without anyone noticing it was
 missed. Scoping to files touched this run would make a miss permanent.
 
-## Phase 8 — portal playback (~1 day)
+## Phase 8 — portal playback (~1 day) — DONE 2026-08-03, commit 52e308f
 
-- [ ] Player in `AssetDetail`. Stream's iframe embed is the zero-effort option; hls.js only if
+- [x] Player in `AssetDetail`. Stream's iframe embed is the zero-effort option; hls.js only if
       custom controls are wanted.
-- [ ] Mint Stream playback tokens in the same place as the CDN cookie, for
+- [x] Mint Stream playback tokens in the same place as the CDN cookie, for
       `effective_level != 'public'`.
-- [ ] Build the still-thumbnail URL from `stream_uid` wherever `thumbnailUrl` is used today, so
+- [x] Build the still-thumbnail URL from `stream_uid` wherever `thumbnailUrl` is used today, so
       video cards stop being blank. Keep the `stream_status !== 'ready'` fallback — reuse the
       existing shimmer.
-- [ ] **Sign thumbnail URLs too — required, now confirmed.** Thumbnails 401 without a token
+- [x] **Sign thumbnail URLs too — required, now confirmed.** Thumbnails 401 without a token
       (measured 2026-08-02, table above), so a gated video's card is blank unless its stills and
       previews carry one. The token replaces the UID in the path. **One token per view, not per
       `<img>`:** they are ~581 characters and a grid holds a hundred cards.
+
+**Two things worth carrying into Phase 9.**
+
+`VITE_STREAM_DOMAIN` is set in `.env.staging` and `.env.production` and needs adding to **Vercel**
+for both environments. Unset is not a failure — delivery falls back to `videodelivery.net`, which
+is account-agnostic and was checked against a real video on this account — so previews keep working
+either way.
+
+`CF_STREAM_TOKEN` is now needed by a second function, `stream-token`. It is already set on both
+projects, so nothing to do; noted because a future project will need it before video works there.
 
 ## Phase 9 — hover preview (~half a day)
 
