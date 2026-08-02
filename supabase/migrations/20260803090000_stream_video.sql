@@ -18,8 +18,9 @@
 --   the product.
 
 alter table public.assets
-  add column stream_uid    text,
-  add column stream_status text;
+  add column stream_uid         text,
+  add column stream_status      text,
+  add column stream_source_hash text;
 
 comment on column public.assets.stream_uid is
   'Cloudflare Stream video id. Null for everything that is not a video, and for videos not yet '
@@ -29,6 +30,17 @@ comment on column public.assets.stream_uid is
 comment on column public.assets.stream_status is
   'Encoding state as Stream reports it, verbatim. Only `ready` means the delivery URLs resolve; '
   'anything else means the portal should hold its placeholder rather than render a broken image.';
+
+/* Which master this video was made from — the content hash already carried in download_url's `?v=`.
+   Without it there is no way to notice a version bump: v2 of a film uploads to R2 under the same
+   version-stable key, the row keeps the uid of v1, and the portal then PLAYS v1 while the download
+   button hands over v2. That disagreement is silent and can persist indefinitely.
+
+   In a column rather than in Stream's own `meta` so the check costs a comparison the pipeline
+   already has the data for, instead of one API call per video per run. */
+comment on column public.assets.stream_source_hash is
+  'sha256 of the R2 master this Stream video was encoded from. A mismatch against the current '
+  'download_url means the video is stale and the asset needs re-uploading to Stream.';
 
 /* Stream's own vocabulary, not a translation of it. A local synonym set would have to be kept in
    step with theirs forever, and the first time they add a state we would store something the

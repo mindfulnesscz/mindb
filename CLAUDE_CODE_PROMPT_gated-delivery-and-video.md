@@ -687,19 +687,44 @@ Until it is set, `stream-upload` returns 503 (explicitly "not provisioned", neve
 and `cdn-reconcile` keeps re-keying images normally — it only needs the token once videos exist,
 and refuses to mark a video reconciled it could not verify.
 
-## Phase 7 — pipeline (~1 day)
+## Phase 7 — pipeline (~1 day) — DONE 2026-08-03
 
-- [ ] In or just after `runOriginalUpload` (`cdnUpload.ts:194`), detect video extensions and
-      call the function once that file's R2 upload succeeded.
-- [ ] Skip when `stream_uid` is set and the content hash is unchanged — extend
-      `r2-upload-cache.json`, do not invent a second cache.
-- [ ] Transcoding is async: store `processing` and let a later run or a small poll flip it to
-      `ready`. Never block a run waiting.
-- [ ] Write `stream_uid`/`stream_status` through the existing export path
-      (`exportPlan.ts` → `exportWrite.ts`). Do **not** add a second write path.
-- [ ] Add video extensions to all three sets: `GALLERY_THUMB_EXTS` (`dam/thumbs.ts:16`),
-      `IMAGE_EXTS` (`dam/scan.ts:25`), `THUMB_EXTS` (`pipeline/naming.ts:46`). Confirm which
-      actually need it rather than changing all three blindly.
+Three items landed differently from how they were written here. The plan was drafted before the
+export path had been read; the reasons are below rather than in a commit nobody will find.
+
+- [x] ~~In or just after `runOriginalUpload`~~ **After the Supabase export**, in `syncRunToPortal`.
+      `stream-upload` attaches a video to an asset ROW and reads the master's location off it, and
+      a brand-new asset has no row until the export creates it. Placed after `reconcileCdnObjects`
+      too, so the master is already at the key its access level requires rather than one about to
+      move.
+- [x] ~~Extend `r2-upload-cache.json`~~ **`assets.stream_source_hash`**, a column. The local cache
+      is per-machine, so a second editor's run would see no record of an upload and redo it; and
+      the cache is keyed by R2 object, which is the wrong grain — this question is about an asset.
+      The hash is already in `download_url`'s `?v=`, so the check costs a string comparison.
+- [x] Transcoding is async — nothing blocks. Statuses land as `queued`/`inprogress` and the portal
+      flips them to `ready`.
+- [x] ~~Write through `exportPlan.ts` → `exportWrite.ts`~~ **the edge function writes it itself**,
+      which is still one write path, just not that one. Creating the video and recording it must
+      be one operation: the function deletes the video if the write fails, because a video nothing
+      references still serves and still bills. Routing it back through the export would put a
+      process boundary in the middle of that. Nothing is lost — the export uses PATCH semantics
+      and never touches columns it does not know about, so a run cannot null these.
+- [x] The three extension sets — **only one of them wanted changing**, and it was not the one this
+      plan predicted:
+      - `IMAGE_EXTS` (`dam/scan.ts`) — **changed**, via a separate `isVideoFile` test rather than
+        by adding video to a set named "image". A folder of cuts is as much a gallery as a folder
+        of stills, and before this it got no vault note at all.
+      - `GALLERY_THUMB_EXTS` (`dam/thumbs.ts`) — **left alone; adding video is a regression.** It
+        picks ONE file alphabetically to represent the folder and asks Rust to render it. Rust
+        cannot decode video, so a mixed folder starting with `A-roll.mp4` would stop producing the
+        still it produces today. Stream could render one, but only behind a signed URL that
+        expires, and a markdown note is static — it has nowhere to put a token.
+      - `THUMB_EXTS` (`pipeline/naming.ts`) — **left alone.** Adding video would not produce
+        thumbnails, it would produce one Rust error per video per run.
+
+The stage asks the DATABASE which videos need work, not the run. A video missed earlier — crash,
+token not yet set, Stream down — is picked up by the next run without anyone noticing it was
+missed. Scoping to files touched this run would make a miss permanent.
 
 ## Phase 8 — portal playback (~1 day)
 

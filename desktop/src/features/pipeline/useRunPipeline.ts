@@ -22,7 +22,7 @@ import { runPipeline, scanVersionMap, deleteCdnObjects, type RunContext } from '
 import type { CloudUrlEntry } from '../../services/pipelineService';
 import {
   exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary, requestR2Grant, processRenameTasks,
-  fetchAssetLevels, reconcileCdnObjects,
+  fetchAssetLevels, reconcileCdnObjects, syncStreamVideos,
 } from '../../services/supabaseService';
 import { loadVocabulary } from '../../services/vocabService';
 import { notifyRunComplete } from '../../services/notifyService';
@@ -197,6 +197,11 @@ async function syncRunToPortal(a: {
        half of the access level, so some objects now belong at a different key. The trigger queued
        them; drain it here rather than leaving it for whoever next opens the portal. */
     await reconcileCdnObjects(a.sbConfig, a.log);
+
+    /* Videos onto Stream. AFTER the export, because a video is attached to an asset row and a
+       brand-new asset has none until the export creates it; and after reconcile, so the master is
+       already at the key its access level requires rather than one about to move. */
+    await syncStreamVideos(a.sbConfig, a.clientId, a.log);
 
     await processRenameTasks(a.sbConfig, a.clientId, a.log);
     // Only push leaves when desktop has unpublished edits — otherwise portal renames (the label

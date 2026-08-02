@@ -10,6 +10,8 @@ export interface StreamUploadResult {
   reused?: boolean;
   /** Whether the video is protected by `requireSignedURLs`. False only for `public` assets. */
   signed?: boolean;
+  /** The uid this upload superseded and deleted, when `replace` was asked for. */
+  replaced?: string | null;
 }
 
 /* Hands an asset's video master to Cloudflare Stream.

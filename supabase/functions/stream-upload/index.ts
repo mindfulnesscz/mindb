@@ -70,7 +70,7 @@ Deno.serve(async (req) => {
     auth: { persistSession: false },
   });
   const { data: asset } = await db.from('assets')
-    .select('id,client_id,name,perm,status,download_url,stream_uid,stream_status')
+    .select('id,client_id,name,perm,status,download_url,stream_uid,stream_status,stream_source_hash')
     .eq('id', body.asset_id).maybeSingle();
   if (!asset) return json(404, { error: 'No such asset' });
 
@@ -95,6 +95,12 @@ Deno.serve(async (req) => {
   } catch {
     return json(422, { error: `Unparseable download_url: ${asset.download_url}` });
   }
+
+  /* Read the master's content hash out of the URL the pipeline wrote, rather than taking it from
+     the caller. The caller would have to derive it the same way, and a caller that got it wrong
+     would record a video as current when it is stale — which is invisible until someone notices
+     the player and the download button disagree. */
+  const sourceHash = new URL(asset.download_url).searchParams.get('v');
   if (!isVideoFile(key)) {
     return json(422, { error: `Not a video: ${key.split('/').pop()}` });
   }
@@ -166,12 +172,28 @@ Deno.serve(async (req) => {
 
   const streamStatus = copyBody.result.status?.state ?? 'queued';
   const { error: writeErr } = await db.from('assets')
-    .update({ stream_uid: uid, stream_status: streamStatus }).eq('id', asset.id);
+    .update({ stream_uid: uid, stream_status: streamStatus, stream_source_hash: sourceHash })
+    .eq('id', asset.id);
   if (writeErr) {
     // Same reasoning as above: an unreferenced video is an orphan that still bills and still serves.
     await fetch(`${api}/${uid}`, { method: 'DELETE', headers: streamHeaders });
     return json(500, { error: `Uploaded but could not record it: ${writeErr.message}` });
   }
 
-  return json(200, { stream_uid: uid, stream_status: streamStatus, signed: tier !== 'public' });
+  /* A replacement supersedes the old video, so the old one goes. Deleted only AFTER the row points
+     at the new uid: the other order leaves a window where the asset references a video that no
+     longer exists, and a failure mid-way would take out the working video and leave nothing.
+     Best-effort — a video that outlives its row costs storage, which is the cheaper failure. */
+  let replaced: string | null = null;
+  if (asset.stream_uid && asset.stream_uid !== uid) {
+    const del = await fetch(`${api}/${asset.stream_uid}`, { method: 'DELETE', headers: streamHeaders });
+    if (!del.ok && del.status !== 404) {
+      console.error(`superseded video ${asset.stream_uid} not deleted: ${del.status}`);
+    }
+    replaced = asset.stream_uid;
+  }
+
+  return json(200, {
+    stream_uid: uid, stream_status: streamStatus, signed: tier !== 'public', replaced,
+  });
 });
