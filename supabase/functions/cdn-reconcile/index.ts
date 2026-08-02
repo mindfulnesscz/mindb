@@ -13,7 +13,7 @@
 // No scheduler, no stored callback token — the caller is already authenticated, and the queue is
 // durable so nothing is lost if a call never comes.
 //
-// Secrets: R2_BUCKET, R2_PUBLIC_DOMAIN, R2_GATED_BUCKET, R2_GATED_DOMAIN, CF_API_TOKEN,
+// Secrets: R2_BUCKET, R2_PUBLIC_DOMAIN, R2_GATED_BUCKET, R2_GATED_DOMAIN, CF_R2_TOKEN,
 //          CF_ACCOUNT_ID, R2_PARENT_ACCESS_KEY_ID  — all already set on both projects.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import {
@@ -36,9 +36,13 @@ const json = (status: number, body: Record<string, unknown>) =>
 Deno.serve(async (req) => {
   if (req.method !== 'POST') return json(405, { error: 'POST only' });
 
-  const env = (k: string) => Deno.env.get(k) ?? '';
+  /* CF_R2_TOKEN was CF_API_TOKEN. Two Cloudflare tokens named almost identically — one minting R2
+     credentials, one deploying the Worker — is how the wrong one ends up pasted, and the failure is
+     an authorization error that looks like a bad token rather than the wrong scope. The old name is
+     still read so the rename cannot break an environment mid-flight. */
+  const env = (k: string) => Deno.env.get(k) ?? (k === 'CF_R2_TOKEN' ? Deno.env.get('CF_API_TOKEN') ?? '' : '');
   const need = ['R2_BUCKET', 'R2_PUBLIC_DOMAIN', 'R2_GATED_BUCKET', 'R2_GATED_DOMAIN',
-                'CF_API_TOKEN', 'CF_ACCOUNT_ID', 'R2_PARENT_ACCESS_KEY_ID'];
+                'CF_R2_TOKEN', 'CF_ACCOUNT_ID', 'R2_PARENT_ACCESS_KEY_ID'];
   const missing = need.filter(k => !env(k));
   if (missing.length) {
     // Explicit 503 rather than a partial move, matching r2-grant: "not provisioned" must never
@@ -81,8 +85,8 @@ Deno.serve(async (req) => {
 
   const accountId = env('CF_ACCOUNT_ID');
   const creds: Record<'public' | 'gated', TempCreds> = {
-    public: await tempCredentials(accountId, env('CF_API_TOKEN'), env('R2_PARENT_ACCESS_KEY_ID'), env('R2_BUCKET')),
-    gated: await tempCredentials(accountId, env('CF_API_TOKEN'), env('R2_PARENT_ACCESS_KEY_ID'), env('R2_GATED_BUCKET')),
+    public: await tempCredentials(accountId, env('CF_R2_TOKEN'), env('R2_PARENT_ACCESS_KEY_ID'), env('R2_BUCKET')),
+    gated: await tempCredentials(accountId, env('CF_R2_TOKEN'), env('R2_PARENT_ACCESS_KEY_ID'), env('R2_GATED_BUCKET')),
   };
   const bucketOf = (t: 'public' | 'gated') => (t === 'public' ? env('R2_BUCKET') : env('R2_GATED_BUCKET'));
   const domainOf = (t: 'public' | 'gated') => (t === 'public' ? env('R2_PUBLIC_DOMAIN') : env('R2_GATED_DOMAIN'));

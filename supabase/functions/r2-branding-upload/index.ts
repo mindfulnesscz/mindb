@@ -50,7 +50,8 @@ async function obtainTempCredentials(bucket: string): Promise<{
   secretAccessKey: string;
   sessionToken: string;
 } | null> {
-  const cfToken   = Deno.env.get('CF_API_TOKEN');
+  // CF_R2_TOKEN, with the old CF_API_TOKEN accepted during the rename. See cdn-reconcile.
+  const cfToken   = Deno.env.get('CF_R2_TOKEN') ?? Deno.env.get('CF_API_TOKEN');
   const accountId = Deno.env.get('CF_ACCOUNT_ID');
   const parentKey   = Deno.env.get('R2_PARENT_ACCESS_KEY_ID');
   if (!cfToken || !accountId || !parentKey) return null;
@@ -118,7 +119,7 @@ Deno.serve(async (req) => {
   const creds = await obtainTempCredentials(bucket);
   if (!creds) {
     return json(req, 503, {
-      error: 'Storage backend not provisioned — set CF_API_TOKEN, CF_ACCOUNT_ID, and R2_PARENT_ACCESS_KEY_ID',
+      error: 'Storage backend not provisioned — set CF_R2_TOKEN, CF_ACCOUNT_ID, and R2_PARENT_ACCESS_KEY_ID',
     });
   }
 

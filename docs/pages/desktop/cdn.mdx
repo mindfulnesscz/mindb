@@ -61,13 +61,13 @@ Create an R2 **Account API token** with object read/write (or Admin Read & Write
 |--------|--------|
 | `R2_BUCKET` | Bucket name |
 | `R2_PUBLIC_DOMAIN` | Public origin (no trailing slash) |
-| `CF_API_TOKEN` | Token value (bearer for Cloudflare REST) |
+| `CF_R2_TOKEN` | Token value (bearer for Cloudflare REST) |
 | `CF_ACCOUNT_ID` | R2 account ID |
 | `R2_PARENT_ACCESS_KEY_ID` | Access Key ID from the same token create screen |
 
 ```bash
 supabase link --project-ref <env-ref>
-supabase secrets set R2_BUCKET=… R2_PUBLIC_DOMAIN=… CF_API_TOKEN=… CF_ACCOUNT_ID=… R2_PARENT_ACCESS_KEY_ID=…
+supabase secrets set R2_BUCKET=… R2_PUBLIC_DOMAIN=… CF_R2_TOKEN=… CF_ACCOUNT_ID=… R2_PARENT_ACCESS_KEY_ID=…
 supabase functions deploy
 ```
 

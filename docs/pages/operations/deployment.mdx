@@ -57,7 +57,7 @@ Schema-dependent UI: merge the migration first (or in the same merge — migrati
 - Staging project: Site URL `https://staging.hub.disruptcollective.com`; add `https://*.vercel.app/**` to redirects so ephemeral previews can sign in.
 - Both: keep `http://localhost:7623/auth-callback` for desktop sign-in.
 
-**Supabase function secrets** (per project, once): `R2_BUCKET`, `R2_PUBLIC_DOMAIN`, `CF_API_TOKEN`, `CF_ACCOUNT_ID`, `R2_PARENT_ACCESS_KEY_ID` — see [Database environments](/operations/database-environments#storage-tiers--environment-level-r2) and [Team staging setup](/getting-started/team-dev-setup).
+**Supabase function secrets** (per project, once): `R2_BUCKET`, `R2_PUBLIC_DOMAIN`, `CF_R2_TOKEN`, `CF_ACCOUNT_ID`, `R2_PARENT_ACCESS_KEY_ID` — see [Database environments](/operations/database-environments#storage-tiers--environment-level-r2) and [Team staging setup](/getting-started/team-dev-setup).
 
 ## Standing up a new environment
 

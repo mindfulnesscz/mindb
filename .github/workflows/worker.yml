@@ -62,7 +62,9 @@ jobs:
       - run: npx wrangler deploy --env staging
         working-directory: workers/cdn-gate
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # wrangler reads CLOUDFLARE_API_TOKEN by convention; the SECRET is named for what it
+          # does, so nobody has to remember which of two Cloudflare tokens this one is.
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_WORKERS_TOKEN }}
 
   deploy-production:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -77,17 +79,24 @@ jobs:
       - run: npx wrangler deploy --env production
         working-directory: workers/cdn-gate
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # wrangler reads CLOUDFLARE_API_TOKEN by convention; the SECRET is named for what it
+          # does, so nobody has to remember which of two Cloudflare tokens this one is.
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_WORKERS_TOKEN }}
 
 # ── Setup, once ───────────────────────────────────────────────────────────────
 #
 # Settings -> Environments -> staging AND production -> Environment secrets:
 #
-#   CLOUDFLARE_API_TOKEN
+#   CF_WORKERS_TOKEN
 #
-# This is NOT the existing CF_API_TOKEN. That one is scoped for R2 temporary credentials and has no
-# Workers permission — deploys with it fail on authorization, which reads like a bad token rather
-# than a missing scope. Create a new one at
+# NOT the same token as CF_R2_TOKEN. That one mints R2 temporary credentials and has no Workers
+# permission — deploying with it fails on authorization, which reads like a bad token rather than a
+# missing scope. Two Cloudflare tokens, named for their jobs:
+#
+#   CF_R2_TOKEN       mints short-lived R2 credentials   (Supabase function secret)
+#   CF_WORKERS_TOKEN  publishes this Worker              (GitHub environment secret)
+#
+# Create the second at
 # https://dash.cloudflare.com/profile/api-tokens with:
 #
 #   Account · Workers Scripts   : Edit      (publish the script)

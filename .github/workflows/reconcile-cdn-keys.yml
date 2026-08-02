@@ -72,7 +72,7 @@ jobs:
         # hand-copy nine settings per environment is how one of them ends up wrong.
         env:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_R2_TOKEN: ${{ secrets.CF_R2_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           R2_PARENT_ACCESS_KEY_ID: ${{ secrets.R2_PARENT_ACCESS_KEY_ID }}
         run: |
@@ -94,7 +94,8 @@ jobs:
 #
 #   SUPABASE_SERVICE_KEY      service role key — bypasses RLS, which this needs: it reconciles
 #                             rows no ordinary session may see
-#   CF_API_TOKEN              mints short-lived, bucket-scoped R2 credentials
+#   CF_R2_TOKEN               mints short-lived, bucket-scoped R2 credentials
+#                             (CF_WORKERS_TOKEN is a different token — it deploys the Worker)
 #   CF_ACCOUNT_ID
 #   R2_PARENT_ACCESS_KEY_ID
 #
