@@ -114,13 +114,20 @@ export async function deleteCdnObjects(
   let removed = 0;
   let errors  = 0;
   for (const objectKey of objectKeys) {
+    /* Which bucket holds it is readable from the key: a leading level segment means the gated
+       tier, anything else is public. Deleting from the wrong bucket does not fail loudly — the
+       object simply is not there — so a hardcoded `r2.bucket` would leave every withdrawn gated
+       object in place forever while reporting a clean removal. */
+    const gated = /^(guest|client|internal)\//.test(objectKey);
+    const target = gated
+      ? { bucket: r2.gatedBucket, accessKeyId: r2.gatedAccessKeyId,
+          secretKey: r2.gatedSecretKey, sessionToken: r2.gatedSessionToken }
+      : { bucket: r2.bucket, accessKeyId: r2.accessKeyId,
+          secretKey: r2.secretKey, sessionToken: r2.sessionToken };
     try {
       await invoke('delete_r2_object', {
-        endpoint:    r2.endpoint,
-        bucket:      r2.bucket,
-        accessKeyId: r2.accessKeyId,
-        secretKey:   r2.secretKey,
-      sessionToken: r2.sessionToken,
+        endpoint: r2.endpoint,
+        ...target,
         objectKey,
       });
       appendLog('dim', `  ↷  removed: ${objectKey}`);

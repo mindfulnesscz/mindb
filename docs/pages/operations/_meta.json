@@ -4,5 +4,6 @@
   "safe-reruns": "Retries and idempotency",
   "deployment": "Configuration and deployment",
   "database-environments": "Database environments",
-  "error-reporting": "Error reporting"
+  "error-reporting": "Error reporting",
+  "gated-delivery-rollout": "Gated delivery rollout"
 }

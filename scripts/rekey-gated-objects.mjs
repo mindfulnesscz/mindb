@@ -22,7 +22,7 @@
  * keeps the bytes regardless. Re-keying limits future exposure; it does not undo past exposure.
  *
  *   node scripts/rekey-gated-objects.mjs staging                     # dry run, changes nothing
- *   node scripts/rekey-gated-objects.mjs staging --reclassify-public # preview the perm change too
+ *   node scripts/rekey-gated-objects.mjs staging --raise-to-client   # preview the perm change too
  *   node scripts/rekey-gated-objects.mjs staging --execute
  *   node scripts/rekey-gated-objects.mjs staging --execute --delete-source   # after verifying
  */
@@ -44,10 +44,10 @@ const envName = args.find(a => !a.startsWith('--'));
 const has = f => args.includes(f);
 const EXECUTE = has('--execute');
 const DELETE_SOURCE = has('--delete-source');
-const RECLASSIFY = has('--reclassify-public');
+const RECLASSIFY = has('--raise-to-client') || has('--reclassify-public'); // old name kept working
 
 if (!envName) {
-  console.error('usage: node scripts/rekey-gated-objects.mjs <env> [--reclassify-public] [--execute] [--delete-source]');
+  console.error('usage: node scripts/rekey-gated-objects.mjs <env> [--raise-to-client] [--execute] [--delete-source]');
   process.exit(1);
 }
 
@@ -82,11 +82,24 @@ const env = {
 const need = ['PROJECT_REF', 'SUPABASE_SERVICE_KEY', 'R2_BUCKET', 'R2_PUBLIC_DOMAIN',
               'R2_GATED_BUCKET', 'R2_GATED_DOMAIN',
               'CF_API_TOKEN', 'CF_ACCOUNT_ID', 'R2_PARENT_ACCESS_KEY_ID'];
-const missing = need.filter(k => !env[k]);
+const missing = need.filter(k => !env[k] || String(env[k]).startsWith('PASTE_'));
 if (missing.length) {
   console.error(`Missing for "${envName}": ${missing.join(', ')}`);
-  console.error(`Non-secret values belong in ${path.relative(root, publicFile)} (committed);`);
-  console.error(`secrets in ${path.relative(root, envFile)} (gitignored) or the environment.`);
+  /* "missing" is the truth but not always the cause. An empty or absent file reads exactly like a
+     file whose keys are wrong, and the first costs someone a while re-checking key names that were
+     never there — so say which it is. */
+  const secretsRead = Object.keys(readEnvFile(envFile)).length;
+  if (!fs.existsSync(envFile)) {
+    console.error(`\n  ${path.relative(root, envFile)} does not exist.`);
+  } else if (secretsRead === 0) {
+    console.error(`\n  ${path.relative(root, envFile)} exists but is EMPTY — unsaved edit?`);
+  }
+  const placeholder = Object.entries(env).filter(([, v]) => String(v).startsWith('PASTE_'));
+  if (placeholder.length) {
+    console.error(`  still holding a placeholder: ${placeholder.map(([k]) => k).join(', ')}`);
+  }
+  console.error(`\n  Non-secret values belong in ${path.relative(root, publicFile)} (committed);`);
+  console.error(`  secrets in ${path.relative(root, envFile)} (gitignored) or the environment.`);
   process.exit(1);
 }
 
@@ -105,7 +118,7 @@ const sbHeaders = {
    bucket-scoped key pair from the parent key. Nothing long-lived is written down here. */
 
 async function tempCredentials(bucket) {
-  const res = await fetch(
+  const res = await retryFetch(
     `https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/r2/temp-access-credentials`,
     {
       method: 'POST',
@@ -123,45 +136,85 @@ async function tempCredentials(bucket) {
   return body.result;
 }
 
+/* A thousand-object run touches the network thousands of times; one blip should not end it. The
+   S3 path re-signs per attempt (see s3), so this wrapper is for everything else: the Cloudflare
+   credential mint and the Supabase reads and writes, each of which ended a run outright. */
+async function retryFetch(url, init, attempts = 3) {
+  let lastErr;
+  for (let i = 1; i <= attempts; i++) {
+    try { return await fetch(url, init); }
+    catch (e) { lastErr = e; if (i < attempts) await new Promise(r => setTimeout(r, i * 1500)); }
+  }
+  throw lastErr;
+}
+
 const sha256hex = b => crypto.createHash('sha256').update(b).digest('hex');
 const hmac = (k, s) => crypto.createHmac('sha256', k).update(s).digest();
+
+/* SigV4 canonicalises paths per RFC 3986, where the unreserved set is only A–Z a–z 0–9 - _ . ~
+   `encodeURIComponent` leaves !'()* alone, so a key containing parentheses signed cleanly on this
+   side and hashed differently on Cloudflare's — an opaque 403 that reads as a permissions fault.
+   It cost 17 objects on the production run: legacy filename-keyed thumbnails such as
+   `(p-SpW)(ILL)(TrpB) 3D Vis v3-0-0-thumb.webp`, which are exactly the ones full of brackets. */
+const rfc3986 = str => encodeURIComponent(str)
+  .replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
 
 /** Minimal SigV4 for R2. Only the three verbs this script needs. */
 async function s3(creds, bucket, method, key, body = null, extraHeaders = {}) {
   const host = `${env.CF_ACCOUNT_ID}.r2.cloudflarestorage.com`;
-  const now = new Date();
-  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
-  const dateStamp = amzDate.slice(0, 8);
   const payloadHash = sha256hex(body ?? Buffer.alloc(0));
-  const canonicalUri = `/${bucket}/${key.split('/').map(encodeURIComponent).join('/')}`;
+  const canonicalUri = `/${bucket}/${key.split('/').map(rfc3986).join('/')}`;
 
-  // Lowercase keys throughout, so the canonical form is a plain sort of this object rather than a
-  // case-insensitive lookup back into it. SigV4 fails opaquely (403 SignatureDoesNotMatch) when
-  // the signed list and the sent headers disagree by so much as capitalisation.
-  const headers = {
-    host,
-    'x-amz-content-sha256': payloadHash,
-    'x-amz-date': amzDate,
-    'x-amz-security-token': creds.sessionToken,
-    ...Object.fromEntries(Object.entries(extraHeaders).map(([k, v]) => [k.toLowerCase(), v])),
-  };
-  const signedNames = Object.keys(headers).sort();
-  const canonicalHeaders = signedNames.map(h => `${h}:${String(headers[h]).trim()}\n`).join('');
-  const signedHeaders = signedNames.join(';');
+  /* Signed INSIDE the retry loop, not once above it.
+     A signature is stamped with the moment it was made, and R2 rejects anything more than a few
+     minutes adrift with `RequestTimeTooSkewed` — a 403, indistinguishable at a glance from a
+     credentials problem. Re-using one timestamp across retries meant a large upload that failed
+     slowly was retried with a stale stamp and refused for a reason that had nothing to do with
+     the retry. Each attempt now carries its own. */
+  let lastErr;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, '');
+    const dateStamp = amzDate.slice(0, 8);
 
-  const canonical = [method, canonicalUri, '', canonicalHeaders, signedHeaders, payloadHash].join('\n');
-  const scope = `${dateStamp}/auto/s3/aws4_request`;
-  const toSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256hex(Buffer.from(canonical))].join('\n');
-  const kDate = hmac(`AWS4${creds.secretAccessKey}`, dateStamp);
-  const signature = hmac(hmac(hmac(hmac(kDate, 'auto'), 's3'), 'aws4_request'), toSign).toString('hex');
+    // Lowercase keys throughout, so the canonical form is a plain sort of this object rather than
+    // a case-insensitive lookup back into it. SigV4 fails opaquely (403) when the signed list and
+    // the sent headers disagree by so much as capitalisation.
+    const headers = {
+      host,
+      'x-amz-content-sha256': payloadHash,
+      'x-amz-date': amzDate,
+      'x-amz-security-token': creds.sessionToken,
+      ...Object.fromEntries(Object.entries(extraHeaders).map(([k, v]) => [k.toLowerCase(), v])),
+    };
+    const signedNames = Object.keys(headers).sort();
+    const canonicalHeaders = signedNames.map(h => `${h}:${String(headers[h]).trim()}\n`).join('');
+    const signedHeaders = signedNames.join(';');
 
-  headers.Authorization =
-    `AWS4-HMAC-SHA256 Credential=${creds.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+    const canonical = [method, canonicalUri, '', canonicalHeaders, signedHeaders, payloadHash].join('\n');
+    const scope = `${dateStamp}/auto/s3/aws4_request`;
+    const toSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256hex(Buffer.from(canonical))].join('\n');
+    const kDate = hmac(`AWS4${creds.secretAccessKey}`, dateStamp);
+    const signature = hmac(hmac(hmac(hmac(kDate, 'auto'), 's3'), 'aws4_request'), toSign).toString('hex');
 
-  return fetch(`https://${host}${canonicalUri}`, { method, headers, body: body ?? undefined });
+    headers.Authorization =
+      `AWS4-HMAC-SHA256 Credential=${creds.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+    try {
+      return await fetch(`https://${host}${canonicalUri}`, { method, headers, body: body ?? undefined });
+    } catch (e) {
+      lastErr = e;
+      if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 1500));
+    }
+  }
+  throw lastErr;
 }
 
 /* ── the work ─────────────────────────────────────────────────────────────── */
+
+/* Must match parseGatedKey in workers/cdn-gate/src/authz.ts — the Worker restates this shape by
+   hand because it is a separate deployment, so the two are checked against each other here. */
+const GATED_KEY_SHAPE =
+  /^(public|guest|client|internal)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/.+/i;
 
 const log = (...a) => console.log(...a);
 const plan = { skip: 0, copy: 0, repoint: 0, del: 0, missing: 0, failed: 0 };
@@ -172,21 +225,32 @@ async function main() {
   log(`  gated         ${GATED_BUCKET}  ${GATED_DOMAIN}`);
   log(`  mode          ${EXECUTE ? 'EXECUTE' : 'DRY RUN — nothing will change'}${DELETE_SOURCE ? ' + DELETE SOURCE' : ''}\n`);
 
-  /* Step 0 — the legacy `public` rows.
-     Every asset written before 2026-07-31 carries perm='public' because the pipeline hardcoded it,
-     not because anyone decided it should be world-readable. Reclassifying them is what makes the
-     re-key meaningful; without it the overwhelming majority of objects stay on the public domain.
-     Separate flag, because it changes who can SEE things and not merely where bytes live. */
+  /* Step 0 — raise the floor to `client`: readable by members of the owning client and above.
+     Assets written before 2026-07-31 carry perm='public' because the pipeline hardcoded it, not
+     because anyone decided they should be world-readable, and without this the overwhelming
+     majority of objects stay on the public domain and the re-key means little.
+
+     NARROWING ONLY, and both halves of that matter. `public` and `guest` are below the floor and
+     are raised to it; `client` is already there; `internal` is ABOVE it and is left alone, because
+     a sweep that loosened an asset someone had deliberately locked down would be the one mistake
+     this whole exercise exists to prevent.
+
+     Separate flag, because it changes who can SEE things rather than merely where bytes live —
+     and it is never passed by the scheduled reconciler. */
+  const BELOW_FLOOR = ['public', 'guest'];
   if (RECLASSIFY) {
-    const legacy = await sbGet('/assets?select=id&perm=eq.public');
-    log(`  reclassify    ${legacy.length} row(s) perm public -> client`);
-    if (EXECUTE && legacy.length) {
-      const res = await fetch(`${REST}/assets?perm=eq.public`, {
+    const filter = `perm=in.(${BELOW_FLOOR.join(',')})`;
+    const below = await sbGet(`/assets?select=id,perm&${filter}`);
+    const byPerm = BELOW_FLOOR
+      .map(p => `${below.filter(r => r.perm === p).length} ${p}`).join(' + ');
+    log(`  raise to client   ${below.length} row(s) (${byPerm}) -> client`);
+    if (EXECUTE && below.length) {
+      const res = await retryFetch(`${REST}/assets?${filter}`, {
         method: 'PATCH', headers: { ...sbHeaders, Prefer: 'return=minimal' },
         body: JSON.stringify({ perm: 'client' }),
       });
-      if (!res.ok) throw new Error(`reclassify failed: ${res.status} ${await res.text()}`);
-      log('                done\n');
+      if (!res.ok) throw new Error(`raise-to-client failed: ${res.status} ${await res.text()}`);
+      log('                    done\n');
     } else log('');
   }
 
@@ -200,14 +264,27 @@ async function main() {
      nine moves — a preview that does not resemble the run it is previewing is worse than none.
      Apply it in memory so the numbers shown are the numbers you would get. */
   if (RECLASSIFY && !EXECUTE) {
-    for (const a of assets) if (a.perm === 'public') a.perm = 'client';
+    for (const a of assets) if (BELOW_FLOOR.includes(a.perm)) a.perm = 'client';
   }
   log(`  ${assets.length} asset row(s)\n`);
 
-  const creds = {
-    public: await tempCredentials(env.R2_BUCKET),
-    gated: await tempCredentials(GATED_BUCKET),
-  };
+  /* Credentials expire after an hour, and a full production re-key is ~1000 objects including
+     multi-hundred-megabyte video. Minting once at the start meant a long run died partway through
+     with 403s that look like a permissions fault rather than an expiry — and while the script is
+     resumable, that is a bad half hour for whoever is watching it.
+     Re-minted well inside the window, before each copy. */
+  let creds = { public: await tempCredentials(env.R2_BUCKET), gated: await tempCredentials(GATED_BUCKET), mintedAt: Date.now() };
+  const CRED_REFRESH_MS = 45 * 60 * 1000;   // TTL is 60 min; refresh with a quarter of it to spare
+  async function freshCreds() {
+    if (Date.now() - creds.mintedAt < CRED_REFRESH_MS) return creds;
+    creds = {
+      public: await tempCredentials(env.R2_BUCKET),
+      gated: await tempCredentials(GATED_BUCKET),
+      mintedAt: Date.now(),
+    };
+    log('  ⟳  storage credentials refreshed');
+    return creds;
+  }
   const bucketFor = tier => (tier === 'public' ? env.R2_BUCKET : GATED_BUCKET);
   const domainFor = tier => (tier === 'public' ? env.R2_PUBLIC_DOMAIN : GATED_DOMAIN);
 
@@ -234,8 +311,25 @@ async function main() {
          next run, where a wrong key is a re-upload rather than a lost file. */
       const currentTier = source.bucket === env.R2_BUCKET ? 'public' : 'gated';
       const bare = source.key.replace(/^(public|guest|client|internal)\//, '');
+
+      /* The gated key must be `{level}/{client_id}/…` — the Worker reads the client out of the
+         second segment to decide tenant access, without a lookup. Objects from before the
+         per-client prefix carry keys like `thumbnails/{stable}/{child}.webp` with no client at
+         all, and simply prefixing the level yields `client/thumbnails/…`, which the Worker cannot
+         parse and refuses with a 404. It fails closed, which is right, but the file is then
+         unreachable. So the client id is inserted when the key lacks it. */
+      const withClient = bare.startsWith(`${a.client_id}/`) ? bare : `${a.client_id}/${bare}`;
       const targetTier = tierFor(level);
-      const targetKey = targetTier === 'public' ? bare : `${level}/${bare}`;
+      const targetKey = targetTier === 'public' ? bare : `${level}/${withClient}`;
+
+      /* Refuse to write a key the gate cannot serve. This is the assertion that should have
+         existed before a single byte moved: it is cheap, it is exact, and its absence let 9
+         production objects land at unreachable addresses before anyone noticed. */
+      if (targetTier === 'gated' && !GATED_KEY_SHAPE.test(targetKey)) {
+        plan.failed++;
+        log(`  ✕  ${a.id} ${column}: refusing unservable key ${targetKey}`);
+        continue;
+      }
 
       if (currentTier === targetTier && source.key === targetKey) { plan.skip++; continue; }
 
@@ -244,7 +338,7 @@ async function main() {
       log(`     ${' '.repeat(9)}-> ${target.tier}:${target.key}`);
 
       if (EXECUTE) {
-        const moved = await copyObject(creds, source, { bucket: bucketFor(target.tier), key: target.key });
+        const moved = await copyObject(await freshCreds(), source, { bucket: bucketFor(target.tier), key: target.key });
         if (moved === 'missing') { plan.missing++; continue; }
         if (moved === 'failed') { plan.failed++; continue; }
         plan.copy++;
@@ -257,7 +351,7 @@ async function main() {
     }
 
     if (EXECUTE && Object.keys(patch).length) {
-      const res = await fetch(`${REST}/assets?id=eq.${a.id}`, {
+      const res = await retryFetch(`${REST}/assets?id=eq.${a.id}`, {
         method: 'PATCH', headers: { ...sbHeaders, Prefer: 'return=minimal' }, body: JSON.stringify(patch),
       });
       if (!res.ok) { plan.failed++; log(`  ✕  ${a.id}: DB update failed ${res.status} ${await res.text()}`); continue; }
@@ -281,7 +375,8 @@ async function main() {
         if (!src.key) continue;
         log(`  ${EXECUTE ? '✕' : '·'}  delete ${src.bucket}:${src.key}`);
         if (EXECUTE) {
-          const res = await s3(creds[src.bucket === env.R2_BUCKET ? 'public' : 'gated'], src.bucket, 'DELETE', src.key);
+          const c = await freshCreds();
+          const res = await s3(c[src.bucket === env.R2_BUCKET ? 'public' : 'gated'], src.bucket, 'DELETE', src.key);
           if (res.ok || res.status === 404) plan.del++; else plan.failed++;
         } else plan.del++;
       }
@@ -304,8 +399,18 @@ async function copyObject(creds, source, target) {
   const body = Buffer.from(await got.arrayBuffer());
   const contentType = got.headers.get('content-type') ?? 'application/octet-stream';
 
+  /* `x-amz-meta-sha256` is how the pipeline recognises an object it has already uploaded: before
+     writing, it reads this header back and skips when the hash matches the local file. An earlier
+     version of this copy did not carry it, so every moved object looked brand new — the first
+     pipeline run after the staging re-key re-uploaded all 16 files instead of skipping them. On
+     production that is the entire library, including a 380 MB video, for nothing.
+
+     Set from the bytes actually copied rather than forwarded from the source, so this also repairs
+     an object whose metadata was missing or wrong. */
+  const bodyHash = sha256hex(body);
   const put = await s3(to, target.bucket, 'PUT', target.key, body, {
     'content-type': contentType,
+    'x-amz-meta-sha256': bodyHash,
     // Gated bytes are only ever served through the Worker, which sets its own Cache-Control;
     // this is what a direct read would see, and `private` is the honest value for them.
     'cache-control': target.bucket === env.R2_BUCKET
@@ -313,13 +418,13 @@ async function copyObject(creds, source, target) {
       : 'private, max-age=31536000, immutable',
   });
   if (!put.ok) { log(`     PUT failed ${put.status} ${await put.text()}`); return 'failed'; }
-  return sha256hex(body);
+  return bodyHash;
 }
 
 async function sbGet(query) {
   const out = [];
   for (let offset = 0; ; offset += 1000) {
-    const res = await fetch(`${REST}${query}${query.includes('?') ? '&' : '?'}limit=1000&offset=${offset}`,
+    const res = await retryFetch(`${REST}${query}${query.includes('?') ? '&' : '?'}limit=1000&offset=${offset}`,
       { headers: sbHeaders });
     if (!res.ok) throw new Error(`${query}: ${res.status} ${await res.text()}`);
     const page = await res.json();
