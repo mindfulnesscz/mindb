@@ -548,25 +548,54 @@ videos have no thumbnails today. Adding video extensions there does not produce 
 produces an error per video on every run. Stream generates the frame remotely; the pipeline stores
 a URL rather than generating a file.
 
-### Does `requireSignedURLs` cover thumbnails? — docs say probably, not certainly
+### Does `requireSignedURLs` cover thumbnails? — YES. Tested 2026-08-02.
 
-This is the one that could undermine Part A for video, so it gets a straight answer about what is
-and is not known.
+This was the one that could have undermined Part A for video. The docs disagreed with themselves:
+the **thumbnails** page said *"If signed URLs are required, you must use a signed URL instead of
+video UIDs"*, while **securing-your-stream** enumerated what is protected — manifests, the iframe
+player, MP4 downloads — and did not mention thumbnails at all. Not good enough to bet a client's
+confidentiality on, so it was measured rather than assumed.
 
-- The **thumbnails** page says: *"If signed URLs are required, you must use a signed URL instead of
-  video UIDs."* That implies thumbnails ARE covered, and that the mechanism is the same one used
-  everywhere else — **the token replaces the video UID in the path**, e.g.
-  `customer-<CODE>.cloudflarestream.com/<TOKEN>/thumbnails/thumbnail.jpg`.
-- The **securing-your-stream** page enumerates what `requireSignedURLs` protects — manifests, the
-  iframe player, MP4 downloads — and **does not mention thumbnails at all**.
+**Method.** A throwaway video was uploaded to the production Stream account, `requireSignedURLs`
+was set to `true`, and every delivery endpoint was fetched **unsigned**. Then the same endpoints
+were fetched on a video with the flag `false` (the pre-existing `Top Coating.mp4`) as a control,
+to prove the URLs were well-formed and that a 401 meant the flag and not a typo. Then a token was
+minted and the endpoints re-fetched signed. The probe video was deleted afterwards; the account is
+back to its one pre-existing video.
 
-Two pages, one implying coverage and one silent. That is not good enough to bet a client's
-confidentiality on, so the empirical test stands and must happen before integration code:
+| endpoint | unsigned, flag ON | unsigned, flag OFF (control) | signed |
+|---|---|---|---|
+| `thumbnails/thumbnail.jpg` | **401** | 200 · 1651 B JPEG | **200 · 13826 B** |
+| `thumbnails/thumbnail.gif` | **401** | 200 · 96808 B GIF | **200 · 2.7 MB** |
+| `thumbnails/thumbnail.jpg?time=2s&height=600` | **401** | — | — |
+| `manifest/video.m3u8` | **401** | 200 · 1633 B | **200 · 987 B** |
+| `downloads/default.mp4` | **401** | — | — |
+| `iframe` | **401** | — | — |
 
-> Upload one throwaway video, set `requireSignedURLs: true`, then fetch
-> `/<uid>/thumbnails/thumbnail.jpg` and `/thumbnails/thumbnail.gif` **unsigned**. If either returns
-> a frame, gated videos leak their contents as stills and Stream thumbnails cannot be used for
-> anything above `public`.
+**Conclusion: thumbnails are protected exactly like playback.** Stills, animated previews, and
+parameterised variants all 401 without a token. Gated videos do not leak preview frames, and
+Stream thumbnails are safe to use at every access level. Part B proceeds as designed.
+
+**Two mechanics worth writing down, both learned the hard way:**
+
+1. **`requireSignedURLs` does NOT take effect as an upload form field.** Passing it in the
+   multipart POST that creates the video is silently ignored — the video comes back
+   `requireSignedURLs: false`. It must be set by a **separate `POST /stream/{uid}`** with a JSON
+   body afterwards. So `stream-upload` cannot treat "uploaded" as "protected": it has to set the
+   flag as its own step and **verify the response says `true`** before recording the `stream_uid`.
+   A video that is live but unflagged is exactly the leak this test was checking for.
+2. **The token replaces the UID in the path** — `customer-<CODE>.cloudflarestream.com/<TOKEN>/
+   thumbnails/thumbnail.jpg`, not a query parameter. The same token opens playback, stills and
+   animated previews, so one mint serves a whole card. Tokens are ~581 characters, which matters
+   for a grid: a hundred thumbnails means a hundred long URLs, so mint per-view and cache, do not
+   mint per-`<img>`. `POST /stream/{uid}/token` with an `exp` mints one without a signing key.
+
+**Copying from a URL requires an unauthenticated, range-capable source.** `POST /stream/copy`
+failed with *"Performed a HTTP HEAD and HTTP GET range request, could not determine the size of
+the file"* against a source that would not serve ranges. Our gated R2 objects are behind the
+Worker and reject anonymous requests, which is the whole point of Part A — so the plan below
+(mint a short-lived **signed R2 URL** for Stream to pull from, never hand it a gated URL) is the
+right shape, and the signed URL must support `HEAD` and `Range`. Plain S3 presigned GETs do.
 
 ### Thumbnail parameters, confirmed from the docs
 
@@ -607,8 +636,19 @@ never seen by a user.
 - [ ] Edge function `supabase/functions/stream-upload/`, modelled on `r2-grant`: same auth
       chain, same 503-when-unprovisioned. Input `client_id`, asset identity. Output
       `stream_uid` + status. Secrets into `.env` and `.env.example`.
-- [ ] Mint the signed R2 ingestion URL inside that function; never hand Stream a gated URL.
-- [ ] Set `requireSignedURLs` on any video whose `effective_level != 'public'`.
+- [ ] Mint the signed R2 ingestion URL inside that function; never hand Stream a gated URL. It
+      **must answer `HEAD` and `Range`** — `POST /stream/copy` probes with both and fails with
+      *"could not determine the size of the file"* otherwise. An S3 presigned GET does; the
+      Worker-gated URL does not, which is why it is presigned and not just fetched.
+- [ ] Set `requireSignedURLs` on any video whose `effective_level != 'public'` — as **its own
+      `POST /stream/{uid}` after upload, and assert the response says `true`**. The field is
+      silently ignored when passed in the upload form (measured). Treating "uploaded" as
+      "protected" is precisely the leak this was tested for, so it fails loudly instead.
+- [ ] **Reconcile the flag when the level changes.** This is the R2 re-keying problem again: the
+      level is baked into the delivery object, so `perm`/`status` edits must propagate. Cheaper
+      here — one POST, no bytes move — and `cdn_move_queue` already fires on exactly this
+      condition, so `cdn-reconcile` should flip `requireSignedURLs` alongside moving the key.
+      Without it, a video demoted `public` → `client` keeps serving to anyone holding the UID.
 - [ ] `requestStreamUpload` in `desktop/src/services/supabase/`, mirroring `r2Grant.ts`
       including its gateway-vs-refusal error split, so a dead edge runtime reads as unreachable
       rather than misconfigured.
@@ -636,9 +676,10 @@ never seen by a user.
 - [ ] Build the still-thumbnail URL from `stream_uid` wherever `thumbnailUrl` is used today, so
       video cards stop being blank. Keep the `stream_status !== 'ready'` fallback — reuse the
       existing shimmer.
-- [ ] **Sign thumbnail URLs too.** If `requireSignedURLs` does not cover the thumbnail
-      endpoints, gated videos leak preview frames and the whole of Part A is undermined for
-      video. Verify explicitly; do not assume.
+- [ ] **Sign thumbnail URLs too — required, now confirmed.** Thumbnails 401 without a token
+      (measured 2026-08-02, table above), so a gated video's card is blank unless its stills and
+      previews carry one. The token replaces the UID in the path. **One token per view, not per
+      `<img>`:** they are ~581 characters and a grid holds a hundred cards.
 
 ## Phase 9 — hover preview (~half a day)
 
