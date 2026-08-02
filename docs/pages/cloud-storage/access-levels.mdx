@@ -1,13 +1,15 @@
 # Access levels and gated delivery
 
-Two questions look like one and are not:
+Two questions look like one, and treating them as one is what caused the problem this system exists
+to fix:
 
-- **Discovery** — who can see that an asset exists, and get its URL. Postgres row-level security.
+- **Discovery** — who can see that an asset exists, and obtain its URL. Postgres row-level security.
 - **Delivery** — who can fetch the bytes at that URL. A Cloudflare Worker in front of R2.
 
-Until 2026-07-31 only the first was enforced. R2 objects sat on a public bucket domain, so a URL
-was a bearer token: `perm` decided who could *find* a file and nothing decided who could *open*
-one. This page describes both halves.
+Until 2026-07-31 only the first was enforced. R2 objects sat on a public bucket domain, so a URL was
+a bearer token: `perm` decided who could *find* a file, and nothing decided who could *open* one.
+
+This page describes both halves, and the machinery that keeps them agreeing.
 
 ## The four levels
 
@@ -18,26 +20,25 @@ one. This page describes both halves.
 | `client` | members of that client, plus staff | the Worker |
 | `internal` | staff only — `editor`, `admin`, `super_admin` | the Worker |
 
-`client` is the default the pipeline creates assets at. Anything world-readable is promoted
-deliberately, one asset at a time.
+`client` is what the pipeline creates assets at. Anything world-readable is promoted deliberately,
+one asset at a time.
 
-## Effective level: `perm` and `status` both gate
+## Effective level: `perm` AND `status`
 
-`perm` says who may see an asset; `status` says where it is in its lifecycle. They are independent
-axes and access needs both:
+`perm` says who may see an asset; `status` says where it is in its lifecycle. Both gate:
 
 ```text
 effective_level = (status in ('approved','published')) ? perm : 'internal'
 ```
 
-So an asset marked `public` while still in `draft` serves to staff only. That is what stops
-unapproved work being published by a stray dropdown, and it is why an asset can be visible to its
-author and invisible to everyone else without anyone having touched `perm`.
+An asset marked `public` while still in `draft` is staff-only. That is what stops unapproved work
+being published by a stray dropdown — and when this shipped it immediately closed **245 production
+assets** that were `perm=public` with an unreleased status, and therefore world-readable.
 
 `assets.effective_level` is a **stored generated column**, so Postgres and the Worker cannot
-disagree about it. It is not writable — set `perm` or `status` and it follows.
+disagree about it. It is not writable: set `perm` or `status` and it follows.
 
-## Two buckets, and why
+## Two buckets
 
 | Tier | Bucket | Hostname | Public access |
 |---|---|---|---|
@@ -45,88 +46,148 @@ disagree about it. It is not writable — set `perm` or `status` and it follows.
 | gated | `dc-hub-gated` | `files.disruptcollective.com` | **none** — the Worker's binding is its only door |
 
 Two buckets rather than one bucket with a path exclusion, so the failure mode is **closed**: if the
-Worker route breaks or its binding is missing, gated objects 404. With a single bucket behind a
-public custom domain, the same mistake publishes the whole library.
+Worker or its route breaks, gated objects 404. With a single bucket behind a public custom domain,
+the same mistake publishes the whole library.
 
-## The key is the authorization
+The gated bucket has no `r2.dev` URL and no custom domain of its own. Attaching one would undo the
+tier in a single click — that is the one setting to never change.
+
+## The key IS the authorization
 
 ```text
 files.disruptcollective.com/{level}/{client_id}/thumbnails/{stable_id}/{child_id}.webp
                             ^^^^^^^ ^^^^^^^^^^^
 ```
 
-The Worker reads the level and client straight out of the key and decides from the signed cookie
-alone — no database call, no KV read. A 50-tile gallery costs 50 signature verifications rather
-than 50 lookups, which is the difference between a tool that browses and one that does not.
+The Worker reads the level and the client straight out of the key and decides from the signed
+cookie alone — no database call, no KV read, nothing awaited but the R2 body. A 50-tile gallery
+costs 50 signature verifications rather than 50 lookups, which is the difference between a tool
+that browses and one that does not.
 
-The price is that **changing an asset's level moves its bytes**. That is bought deliberately, and
-it is the thing to remember when reasoning about anything in this area.
+Two consequences, and both are load-bearing:
+
+- **Changing a level moves the bytes.** That is bought deliberately. See the next section.
+- **A key the Worker cannot parse is a 404**, not a fallback. Legacy objects with no client segment
+  had to have one inserted during the rollout for exactly this reason. Anything writing a gated key
+  validates it against the Worker's shape first.
 
 Public keys are unchanged from what the pipeline has always written, so an asset that is genuinely
-public keeps the address it already had.
+public keeps the address it already had and never has to move.
+
+## Keeping keys and levels in step
+
+This is the part that is easy to underestimate. Changing `perm` or `status` updates a row instantly
+— discovery is correct immediately — but the object still sits at the old level's key until
+something moves it.
+
+```text
+perm/status change            portal edit · gallery cascade · pipeline · hand-run SQL
+        │
+        ▼  trigger on public.assets  (fires only when effective_level actually changes)
+  cdn_move_queue              durable, needs no credentials
+        │
+        ▼  drained by whoever is already authenticated
+  cdn-reconcile               edge function, beside the data
+        │
+        ▼
+  bytes moved to the key the level requires
+```
+
+**A trigger, not a call from the portal**, because the portal is not the only writer — and the two
+it cannot see are the ones most easily forgotten: the gallery-inheritance cascade rewrites
+children's `perm` with no portal involved, and the pipeline flips `status` when a file leaves or
+returns to disk.
+
+**A queue, not `pg_net`**, because having Postgres call the function needs its URL and a service
+token stored where the database can read them — another secret at rest, for something entirely
+routine. A queue needs no credentials, and it is durable where fire-and-forget is not.
+
+**Drained by its callers**: the portal after an edit, the desktop at the end of a run. Both are
+best-effort and neither can fail — a failed call delays a move rather than losing it, because the
+row stays queued.
+
+An empty `cdn_move_queue` means bytes and levels agree. To check, or to drain by hand:
+
+```sql
+select count(*) from public.cdn_move_queue;
+```
+
+There is also a manual escape hatch for bulk work — a fresh environment, a one-off re-key:
+
+```bash
+node scripts/rekey-gated-objects.mjs production            # dry run, changes nothing
+node scripts/rekey-gated-objects.mjs production --execute
+```
+
+It is idempotent and copies before it deletes. `--delete-source` is a separate, later pass and is
+the only irreversible step.
+
+> **There was briefly a GitHub Actions cron doing this.** It was removed: a core correctness
+> property should not depend on a CI provider, a checked-out branch, and secrets pasted into a
+> settings page — and it ran the script from whatever was on `main`, so a fix reached production
+> only when someone merged. Nothing in the running system reads from git.
 
 ## The cookie
 
-Sign-in mints a short-lived signed cookie (`dch_cdn`, ~30 min) scoped to `.disruptcollective.com`,
-so the portal's `<img>` requests carry it to the CDN subdomain automatically.
+Signing in mints a short-lived signed cookie (`dch_cdn`, ~30 min) scoped to
+`.disruptcollective.com`, so the portal's `<img>` requests carry it to the CDN subdomain
+automatically. The portal renews it at three quarters of its life.
 
 It is minted by the **Worker**, not by a Supabase edge function, for a reason worth knowing: a
 cookie's `Domain` must be a parent of the host that *sets* it, and a response from `*.supabase.co`
 cannot set one for `.disruptcollective.com`.
 
 URLs are permanent; the **session** expires, not the link. A leaked URL keeps working and simply
-returns 403 to anyone not signed in. Expiring URLs were considered and rejected — they would make
+returns 403 to anyone not signed in. Presigned URLs were considered and rejected — they would make
 every stored `thumbnail_url` a ticking clock.
+
+Credentials are sent **only** to the gated host. The public buckets answer with
+`Access-Control-Allow-Origin: *`, and a browser rejects a wildcard origin on a credentialed
+request — so sending them everywhere silently breaks every download, the only symptom being that
+the save dialog becomes a new tab.
+
+## Galleries and variants
+
+A **gallery** is one deliverable stored as many rows, so its images inherit the parent's level —
+enforced by a database trigger, not by whichever code path happens to write. Setting a gallery
+child's level individually has no effect; the portal shows it read-only. To show part of a shoot
+more widely, split it into its own gallery folder.
+
+A **variant set** is different: separating a rendition's visibility is a real if rare need (an
+internal print master beside a public web version), so the portal offers a checkbox, on by default.
 
 ## What this does not do
 
 **It does not un-publish anything.** A URL that has already been served stays fetchable at that
 address forever by anyone who kept it. Re-keying gives objects new addresses and limits future
-exposure; it cannot undo past exposure. Everything published before 2026-07-31 should be treated as
-permanently public.
+exposure; it cannot undo past exposure. Everything published before 2026-07-31 — **1006 distinct
+production objects** — should be treated as permanently public.
 
 **Gated content does not load on Vercel preview deployments.** A cookie scoped to
 `.disruptcollective.com` is never sent to `*.vercel.app`, and `SameSite=None` would walk into
 third-party-cookie blocking. Test gated delivery on `staging.hub.disruptcollective.com`.
 
-## Keeping keys and levels in step
-
-Changing `perm` or `status` in the portal updates the row immediately — discovery is correct at
-once — but the bytes still sit under the old level's key until they are moved. Two things close
-that gap:
-
-- the **pipeline** writes each asset at its current level on every run;
-- a **scheduled reconciler** (`.github/workflows/reconcile-cdn-keys.yml`, every ~15 minutes) moves
-  anything that has drifted, using the same key rules.
-
-Both compute the target from `packages/domain/src/assetStorage.ts`. If you add a third caller, use
-that module rather than restating the rules — the Worker's parser already restates them once out of
-necessity, and that is one copy more than anybody wants.
-
-To reconcile by hand:
-
-```bash
-node scripts/rekey-gated-objects.mjs staging              # dry run, changes nothing
-node scripts/rekey-gated-objects.mjs staging --execute
-```
-
-## Galleries and variants
-
-A gallery is one deliverable stored as many rows, so **its images inherit the parent's level** —
-enforced by a database trigger, not by whichever code path happened to write. Setting a gallery
-child's level individually has no effect; to show part of a shoot more widely, split it into its own
-gallery folder.
-
-A **variant set** is different: separating a rendition's visibility is a real if rare need (an
-internal print master beside a public web version), so the portal offers a checkbox, on by default.
+**The move is not instantaneous.** It is seconds, not milliseconds, and only when a caller drains
+the queue. Discovery is immediate regardless, so the window applies only to someone already holding
+the URL — the leaked-URL case that re-keying cannot address anyway.
 
 ## Where to look
 
 | | |
 |---|---|
-| levels, keys, URLs | `packages/domain/src/assetStorage.ts` |
-| the Worker | `workers/cdn-gate/` — see its README for the performance contract |
-| RLS policies | `supabase/migrations/20260731120000_gated_delivery_levels.sql` |
+| levels, keys, URLs — the shared definition | `packages/domain/src/assetStorage.ts` |
+| the Worker, and its performance contract | `workers/cdn-gate/` + its README |
+| RLS policies and `effective_level` | `supabase/migrations/20260731120000_gated_delivery_levels.sql` |
 | gallery inheritance | `supabase/migrations/20260731130000_gallery_perm_inheritance.sql` |
+| the move queue and its trigger | `supabase/migrations/20260802090000_cdn_move_queue.sql` |
+| the reconciler | `supabase/functions/cdn-reconcile/` |
+| bulk re-key | `scripts/rekey-gated-objects.mjs` |
+| rolling out a new environment | [Gated delivery rollout](/operations/gated-delivery-rollout) |
 | what is exposed today | `supabase/audit/perm_exposure.sql` |
-| families that disagree | `supabase/audit/perm_family_mismatch.sql` |
+| families whose levels disagree | `supabase/audit/perm_family_mismatch.sql` |
+
+Four programs must agree on the key shape and none can import the others: the pipeline writes keys,
+the reconciler and the re-key script move them, and the Worker parses them back. Three share
+`assetStorage.ts`. The Worker restates the shape by hand because it is a separate deployment — so
+if you change the key format, `workers/cdn-gate/src/authz.ts` changes with it, and
+`assetStorage.test.ts` spells the shape out literally to make that visible.
