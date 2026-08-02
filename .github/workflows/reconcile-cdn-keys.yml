@@ -53,8 +53,8 @@ jobs:
         environment: ${{ github.event_name == 'schedule' && fromJSON('["staging","production"]') || fromJSON(format('["{0}"]', github.event.inputs.environment)) }}
     environment: ${{ matrix.environment }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           # 24 for type stripping on import: the script imports assetStorage.ts directly rather
           # than restating the key rules, and that only works from Node 22.6 onwards.
