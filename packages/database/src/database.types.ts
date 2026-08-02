@@ -346,6 +346,45 @@ export type Database = {
           },
         ]
       }
+      cdn_move_queue: {
+        Row: {
+          asset_id: string
+          attempts: number
+          last_error: string | null
+          queued_at: string
+          was_level: string | null
+        }
+        Insert: {
+          asset_id: string
+          attempts?: number
+          last_error?: string | null
+          queued_at?: string
+          was_level?: string | null
+        }
+        Update: {
+          asset_id?: string
+          attempts?: number
+          last_error?: string | null
+          queued_at?: string
+          was_level?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cdn_move_queue_asset_id_fkey"
+            columns: ["asset_id"]
+            isOneToOne: true
+            referencedRelation: "asset_stats"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cdn_move_queue_asset_id_fkey"
+            columns: ["asset_id"]
+            isOneToOne: true
+            referencedRelation: "assets"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       client_members: {
         Row: {
           client_id: string
