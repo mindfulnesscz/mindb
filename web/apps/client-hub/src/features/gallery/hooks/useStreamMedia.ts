@@ -13,9 +13,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Asset } from '@dc-hub/asset-library'
 import {
-  isStreamReady, streamStillUrl, streamAnimatedUrl, streamIframeUrl, type StreamRef,
+  isStreamReady, streamStillUrl, streamAnimatedUrl, streamIframeUrl,
+  effectiveLevel, tierFor, type StreamRef,
 } from '@dc-hub/domain'
-import { ensureStreamTokens, cachedStreamToken, streamDomain } from '../../../services/streamTokens'
+import {
+  ensureStreamTokens, cachedStreamToken, streamDomain, freshStreamStatus,
+} from '../../../services/streamTokens'
+
+/* How often to re-ask while something is still encoding.
+ *
+ * Encodes run from seconds to minutes depending on length, so a one-shot check would leave a video
+ * showing "processing" until the next navigation. Only fires while a NOT-ready video is on screen
+ * — a library of finished videos polls nothing. */
+const ENCODE_POLL_MS = 15_000
 
 /** Everything a video asset can show. Null for anything that is not a ready video. */
 export interface StreamMedia {
@@ -50,26 +60,51 @@ export function useStreamMedia(assets: Pick<Asset, 'id' | 'streamUid' | 'streamS
     [assets],
   )
 
+  /* Whether anything on screen is still encoding, from the freshest answer available. Recomputed
+     on every nonce bump, so the poll below stops the moment the last video turns ready. */
+  const stillEncoding = assets.some(a =>
+    a.streamUid && !isStreamReady(freshStreamStatus(a.id) ?? a.streamStatus))
+
   useEffect(() => {
     if (!videoIds) return
     let alive = true
-    void ensureStreamTokens(videoIds.split(',')).then(() => {
-      // Bump even when nothing was minted: public videos need no token, and the resolver should
-      // still run once for them rather than waiting for an unrelated render.
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    const ask = () => ensureStreamTokens(videoIds.split(',')).then(() => {
+      // Bump even when nothing was minted or moved: public videos need no token, and the resolver
+      // should still run once for them rather than waiting for an unrelated render.
       if (alive) setTokenNonce(n => n + 1)
     })
-    return () => { alive = false }
-  }, [videoIds])
+
+    void ask()
+    /* The same call refreshes encoding state server-side, so the poll is the token request
+       repeated — not a second endpoint. It runs only while something is unfinished. */
+    if (stillEncoding) timer = setInterval(ask, ENCODE_POLL_MS)
+
+    return () => { alive = false; if (timer) clearInterval(timer) }
+  }, [videoIds, stillEncoding])
 
   return useMemo(() => {
     const domain = streamDomain()
-    return function resolve(asset: Pick<Asset, 'streamUid' | 'streamStatus'>): StreamMedia | null {
+    return function resolve(
+      asset: Pick<Asset, 'id' | 'streamUid' | 'streamStatus' | 'perm' | 'status'>,
+    ): StreamMedia | null {
       if (!asset.streamUid) return null
       /* Mid-encode, every URL built from the uid 404s. Returning null here is what keeps the
-         existing placeholder on screen instead of a broken image. */
-      if (!isStreamReady(asset.streamStatus)) return null
+         existing placeholder on screen instead of a broken image.
+
+         The override first: the row was fetched with whatever `stream_status` held at page load,
+         and an encode that finished since is only known to the last stream-token call. Reading the
+         row alone is what left both staging videos showing "processing" after they were ready. */
+      if (!isStreamReady(freshStreamStatus(asset.id) ?? asset.streamStatus)) return null
 
       const token = cachedStreamToken(asset.streamUid)
+      /* A gated video with no token in hand is treated as NOT AVAILABLE rather than rendered from
+         its bare uid. The bare-uid URL would 401, which looks like a dead video instead of a
+         missing permission — and for the player it would be a black rectangle with controls.
+         Better to hold the placeholder until the token arrives, which is a render away. */
+      if (tierFor(effectiveLevel(asset)) !== 'public' && !token) return null
+
       const ref: StreamRef = { uid: asset.streamUid, token }
       return {
         ref,
@@ -87,7 +122,9 @@ export function useStreamMedia(assets: Pick<Asset, 'id' | 'streamUid' | 'streamS
 }
 
 /** The same, for a single asset — the detail view has one video, not a grid. */
-export function useStreamMediaFor(asset: Pick<Asset, 'id' | 'streamUid' | 'streamStatus'> | null | undefined) {
+export function useStreamMediaFor(
+  asset: Pick<Asset, 'id' | 'streamUid' | 'streamStatus' | 'perm' | 'status'> | null | undefined,
+) {
   const list = useMemo(() => (asset ? [asset] : []), [asset])
   const resolve = useStreamMedia(list)
   return asset ? resolve(asset) : null
