@@ -19,6 +19,20 @@ The desktop uses fixed port 1420, docs uses 3001, and the web portal normally us
 | `staging` | `staging.hub.disruptcollective.com` (branch domain) | pushed to the **staging** Supabase project | rehearsal against hosted infra |
 | `main` | `hub.disruptcollective.com` (production) | pushed to **production**, approval-gated | what clients and editors use |
 
+Every deploy path follows git. Nothing publishes from a laptop:
+
+| Target | Deployed by |
+|---|---|
+| Portal | Vercel's git integration — `main` is production, `staging` is the branch domain |
+| Database migrations | `db.yml` on push to `main` / `staging` |
+| Supabase edge functions | `db.yml`, same push |
+| `cdn-gate` Worker | `worker.yml` on push to `main` / `staging` |
+
+The Worker was the last exception. `wrangler deploy` publishes whatever sits in the working
+directory of whoever runs it, so a deploy with an uncommitted edit puts code into production that
+exists in no commit — and "what is live?" stops being answerable from the repo. `worker.yml` closes
+that; running wrangler by hand is now an emergency tool, not the route.
+
 Flow — **`main` is a promotion-only branch**: every pull request targets `staging` (from `dev` or feature branches); nothing PRs to `main` directly. After verifying on the staging infrastructure, a human opens the `staging → main` PR and merges it — that merge IS the release decision. Desktop releases ride `v*` tags on the merged `main` commit (`release-desktop.yml`). The local stack is not bound to any branch — it always runs whatever you have checked out.
 
 Release ritual: bump the version on a branch (`npm run version:minor`, fill the changelog) → PR to `staging` → merge, test on staging → PR `staging → main` → merge → tag `vX.Y.Z` on the merge commit and push the tag.
