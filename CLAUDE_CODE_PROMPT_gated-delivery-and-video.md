@@ -642,29 +642,50 @@ gated object. The `stream-upload` function must mint a short-lived **signed R2 U
 to pull from. This is the one place where an expiring URL is correct: it is server-to-server,
 never seen by a user.
 
-## Phase 6 — plumbing (~1 day)
+## Phase 6 — plumbing (~1 day) — DONE 2026-08-03, commit 28e779b
 
-- [ ] Migration: add `stream_uid text` and `stream_status text` to `public.assets`, nullable.
+- [x] Migration: add `stream_uid text` and `stream_status text` to `public.assets`, nullable.
       No backfill shim, no dual path. Then `npm run db:types` and commit the regenerated types.
-- [ ] Edge function `supabase/functions/stream-upload/`, modelled on `r2-grant`: same auth
+- [x] Edge function `supabase/functions/stream-upload/`, modelled on `r2-grant`: same auth
       chain, same 503-when-unprovisioned. Input `client_id`, asset identity. Output
       `stream_uid` + status. Secrets into `.env` and `.env.example`.
 - [x] Mint the presigned R2 ingestion URL inside that function; never hand Stream a gated URL.
       It **must answer a range `GET`** — that is where Stream reads the size from. HEAD is
       attempted and may 403; R2 binds a presigned URL to one method (table above). Verified
       end to end against staging.
-- [ ] Set `requireSignedURLs` on any video whose `effective_level != 'public'` — as **its own
+- [x] Set `requireSignedURLs` on any video whose `effective_level != 'public'` — as **its own
       `POST /stream/{uid}` after upload, and assert the response says `true`**. The field is
       silently ignored when passed in the upload form (measured). Treating "uploaded" as
       "protected" is precisely the leak this was tested for, so it fails loudly instead.
-- [ ] **Reconcile the flag when the level changes.** This is the R2 re-keying problem again: the
+- [x] **Reconcile the flag when the level changes.** This is the R2 re-keying problem again: the
       level is baked into the delivery object, so `perm`/`status` edits must propagate. Cheaper
       here — one POST, no bytes move — and `cdn_move_queue` already fires on exactly this
       condition, so `cdn-reconcile` should flip `requireSignedURLs` alongside moving the key.
       Without it, a video demoted `public` → `client` keeps serving to anyone holding the UID.
-- [ ] `requestStreamUpload` in `desktop/src/services/supabase/`, mirroring `r2Grant.ts`
+- [x] `requestStreamUpload` in `desktop/src/services/supabase/`, mirroring `r2Grant.ts`
       including its gateway-vs-refusal error split, so a dead edge runtime reads as unreachable
       rather than misconfigured.
+
+**Found while building it — Stream has no environment separation.** Staging and production share
+one Cloudflare account (`db6804f8…`) and one `CF_STREAM_TOKEN`. R2 gets two buckets per
+environment; Stream gets nothing equivalent, so both environments' videos sit in one list and are
+indistinguishable by eye. Every video is therefore tagged `meta.project_ref` with the Supabase ref
+of the database that owns it — derived from `SUPABASE_URL`, never configured, so it cannot drift
+from the database it names. **Any future cleanup script must filter on it**; a naive "delete the
+staging videos" would otherwise take production's with them.
+
+**Manual step before this works:** `CF_STREAM_TOKEN` is a THIRD Cloudflare token (Stream:Edit) and
+is currently only in the local `scripts/environments/*.env`. It has to be set as a Supabase
+function secret on both projects:
+
+```
+supabase secrets set CF_STREAM_TOKEN=<value> --project-ref <staging-ref>
+supabase secrets set CF_STREAM_TOKEN=<value> --project-ref <production-ref>
+```
+
+Until it is set, `stream-upload` returns 503 (explicitly "not provisioned", never a silent skip),
+and `cdn-reconcile` keeps re-keying images normally — it only needs the token once videos exist,
+and refuses to mark a video reconciled it could not verify.
 
 ## Phase 7 — pipeline (~1 day)
 
