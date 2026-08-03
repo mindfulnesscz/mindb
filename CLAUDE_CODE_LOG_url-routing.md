@@ -24,7 +24,7 @@ npm run test:e2e                     # needs the local Supabase stack + dev serv
 |---|---|---|
 | 0 | Characterization tests for `GalleryView` | ✅ done |
 | 1 | URL state primitives (`filterUrl.ts`, `useFilterParams`) | ✅ done |
-| 2 | Filters in the URL | ⬜ not started |
+| 2 | Filters in the URL | ✅ done |
 | 3 | `/:slug/a/:assetId` detail route | ⬜ not started |
 | 4 | `focus` / `lb` params | ⬜ not started |
 | 5 | TanStack Query | ⬜ not started |
@@ -124,6 +124,52 @@ because the spec asks for `npm run check` green at every phase and it could not 
 - **History is asserted via `useNavigationType()`, not `window.history.length`.** `MemoryRouter`
   never touches `window.history`, so a length check in a jsdom test passes no matter what the hook
   does. Any future "does it push or replace?" test must use the navigation type.
+
+---
+
+## Phase 2 — filters in the URL ✅
+
+Three production edits, one new test file.
+
+- `GalleryView.tsx` — `useState<FilterState>` → `useFilterParams()`, one line. No prop signature
+  changed anywhere downstream, as the spec predicted.
+- `GalleryView.tsx` — the toolbar search is debounced at 250 ms (`SEARCH_DEBOUNCE_MS`).
+- `ClientPortalPage.tsx:228` — `replaceState` now keeps `window.location.search`.
+- `GalleryView.url.test.tsx` — 16 tests: cold load, interaction → URL, debounce, history.
+
+**Phase 0's 22 characterization tests pass unedited.** That is the acceptance criterion and it held
+with no adjustment at all.
+
+### The debounce, precisely
+
+Two effects, not one timer plus a ref:
+
+```ts
+const [searchDraft, setSearchDraft] = useState(filters.search)
+useEffect(() => { setSearchDraft(filters.search) }, [filters.search])   // adopt external changes
+useEffect(() => {                                                       // trailing edge
+  if (searchDraft === filters.search) return
+  const t = setTimeout(() => setFilters(f => ({ ...f, search: searchDraft })), 250)
+  return () => clearTimeout(t)
+}, [searchDraft, filters.search, setFilters])
+```
+
+The first effect is what makes Back, Clear and a cold load put text *into* the box; the second is
+what keeps the box from writing per keystroke. The equality guard stops a pointless navigate on
+mount. `setFilters` is stable (`useCallback` on `[navigate]`), so it is safe in a dep list —
+that was one of the stated reasons not to build the hook on `useSearchParams`.
+
+### Testing notes for whoever extends this
+
+- **`visited[]`** in `GalleryView.url.test.tsx` records every distinct URL the router has been at.
+  Use it to assert "this interaction produced ONE url", which a final-value check cannot distinguish
+  from "it produced five and the last one was right". That is how the debounce is actually pinned.
+- **`GalleryView.characterization.test.tsx` is not to be edited.** New behaviour goes in
+  `GalleryView.url.test.tsx` (or a new sibling). If a phase makes a characterization test fail, that
+  is the signal to stop, not to adjust the test.
+- Under `MemoryRouter`, clearing the last filter leaves `location.search === ''` — no stray `?`. The
+  spec's warning about `"?"` surviving in router state did not reproduce here, but the e2e specs
+  still assert `page.url()` because that is the string a client is actually given.
 
 ---
 

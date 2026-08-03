@@ -1,12 +1,17 @@
 /* Gallery view — the portal's main screen.
  *
- * Owns the data (useAssets, useTags) and the filter state; presentation lives in ./AssetCard,
- * ./FiltersRail and ./GalleryStates.
+ * Owns the data (useAssets, useTags); presentation lives in ./AssetCard, ./FiltersRail and
+ * ./GalleryStates.
+ *
+ * The filter state is NOT owned here — it lives in the query string, via useFilterParams. A filtered
+ * view is therefore an address: it can be sent to someone, it survives a reload and a magic-link
+ * round trip, and Back leaves the portal instead of doing nothing.
  */
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useRole } from '../../context/RoleContext'
-import { getDefaultFilters, type FilterState, type Asset } from '@dc-hub/asset-library'
+import { getDefaultFilters, type Asset } from '@dc-hub/asset-library'
+import { useFilterParams } from '../../hooks/useFilterParams'
 import { useAssets } from '../../hooks/useAssets'
 import { useTags, type TagsByDimension } from '../../hooks/useTags'
 import { fetchAsset } from '../../services/assetService'
@@ -18,9 +23,15 @@ import { useStreamMedia } from './hooks/useStreamMedia'
 import { STATUS_KEYS_STAFF, STATUS_KEYS_CLIENT } from './statusLabels'
 import { DEFAULT_DIMENSION_LABELS } from '@dc-hub/database'
 
+/** How long typing has to stop before the search reaches the URL. */
+const SEARCH_DEBOUNCE_MS = 250
+
 export default function GalleryView() {
   const { role, activeClient } = useRole()
-  const [filters, setFilters] = useState<FilterState>(getDefaultFilters())
+  /* Filters live in the query string, not in state: a filtered view is a place you can send someone,
+     and a reload or a magic-link round trip returns to it. Same [value, setter] shape as the
+     useState this replaces, including the updater form. */
+  const [filters, setFilters] = useFilterParams()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [focusSiblingId, setFocusSiblingId] = useState<string | null>(null)
   const [openLightboxOnFocus, setOpenLightboxOnFocus] = useState(false)
@@ -33,7 +44,26 @@ export default function GalleryView() {
 
   const clientId = activeClient?.id
 
-  // Stable empty filters — used only for the options pool, never changes → fetches once per client
+  /* ── The search box ───────────────────────────────────────────────────────────────────────────
+     Controlled by local state and pushed to the URL on the TRAILING EDGE, so typing writes one
+     history-replace per pause rather than one per keystroke. It is not only about history noise:
+     writing per keystroke re-parses the URL into a new FilterState mid-word, the input re-renders
+     from it, and the caret jumps. The draft is adopted back whenever the URL's search changes from
+     anywhere else — a cold load, Back, or Clear. */
+  const [searchDraft, setSearchDraft] = useState(filters.search)
+  useEffect(() => { setSearchDraft(filters.search) }, [filters.search])
+  useEffect(() => {
+    if (searchDraft === filters.search) return
+    const t = window.setTimeout(
+      () => setFilters(f => ({ ...f, search: searchDraft })),
+      SEARCH_DEBOUNCE_MS,
+    )
+    return () => window.clearTimeout(t)
+  }, [searchDraft, filters.search, setFilters])
+
+  /* Stable empty filters — the OPTION POOL, not a view, so it deliberately stays out of the URL.
+     Never changes → fetches once per client, and the rail keeps offering every tag even when a
+     filter is applied. */
   const stableFilters = useMemo(() => getDefaultFilters(), [])
   const { assets: optionPool } = useAssets(stableFilters, role, clientId)
 
@@ -172,8 +202,8 @@ export default function GalleryView() {
           <input
             type="search"
             placeholder="Search assets…"
-            value={filters.search}
-            onChange={e => setFilters(f => ({ ...f, search: e.target.value }))}
+            value={searchDraft}
+            onChange={e => setSearchDraft(e.target.value)}
             className="flex-1 text-sm font-sans border border-border rounded-sm px-3 py-1.5 bg-bg placeholder:text-text-subtle focus:outline-none focus:border-cosmos-black transition-colors"
           />
           <span className="text-[11px] font-sans text-text-muted whitespace-nowrap">
