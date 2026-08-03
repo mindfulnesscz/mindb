@@ -220,6 +220,7 @@ export type Database = {
           shortcode: string
           stable_id: string
           status: string
+          stream_duration: number | null
           stream_source_hash: string | null
           stream_status: string | null
           stream_uid: string | null
@@ -253,6 +254,7 @@ export type Database = {
           shortcode: string
           stable_id: string
           status?: string
+          stream_duration?: number | null
           stream_source_hash?: string | null
           stream_status?: string | null
           stream_uid?: string | null
@@ -286,6 +288,7 @@ export type Database = {
           shortcode?: string
           stable_id?: string
           status?: string
+          stream_duration?: number | null
           stream_source_hash?: string | null
           stream_status?: string | null
           stream_uid?: string | null

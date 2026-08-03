@@ -58,6 +58,7 @@ function toAsset(row: AssetRowWithStats): Asset {
     downloadUrls: parseDownloadUrls(row.download_urls),
     streamUid: row.stream_uid ?? null,
     streamStatus: row.stream_status ?? null,
+    streamDuration: row.stream_duration ?? null,
     stableId: row.stable_id ?? null,
     updatedAt: row.updated_at,
   }

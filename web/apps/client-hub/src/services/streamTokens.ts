@@ -36,6 +36,14 @@ export function freshStreamStatus(assetId: string): string | undefined {
   return statusOverride.get(assetId)
 }
 
+/* Durations, same idea. A video's length is only known once encoding finishes, so a row fetched
+   before that has none — and the hover preview cannot place frames without it. */
+const durationOverride = new Map<string, number>()
+
+export function freshStreamDuration(assetId: string): number | undefined {
+  return durationOverride.get(assetId)
+}
+
 /* One in-flight request per asset id, so ten cards mounting at once produce one network call
    rather than ten. Without this a grid re-render storms the function. */
 let inFlight: Promise<void> | null = null
@@ -64,6 +72,7 @@ export function clearStreamTokens(): void {
   cache.clear()
   pending.clear()
   statusOverride.clear()
+  durationOverride.clear()
 }
 
 /**
@@ -93,6 +102,7 @@ export async function ensureStreamTokens(assetIds: string[]): Promise<void> {
       const { data, error } = await supabase.functions.invoke<{
         tokens: Record<string, string>
         statuses: Record<string, string>
+        durations: Record<string, number>
         expires_at: number
       }>('stream-token', { body: { asset_ids: ids } })
       if (error) throw error
@@ -101,6 +111,9 @@ export async function ensureStreamTokens(assetIds: string[]): Promise<void> {
       }
       for (const [assetId, status] of Object.entries(data?.statuses ?? {})) {
         statusOverride.set(assetId, status)
+      }
+      for (const [assetId, seconds] of Object.entries(data?.durations ?? {})) {
+        durationOverride.set(assetId, seconds)
       }
     } catch (e) {
       // `cdn.` because this is delivery authorization — the same concern as the gate cookie, just

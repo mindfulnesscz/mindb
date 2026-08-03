@@ -47,15 +47,15 @@ export default function GalleryView() {
   const resolveStream = useStreamMedia(assets)
   const cardAssets = useMemo(
     () => assets.map(a => {
-      if (!a.streamUid) return { asset: a, animated: undefined }
+      if (!a.streamUid) return { asset: a, frames: undefined }
       const media = resolveStream(a)
-      if (!media) return { asset: a, animated: undefined }
+      if (!media) return { asset: a, frames: undefined }
       return {
         asset: a.thumbnailUrl ? a : { ...a, thumbnailUrl: media.still },
-        /* Only the URL is built here. Nothing is fetched until the card mounts the <img>, which
-           it does on first hover — measured payloads range from 37 KB to 2.7 MB depending
-           entirely on the footage, so a grid of them is not a cost worth guessing at. */
-        animated: media.animated(),
+        /* Only URLs are built here. Nothing is fetched until the card mounts the images, which it
+           does on first hover. They span the whole video rather than its opening — Cloudflare's
+           animated thumbnail caps at 15 contiguous seconds, so it could never cover a long cut. */
+        frames: media.frames,
       }
     }),
     [assets, resolveStream],
@@ -200,11 +200,11 @@ export default function GalleryView() {
             <EmptyState reason={emptyReason()} />
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {cardAssets.map(({ asset, animated }) => (
+              {cardAssets.map(({ asset, frames }) => (
                 <AssetCard
                   key={asset.id}
                   asset={asset}
-                  animatedThumbUrl={animated}
+                  previewFrames={frames}
                   onOpen={(focusId, opts) => { void openAsset(asset, focusId, opts) }}
                   role={role}
                   accent={accent}

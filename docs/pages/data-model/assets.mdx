@@ -18,7 +18,7 @@ staff-only. It is what the R2 object key encodes and what the delivery Worker au
 
 ## Video columns
 
-Three columns, all null for anything that is not a video. A video's master stays in R2 (that is what
+Four columns, all null for anything that is not a video. A video's master stays in R2 (that is what
 `download_url` points at); Cloudflare Stream carries playback and stills alongside it.
 
 | Column | Meaning |
@@ -26,6 +26,7 @@ Three columns, all null for anything that is not a video. A video's master stays
 | `stream_uid` | Cloudflare video id, unique — one video per asset row |
 | `stream_status` | Stream's encoding state, verbatim. Only `ready` means its delivery URLs resolve |
 | `stream_source_hash` | sha256 of the master it was encoded from, so a version bump is noticed |
+| `stream_duration` | Length in seconds, known only once encoding finishes |
 
 `stream_uid` alone cannot say whether a video is playable: during an encode the uid exists and every
 URL built from it 404s. See [Video on Cloudflare Stream](/cloud-storage/video).

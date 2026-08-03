@@ -15,7 +15,7 @@ null `thumbnail_url`.
 | | |
 |---|---|
 | master file | R2, at the key its access level requires — same as any other asset |
-| playback, stills, animated previews | Cloudflare Stream |
+| playback, stills, hover previews | Cloudflare Stream |
 | identity | `assets.stream_uid`, one video per asset row |
 | protection | Stream's `requireSignedURLs`, per video |
 | upload | `supabase/functions/stream-upload/` |
@@ -41,18 +41,19 @@ null `thumbnail_url`.
 6. **Encoding continues in the background.** The row records `queued`/`downloading`.
 7. **`stream-token` syncs the status** the next time the portal asks about that video, and mints the
    signed URLs. The portal polls it while anything on screen is unfinished.
-8. **The portal renders** a still on the card, an animated preview on hover, and Stream's player in
-   the detail view.
+8. **The portal renders** a still on the card, ten stills stepping through the whole film on hover,
+   and Stream's player in the detail view.
 
 ## Attributes
 
-Three columns on `public.assets`, all null for everything that is not a video.
+Four columns on `public.assets`, all null for everything that is not a video.
 
 | Column | Meaning |
 |---|---|
 | `stream_uid` | Cloudflare's video id. Unique — one video per asset row |
 | `stream_status` | Stream's own encoding state, verbatim. Only `ready` means the delivery URLs resolve |
 | `stream_source_hash` | sha256 of the R2 master this video was encoded from |
+| `stream_duration` | Length in seconds, known only once encoding finishes. Places the hover frames |
 
 **Why two status-ish columns.** `stream_uid` alone cannot answer "is this playable yet?". During an
 encode the uid exists and every URL built from it 404s, so a portal reading only the uid renders
@@ -148,23 +149,49 @@ The first path segment is the video's `uid` for a public video, or a signed **to
 | | |
 |---|---|
 | still | `/<uid-or-token>/thumbnails/thumbnail.jpg?time=2s&height=640` |
-| animated preview | `/<uid-or-token>/thumbnails/thumbnail.gif?time=2s&duration=5s&fps=2&height=480` |
+| preview frames | ten of the above, at `time` values spanning the whole video |
 | player | `/<uid-or-token>/iframe` |
-| HLS manifest | `/<uid-or-token>/manifest/video.m3u8` — unused; see below |
+| animated GIF | `/<uid-or-token>/thumbnails/thumbnail.gif` — **not used**, see below |
+| HLS manifest | `/<uid-or-token>/manifest/video.m3u8` — unused; the iframe handles playback |
 
-Still options: `time`, `height`, `width`, `fit` (`crop` default). Animated adds `duration` (default
-`5s`) and `fps` (default `8`; the portal uses `2` for a half-second-per-frame flip).
+Still options: `time`, `height`, `width`, `fit` (`crop` default).
 
 **Playback is Stream's iframe, not hls.js.** The iframe brings adaptive bitrate, captions, keyboard
 control, picture-in-picture and fullscreen for free, and none of that is the interesting part of this
 product. Reach for hls.js only when the controls themselves must be custom.
 
-**Preview payloads vary by two orders of magnitude.** The same 5-second preview measured **2.7 MB**
-for a detailed clip at Stream's defaults and **37 KB** for a simple one at `fps=2, height=480`,
-decided entirely by the footage. That is why the animated `<img>` is not rendered until a card has
-been hovered once — a grid loading them eagerly looks fine against a test library and falls over on a
-real shoot. After the first hover it stays mounted and only fades, so returning is instant off the
-browser cache.
+### Why the hover preview is stills, not Cloudflare's animated thumbnail
+
+The animated thumbnail was the obvious choice and is the wrong one, for a reason that only shows up
+on real footage: **`duration` is capped at fifteen seconds**, and the window is contiguous.
+
+```text
+duration=20s → 400  "duration: attribute 20s must be between 100ms and 15s"
+```
+
+So on a 62-second film a GIF can only ever show the opening — which reads as broken rather than
+short. Measured on that video, at `height=480`:
+
+| | payload | covers |
+|---|---|---|
+| GIF, `duration=5s, fps=2` | 763 KB | first 5s |
+| GIF, `duration=10s, fps=2` | 1.5 MB | first 10s |
+| GIF, `duration=30s` | rejected | — |
+| **10 stills across the full length** | **121 KB** | **all of it** |
+
+Covering everything is also six times cheaper, so this is not a trade. The portal requests ten
+stills at `t = duration * (i + 0.5) / count` — centred in equal slices, because starting at `0s`
+opens on black for any cut that fades in, and the final slice boundary lands on or past the last
+frame. Timestamps are rounded to a tenth of a second so the same frame keeps the same URL, and
+therefore the same cache entry, across re-renders.
+
+They are still lazy: nothing is fetched until a card has been hovered once. Afterwards every frame
+stays mounted and only its opacity changes, so a second hover plays instantly off the browser cache
+rather than re-downloading ten stills. `useReducedMotion` holds the still frame instead.
+
+This needs `stream_duration`, which is why that column exists — a `time` past the end returns the
+last frame, so guessing timestamps would make every frame of an unknown-length video identical. Until
+the duration is known the card shows its still.
 
 ## Limitations
 
@@ -193,9 +220,9 @@ covers the preview, so fetching one underneath would be paid for and never seen.
 cookie is scoped to `.disruptcollective.com` and never reaches `*.vercel.app`. Test on
 `staging.hub.disruptcollective.com`.
 
-**Preview quality has not been judged on real client footage.** The fallback, if the GIF disappoints,
-is N stills at computed timestamps through the same hover plumbing (~1 day). A sprite sheet would be
-better and needs local ffmpeg, which is why it is not the plan.
+**A sprite sheet would be more efficient than ten separate stills** and needs local ffmpeg, which is
+why it is not the approach. Ten requests of ~12 KB each is acceptable; revisit only if grids get much
+larger.
 
 ## Configuration
 

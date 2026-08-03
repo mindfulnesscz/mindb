@@ -49,6 +49,8 @@ export interface Asset {
   streamUid?: string | null
   /** Stream's own encoding state. Only `ready` means its delivery URLs resolve. */
   streamStatus?: string | null
+  /** Video length in seconds. Null until encoding finishes; needed to place preview frames. */
+  streamDuration?: number | null
   /** Cloud share links (Dropbox / OneDrive / Drive) from pipeline export. */
   downloadUrls?: { destId?: string; provider: string; name: string; url: string }[]
   /** Rename-proof package identity — used for Reveal in Finder via desktop bridge. */

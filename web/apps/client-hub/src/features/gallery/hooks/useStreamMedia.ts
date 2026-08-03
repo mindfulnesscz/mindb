@@ -13,12 +13,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Asset } from '@dc-hub/asset-library'
 import {
-  isStreamReady, streamStillUrl, streamAnimatedUrl, streamIframeUrl,
+  isStreamReady, streamStillUrl, streamFrameUrls, streamIframeUrl,
   effectiveLevel, tierFor, type StreamRef,
 } from '@dc-hub/domain'
 import {
-  ensureStreamTokens, cachedStreamToken, streamDomain, freshStreamStatus,
+  ensureStreamTokens, cachedStreamToken, streamDomain, freshStreamStatus, freshStreamDuration,
 } from '../../../services/streamTokens'
+
+/* How many frames a hover preview steps through.
+ *
+ * Ten, because that is what makes a 62-second film legible in a hover: one frame per ~6 seconds.
+ * Measured cost on a real video — ten stills spanning the whole thing total 121 KB, against 763 KB
+ * for a five-second GIF, so covering everything is also the cheaper option. */
+const PREVIEW_FRAMES = 10
 
 /* How often to re-ask while something is still encoding.
  *
@@ -32,8 +39,14 @@ export interface StreamMedia {
   ref: StreamRef
   /** Card thumbnail — a single frame. */
   still: string
-  /** Hover preview. Large; never load eagerly. See streamAnimatedUrl. */
-  animated: (opts?: { fps?: number; duration?: string }) => string
+  /**
+   * Hover preview: stills spanning the WHOLE video, in order.
+   *
+   * Not Cloudflare's animated thumbnail — that is capped at 15 seconds and contiguous, so on
+   * anything longer it shows the opening and nothing else. Empty until the duration is known,
+   * which is only after encoding finishes.
+   */
+  frames: string[]
   /** Stream's player, for the detail view. */
   iframe: (opts?: { autoplay?: boolean; muted?: boolean }) => string
 }
@@ -49,7 +62,7 @@ function isVideoAsset(a: Pick<Asset, 'streamUid'>): boolean {
  * themselves live in a module-scope cache, not in state, so the detail view and lightbox reuse
  * what the grid already minted.
  */
-export function useStreamMedia(assets: Pick<Asset, 'id' | 'streamUid' | 'streamStatus'>[]) {
+export function useStreamMedia(assets: Pick<Asset, 'id' | 'streamUid' | 'streamStatus' | 'streamDuration'>[]) {
   const [tokenNonce, setTokenNonce] = useState(0)
 
   /* Only ids matter for the request, and only video ones. Joined into a string so a re-render with
@@ -63,7 +76,9 @@ export function useStreamMedia(assets: Pick<Asset, 'id' | 'streamUid' | 'streamS
   /* Whether anything on screen is still encoding, from the freshest answer available. Recomputed
      on every nonce bump, so the poll below stops the moment the last video turns ready. */
   const stillEncoding = assets.some(a =>
-    a.streamUid && !isStreamReady(freshStreamStatus(a.id) ?? a.streamStatus))
+    a.streamUid && (!isStreamReady(freshStreamStatus(a.id) ?? a.streamStatus)
+      // The duration arrives with the same call and the preview cannot place frames without it.
+      || (freshStreamDuration(a.id) ?? a.streamDuration) == null))
 
   useEffect(() => {
     if (!videoIds) return
@@ -87,7 +102,7 @@ export function useStreamMedia(assets: Pick<Asset, 'id' | 'streamUid' | 'streamS
   return useMemo(() => {
     const domain = streamDomain()
     return function resolve(
-      asset: Pick<Asset, 'id' | 'streamUid' | 'streamStatus' | 'perm' | 'status'>,
+      asset: Pick<Asset, 'id' | 'streamUid' | 'streamStatus' | 'streamDuration' | 'perm' | 'status'>,
     ): StreamMedia | null {
       if (!asset.streamUid) return null
       /* Mid-encode, every URL built from the uid 404s. Returning null here is what keeps the
@@ -111,9 +126,11 @@ export function useStreamMedia(assets: Pick<Asset, 'id' | 'streamUid' | 'streamS
         // `2s` rather than the default `0s`: a cut that fades in from black has nothing to show on
         // its first frame, and a black card looks like a broken one.
         still: streamStillUrl(domain, ref, { time: '2s', height: 640 }),
-        animated: (opts) => streamAnimatedUrl(domain, ref, {
-          time: '2s', duration: '5s', fps: 2, height: 480, ...opts,
-        }),
+        frames: streamFrameUrls(
+          domain, ref,
+          freshStreamDuration(asset.id) ?? asset.streamDuration,
+          PREVIEW_FRAMES, { height: 480 },
+        ),
         iframe: (opts) => streamIframeUrl(domain, ref, opts),
       }
     }
@@ -123,7 +140,7 @@ export function useStreamMedia(assets: Pick<Asset, 'id' | 'streamUid' | 'streamS
 
 /** The same, for a single asset — the detail view has one video, not a grid. */
 export function useStreamMediaFor(
-  asset: Pick<Asset, 'id' | 'streamUid' | 'streamStatus' | 'perm' | 'status'> | null | undefined,
+  asset: Pick<Asset, 'id' | 'streamUid' | 'streamStatus' | 'streamDuration' | 'perm' | 'status'> | null | undefined,
 ) {
   const list = useMemo(() => (asset ? [asset] : []), [asset])
   const resolve = useStreamMedia(list)
