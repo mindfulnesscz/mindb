@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "//dev": "The Worker runs locally (its /auth route has to reach the local Supabase); only the R2 binding is remote, via `remote: true` in wrangler.jsonc. Needs `wrangler login` and a workers.dev subdomain. PORT IS PINNED AND NOT WRANGLER'S DEFAULT: 8787 is taken by other tooling on real machines (Cursor listens on [::1]:8787), and the crash it causes — 'Address already in use' — reads like a stray dev server rather than a port clash. 8623 also has to match VITE_CDN_GATE_URL and R2_GATED_DOMAIN, so do not change it in one place.",
+    "dev": "wrangler dev --port 8623",
     "deploy:staging": "wrangler deploy --env staging",
     "deploy:production": "wrangler deploy --env production",
     "typecheck": "tsc --noEmit",

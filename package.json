@@ -15,6 +15,7 @@
     "dev:desktop": "npm --prefix desktop run tauri dev",
     "dev:web": "npm run dev --workspace=web/apps/client-hub",
     "dev:docs": "npm --prefix docs run dev",
+    "dev:gate": "npm --prefix workers/cdn-gate run dev",
     "build": "npm run build:desktop && npm run build:web && npm run build:docs",
     "build:desktop": "npm --prefix desktop run build",
     "build:web": "npm run build --workspace=web/apps/client-hub",

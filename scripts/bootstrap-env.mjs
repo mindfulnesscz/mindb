@@ -44,6 +44,13 @@ if (!envName) {
 }
 
 const configPath = `scripts/environments/${envName}.env`;
+/* The non-secret half, committed on purpose — project ref, bucket names, hostnames. The split is
+ * what lets CI hold only four secrets, and it is what example.env.template has always described.
+ * It was never actually loaded, though: only `<env>.env` was read, so anything living in the public
+ * file was simply invisible. That is why `production.env` holds five secrets and nothing else and
+ * `bootstrap-env.mjs production` could not have run — it would die on missing PROJECT_REF, which is
+ * sitting in production.public.env being ignored. */
+const publicConfigPath = `scripts/environments/${envName}.public.env`;
 if (!existsSync(configPath)) {
   die(`Config not found: ${configPath}\n` +
       `  Create it:  cp scripts/environments/example.env.template ${configPath}\n` +
@@ -64,7 +71,13 @@ function loadEnvFile(path) {
   }
   return out;
 }
-const cfg = loadEnvFile(configPath);
+/* Public first, secrets on top: a value in the gitignored file wins, so a developer can override a
+   committed hostname locally without editing a tracked file. */
+const cfg = {
+  ...(existsSync(publicConfigPath) ? loadEnvFile(publicConfigPath) : {}),
+  ...loadEnvFile(configPath),
+};
+if (existsSync(publicConfigPath)) console.log(`  config: ${publicConfigPath} + ${configPath}`);
 
 const required = ['PROJECT_REF', 'SITE_URL', 'ADMIN_EMAIL', 'SUPABASE_ACCESS_TOKEN', 'SUPABASE_DB_PASSWORD', 'SUPABASE_SERVICE_KEY'];
 const missing = required.filter(k => !cfg[k]);
@@ -118,21 +131,54 @@ try {
   sh(`supabase db push`, 'Push schema (all migrations)');
   sh(`supabase functions deploy`, 'Deploy edge functions');
 
-  // Function secrets: env-level R2 + Cloudflare grant creds.
-  if ((cfg.CF_R2_TOKEN ?? cfg.CF_API_TOKEN) && cfg.CF_ACCOUNT_ID && cfg.R2_PARENT_ACCESS_KEY_ID && cfg.R2_BUCKET && cfg.R2_PUBLIC_DOMAIN) {
-    console.log('\n▸ Set function secrets (R2 + Cloudflare grant)');
+  /* Function secrets: env-level R2 + Cloudflare creds.
+   *
+   * ONE LIST, and it has to stay complete. This wrote five secrets for months after the gated tier
+   * and Cloudflare Stream shipped, so every environment bootstrapped in that window came up without
+   * `R2_GATED_BUCKET`, `R2_GATED_DOMAIN` or `CF_STREAM_TOKEN` — which is not a subtle degradation:
+   * `stream-token` and `stream-upload` answer 503 "Video not provisioned", `cdn-reconcile` cannot
+   * move bytes, and `r2-grant` hands the desktop no gated tier at all, so the pipeline refuses to
+   * publish. Adding a secret to a function and not to this list is therefore the same bug as
+   * forgetting the code.
+   *
+   * Optional values are written only when present, so an environment with no video or no gated tier
+   * still bootstraps rather than setting a secret to the empty string — which reads as "provisioned"
+   * to every `env(k)` check in the functions. */
+  const requiredSecrets = (cfg.CF_R2_TOKEN ?? cfg.CF_API_TOKEN) && cfg.CF_ACCOUNT_ID
+    && cfg.R2_PARENT_ACCESS_KEY_ID && cfg.R2_BUCKET && cfg.R2_PUBLIC_DOMAIN;
+  if (requiredSecrets) {
+    const trim = (v) => String(v).replace(/\/+$/, '');
+    const secrets = [
+      `R2_BUCKET=${cfg.R2_BUCKET}`,
+      `R2_PUBLIC_DOMAIN=${trim(cfg.R2_PUBLIC_DOMAIN)}`,
+      `CF_R2_TOKEN=${cfg.CF_R2_TOKEN ?? cfg.CF_API_TOKEN}`,
+      `CF_ACCOUNT_ID=${cfg.CF_ACCOUNT_ID}`,
+      `R2_PARENT_ACCESS_KEY_ID=${cfg.R2_PARENT_ACCESS_KEY_ID}`,
+    ];
+    // Gated delivery (2026-07-31). Both or neither: a bucket with no domain produces URLs pointing
+    // at nothing, and a domain with no bucket has nothing behind it.
+    if (cfg.R2_GATED_BUCKET && cfg.R2_GATED_DOMAIN) {
+      secrets.push(`R2_GATED_BUCKET=${cfg.R2_GATED_BUCKET}`);
+      secrets.push(`R2_GATED_DOMAIN=${trim(cfg.R2_GATED_DOMAIN)}`);
+    }
+    // Cloudflare Stream (2026-08-03). Account id is already above — Stream reuses it.
+    if (cfg.CF_STREAM_TOKEN) secrets.push(`CF_STREAM_TOKEN=${cfg.CF_STREAM_TOKEN}`);
+    // Browser origins allowed to call the functions. Unset falls back to the built-in list in
+    // supabase/functions/_shared/cors.ts, so this is portability rather than a requirement.
+    if (cfg.ALLOWED_ORIGINS) secrets.push(`ALLOWED_ORIGINS=${cfg.ALLOWED_ORIGINS}`);
+
+    const optional = secrets.slice(5).map(s => s.split('=')[0]);
+    console.log(`\n▸ Set function secrets (R2 + Cloudflare${optional.length ? ` + ${optional.join(', ')}` : ''})`);
+    for (const k of ['R2_GATED_BUCKET', 'R2_GATED_DOMAIN', 'CF_STREAM_TOKEN']) {
+      if (!optional.includes(k)) {
+        console.log(`  ⚠  ${k} absent from config — the feature it powers will answer 503 until it is set`);
+      }
+    }
     if (!EXECUTE) {
       console.log('  [dry-run] supabase secrets set --env-file <temp>');
     } else {
       const tmp = join(tmpdir(), `dchub-cf-secrets-${ref}.env`);
-      writeFileSync(tmp, [
-        `R2_BUCKET=${cfg.R2_BUCKET}`,
-        `R2_PUBLIC_DOMAIN=${cfg.R2_PUBLIC_DOMAIN.replace(/\/+$/, '')}`,
-        `CF_R2_TOKEN=${cfg.CF_R2_TOKEN ?? cfg.CF_API_TOKEN}`,
-        `CF_ACCOUNT_ID=${cfg.CF_ACCOUNT_ID}`,
-        `R2_PARENT_ACCESS_KEY_ID=${cfg.R2_PARENT_ACCESS_KEY_ID}`,
-        '',
-      ].join('\n'), { mode: 0o600 });
+      writeFileSync(tmp, [...secrets, ''].join('\n'), { mode: 0o600 });
       try {
         execSync(`supabase secrets set --env-file ${tmp}`, { stdio: 'inherit', env: { ...process.env, SUPABASE_ACCESS_TOKEN: cfg.SUPABASE_ACCESS_TOKEN } });
       } finally { unlinkSync(tmp); }
