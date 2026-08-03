@@ -7,6 +7,7 @@
   "oauth-tokens": "OAuth and tokens",
   "publishing": "Cloud publishing internals",
   "access-levels": "Access levels and gated delivery",
+  "video": "Video on Cloudflare Stream",
   "security": "Security and sharing",
   "troubleshooting": "Troubleshooting"
 }

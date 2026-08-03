@@ -9,4 +9,23 @@ Two grouping systems coexist:
 
 Top-level queries exclude both relationship types and separately count/load them. Archived/disconnected related rows are excluded. Deleting a referenced primary may be blocked when foreign-key behavior does not cascade or null the relationship.
 
-Status and permission are separate. Status describes lifecycle (`draft`, `review`, `approved`, `published`, `archived`, `disconnected`); `perm` describes audience (`public`, `client`, `internal`).
+Status and permission are separate. Status describes lifecycle (`draft`, `review`, `approved`, `published`, `archived`, `disconnected`); `perm` describes audience (`public`, `guest`, `client`, `internal`).
+
+Neither alone decides access. `effective_level` is a stored generated column combining them —
+`(status in ('approved','published')) ? perm : 'internal'` — so a `public` asset still in `draft` is
+staff-only. It is what the R2 object key encodes and what the delivery Worker authorizes against; see
+[Access levels and gated delivery](/cloud-storage/access-levels).
+
+## Video columns
+
+Three columns, all null for anything that is not a video. A video's master stays in R2 (that is what
+`download_url` points at); Cloudflare Stream carries playback and stills alongside it.
+
+| Column | Meaning |
+|---|---|
+| `stream_uid` | Cloudflare video id, unique — one video per asset row |
+| `stream_status` | Stream's encoding state, verbatim. Only `ready` means its delivery URLs resolve |
+| `stream_source_hash` | sha256 of the master it was encoded from, so a version bump is noticed |
+
+`stream_uid` alone cannot say whether a video is playable: during an encode the uid exists and every
+URL built from it 404s. See [Video on Cloudflare Stream](/cloud-storage/video).
