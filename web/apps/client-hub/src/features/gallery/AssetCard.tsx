@@ -17,34 +17,46 @@ export function AssetCard({
   onOpen,
   role,
   accent,
-  animatedThumbUrl,
+  previewFrames,
 }: {
   asset: Asset
   onOpen: (focusId?: string, opts?: { lightbox?: boolean }) => void
   role: Role
   accent: string
-  /** Cloudflare Stream animated preview, for video. Resolved upstream — see GalleryView. */
-  animatedThumbUrl?: string
+  /** Stills spanning the whole video, in order. Resolved upstream — see GalleryView. */
+  previewFrames?: string[]
 }) {
   const isMulti = (asset.childCount ?? 0) > 0
   const [pointerIn, setPointerIn] = useState(false)
   const hovered = useDelayedHover(pointerIn, 100)
 
-  /* The animated preview is LAZY, and the reason is that its size is unpredictable. Measured on
-     two real videos: 37 KB for a simple clip at the parameters used here, and 2.7 MB for a
-     detailed one at Stream's defaults. Two orders of magnitude apart, decided by content nobody
-     controls — so a grid that loaded them eagerly would be fine in testing and ruinous on the
-     wrong shoot. The <img> is not rendered until the card has been hovered once, and once
-     rendered it stays mounted and fades, so a second hover is instant off the browser cache.
+  /* The hover preview steps through stills spanning the WHOLE video, rather than Cloudflare's
+     animated thumbnail — that is capped at 15 contiguous seconds, so on a 62-second film it showed
+     the opening and nothing else, which reads as broken rather than short.
 
-     Reduced motion holds the still. An auto-playing loop is exactly what that preference is for,
-     and the card is still fully usable without it. */
+     LAZY, because the payload is real: ten stills came to 121 KB on a measured video. Cheaper than
+     the 763 KB GIF it replaces, but still not something to load for every card in a grid up front.
+     Nothing is fetched until the card has been hovered once; afterwards the frames stay mounted, so
+     a second hover plays instantly off the browser cache.
+
+     Reduced motion holds the still. A looping preview is exactly what that preference is for, and
+     the card is fully usable without it. */
   const reduceMotion = useReducedMotion()
   const [everHovered, setEverHovered] = useState(false)
   useEffect(() => { if (hovered) setEverHovered(true) }, [hovered])
   // Not on multi cards: their hover belongs to the sibling grid, which covers this anyway, so
   // fetching a preview underneath it would be paid for and never seen.
-  const showPreview = !!animatedThumbUrl && !reduceMotion && !isMulti && everHovered
+  const frames = previewFrames ?? []
+  const showPreview = frames.length > 0 && !reduceMotion && !isMulti && everHovered
+
+  /* Steps only while hovered, and resets to the first frame on leave so every hover starts at the
+     beginning of the film rather than wherever the last one stopped. */
+  const [frameIdx, setFrameIdx] = useState(0)
+  useEffect(() => {
+    if (!showPreview || !hovered) { setFrameIdx(0); return }
+    const t = window.setInterval(() => setFrameIdx(i => (i + 1) % frames.length), 500)
+    return () => window.clearInterval(t)
+  }, [showPreview, hovered, frames.length])
   // Prefetch siblings for multi cards so a click (even before hover) can focus the first child.
   const { siblings, loading } = useSiblingPreviews(asset, isMulti)
   const restingThumb =
@@ -93,17 +105,21 @@ export function AssetCard({
           : <div className="relative z-[1] w-full h-full bg-gray-150" />
         }
 
-        {showPreview && (
+        {showPreview && frames.map((frame, i) => (
+          /* All frames mounted at once so the browser holds them after the first hover — swapping
+             one <img>'s src would re-request on every step and stutter. Only the current one is
+             opaque. */
           <img
+            key={frame}
             referrerPolicy="no-referrer"
-            src={animatedThumbUrl}
+            src={frame}
             alt=""
             aria-hidden
             className={`absolute inset-0 z-[2] w-full h-full object-cover pointer-events-none transition-opacity duration-base ${
-              hovered ? 'opacity-100' : 'opacity-0'
+              hovered && i === frameIdx ? 'opacity-100' : 'opacity-0'
             }`}
           />
-        )}
+        ))}
 
         {/* A video card is otherwise indistinguishable from an image one until you open it. */}
         {asset.streamUid && (

@@ -1,0 +1,285 @@
+# Video on Cloudflare Stream
+
+R2 holds the master file. Stream is added **alongside** it for playback, stills and hover previews —
+never instead of it. That split is the whole design: the master is what a client downloads and what
+the library is an archive of, while everything Stream holds is a delivery format, and delivery
+formats are regenerable. If Stream lost every video tomorrow, the library would be intact and a
+pipeline run would rebuild it.
+
+Shipped 2026-08-03. Before it, video assets had no thumbnail at all — **nine of production's ten
+videos rendered as grey tiles**, because `generate_thumbnail` cannot decode video and the row kept a
+null `thumbnail_url`.
+
+## The stack
+
+| | |
+|---|---|
+| master file | R2, at the key its access level requires — same as any other asset |
+| playback, stills, hover previews | Cloudflare Stream |
+| identity | `assets.stream_uid`, one video per asset row |
+| protection | Stream's `requireSignedURLs`, per video |
+| upload | `supabase/functions/stream-upload/` |
+| signed URLs + status sync | `supabase/functions/stream-token/` |
+| URL construction | `packages/domain/src/streamUrls.ts` — every video URL in the product |
+| which files are video | `packages/domain/src/video.ts` |
+
+## The workflow, end to end
+
+1. **The pipeline publishes the master to R2** exactly as it does for any asset — level-prefixed
+   key, gated or public bucket by effective level. Nothing video-specific happens here.
+2. **The export writes the asset rows.** This has to come first: a video is attached to an asset
+   row, and a brand-new asset has none until the export creates it.
+3. **`syncStreamVideos` asks the database** which videos lack a current Stream copy — not which
+   files this run touched. A video missed earlier (a crash, a token not yet set, Stream down) is
+   picked up by the next run rather than never.
+4. **`stream-upload` presigns the R2 master** and hands Cloudflare the URL. Stream pulls it itself;
+   nothing streams through the edge function, so the call returns in about a second regardless of
+   file size.
+5. **It sets `requireSignedURLs` and reads the flag back** for anything not `public`, and **deletes
+   the video** if the flag did not apply. An unprotected gated video is worse than no video, and at
+   that moment nothing references it yet.
+6. **Encoding continues in the background.** The row records `queued`/`downloading`.
+7. **`stream-token` syncs the status** the next time the portal asks about that video, and mints the
+   signed URLs. The portal polls it while anything on screen is unfinished.
+8. **The portal renders** a still on the card, ten stills stepping through the whole film on hover,
+   and Stream's player in the detail view.
+
+## Attributes
+
+Four columns on `public.assets`, all null for everything that is not a video.
+
+| Column | Meaning |
+|---|---|
+| `stream_uid` | Cloudflare's video id. Unique — one video per asset row |
+| `stream_status` | Stream's own encoding state, verbatim. Only `ready` means the delivery URLs resolve |
+| `stream_source_hash` | sha256 of the R2 master this video was encoded from |
+| `stream_duration` | Length in seconds, known only once encoding finishes. Places the hover frames |
+
+**Why two status-ish columns.** `stream_uid` alone cannot answer "is this playable yet?". During an
+encode the uid exists and every URL built from it 404s, so a portal reading only the uid renders
+broken images for the length of the encode. `stream_status` is Stream's vocabulary rather than a
+translation of it, so their lifecycle cannot drift from ours:
+`pendingupload · downloading · queued · inprogress · ready · error`.
+
+**Why the source hash.** A new version of a film uploads to R2 under the same version-stable key. If
+nothing noticed, the row would keep the old `stream_uid` and the portal would **play v1 while the
+download button hands over v2** — a disagreement nobody reports, because both halves work. The hash
+is already in `download_url`'s `?v=`, so the check costs a string comparison. On mismatch the video
+is re-encoded and the superseded one deleted, after the row points at the replacement.
+
+## Supported formats
+
+From `packages/domain/src/video.ts`, kept to what Stream actually ingests — an extension in this set
+is a promise that the upload will succeed:
+
+```text
+.mp4  .mkv  .mov  .avi  .flv  .ts  .mts  .m2ts
+.mxf  .lxf  .gxf  .3gp  .webm .mpg  .mpeg .m4v
+```
+
+**`.gif` is deliberately excluded.** It is video-shaped, Stream will not take it, and the product
+already handles it as an image everywhere. Sending one would fail *after* the master had been
+presigned and pulled.
+
+The extension is read from the **object key**, never from the asset's display name — a name is
+editable in the portal and routinely carries no extension, so trusting it would silently skip
+videos.
+
+## Protection
+
+A gated video is protected by `requireSignedURLs`, which was **measured** rather than assumed
+(2026-08-02), because the Cloudflare docs contradict themselves on whether thumbnails are covered.
+With the flag on, fetched unsigned:
+
+| endpoint | unsigned | control (flag off) | signed |
+|---|---|---|---|
+| `thumbnails/thumbnail.jpg` | **401** | 200 · 1651 B | 200 |
+| `thumbnails/thumbnail.gif` | **401** | 200 · 96808 B | 200 |
+| `thumbnails/thumbnail.jpg?time=2s&height=600` | **401** | — | — |
+| `manifest/video.m3u8` | **401** | 200 | 200 |
+| `downloads/default.mp4` | **401** | — | — |
+| `iframe` | **401** | — | — |
+
+**Thumbnails are protected exactly like playback.** Gated videos do not leak preview frames.
+
+Two mechanics that follow, both of which cost time to learn:
+
+- **`requireSignedURLs` is silently ignored when passed at creation.** The video comes back with it
+  `false`. It must be set by a separate `POST /stream/{uid}` afterwards, and the response read back
+  — "the API returned 200" is not "the flag is on".
+- **The token replaces the uid in the path**, not a query parameter:
+  `customer-<code>.cloudflarestream.com/<token>/thumbnails/thumbnail.jpg`. One token opens playback,
+  stills and previews for its video, so a card needs one token, not one per element. They are ~580
+  characters — mint per view, never per `<img>`.
+
+The level lives in that flag exactly as an image's level lives in its object key, so **a demotion
+must propagate**. `cdn_move_queue` already fires on any `perm`/`status` change, so `cdn-reconcile`
+flips the Stream flag in the same pass it moves the key — reading it back, and failing the asset so
+it stays queued rather than recording "we could not tell" as reconciled.
+
+## Ingestion: why presigned, and what it needs
+
+Stream pulls the master from a **presigned R2 GET**. It cannot fetch through the cdn-gate Worker,
+which refuses anonymous requests by design, and downloading a multi-gigabyte file into an edge
+function would exceed both its memory and its wall clock. This is the one place in the product where
+an expiring URL is correct: it is server-to-server and never seen by a user.
+
+**It must answer a range GET. HEAD is optional.** Worth stating precisely, because R2 binds a
+presigned URL to the method it was signed for — measured both directions:
+
+| | `HEAD` | range `GET` |
+|---|---|---|
+| signed as `GET` | **403** | 206 · `Content-Range: bytes 0-9/359046` |
+| signed as `HEAD` | 200 | **403** |
+
+So one URL cannot answer both, and Stream's failure message — *"Performed a HTTP HEAD and HTTP GET
+range request, could not determine the size of the file"* — reads like this approach is impossible.
+It is not: the range response carries the total size, which is all Stream needs. Confirmed by handing
+`POST /stream/copy` a GET-only presigned object.
+
+## Delivery URLs
+
+All built by `packages/domain/src/streamUrls.ts`. The host is `VITE_STREAM_DOMAIN`, falling back to
+`https://videodelivery.net` — account-agnostic and verified to serve identically, so previews and
+local development need no configuration.
+
+The first path segment is the video's `uid` for a public video, or a signed **token** for a gated one
+— that substitution is the whole of the protection model.
+
+| | |
+|---|---|
+| still | `/<uid-or-token>/thumbnails/thumbnail.jpg?time=2s&height=640` |
+| preview frames | ten of the above, at `time` values spanning the whole video |
+| player | `/<uid-or-token>/iframe` |
+| animated GIF | `/<uid-or-token>/thumbnails/thumbnail.gif` — **not used**, see below |
+| HLS manifest | `/<uid-or-token>/manifest/video.m3u8` — unused; the iframe handles playback |
+
+Still options: `time`, `height`, `width`, `fit` (`crop` default).
+
+**Playback is Stream's iframe, not hls.js.** The iframe brings adaptive bitrate, captions, keyboard
+control, picture-in-picture and fullscreen for free, and none of that is the interesting part of this
+product. Reach for hls.js only when the controls themselves must be custom.
+
+### Why the hover preview is stills, not Cloudflare's animated thumbnail
+
+The animated thumbnail was the obvious choice and is the wrong one, for a reason that only shows up
+on real footage: **`duration` is capped at fifteen seconds**, and the window is contiguous.
+
+```text
+duration=20s → 400  "duration: attribute 20s must be between 100ms and 15s"
+```
+
+So on a 62-second film a GIF can only ever show the opening — which reads as broken rather than
+short. Measured on that video, at `height=480`:
+
+| | payload | covers |
+|---|---|---|
+| GIF, `duration=5s, fps=2` | 763 KB | first 5s |
+| GIF, `duration=10s, fps=2` | 1.5 MB | first 10s |
+| GIF, `duration=30s` | rejected | — |
+| **10 stills across the full length** | **121 KB** | **all of it** |
+
+Covering everything is also six times cheaper, so this is not a trade. The portal requests ten
+stills at `t = duration * (i + 0.5) / count` — centred in equal slices, because starting at `0s`
+opens on black for any cut that fades in, and the final slice boundary lands on or past the last
+frame. Timestamps are rounded to a tenth of a second so the same frame keeps the same URL, and
+therefore the same cache entry, across re-renders.
+
+They are still lazy: nothing is fetched until a card has been hovered once. Afterwards every frame
+stays mounted and only its opacity changes, so a second hover plays instantly off the browser cache
+rather than re-downloading ten stills. `useReducedMotion` holds the still frame instead.
+
+This needs `stream_duration`, which is why that column exists — a `time` past the end returns the
+last frame, so guessing timestamps would make every frame of an unknown-length video identical. Until
+the duration is known the card shows its still.
+
+## Limitations
+
+**Stream has no environment separation.** Staging and production share one Cloudflare account and
+one `CF_STREAM_TOKEN`; R2 gets two buckets per environment, Stream gets nothing equivalent. Both
+environments' videos sit in one list, indistinguishable by eye. Every video is therefore tagged
+`meta.project_ref` with the Supabase ref of the database that owns it, derived from `SUPABASE_URL`
+so it cannot drift. **Any cleanup script must filter on it** — the naive "delete the staging videos"
+takes production's with them.
+
+**Status is only refreshed when something asks.** Encoding finishes with nothing watching, so the
+column is stale until the portal next looks at that video. There is no webhook: that would need a
+public endpoint and a stored callback secret, the arrangement this project moved away from when the
+CDN reconciler stopped being a GitHub cron. The consequence is that a video finished overnight still
+reads `queued` in the database until someone opens the gallery.
+
+**No video thumbnails in the Obsidian vault.** `GALLERY_THUMB_EXTS` deliberately excludes video.
+Stream can render a still, but for anything above `public` that URL needs a signed token that
+expires, and a markdown note is static — it has nowhere to put one. Video stills belong in the
+portal, where a token can be minted per view.
+
+**Hover previews do not load on multi-asset cards.** Their hover belongs to the sibling grid, which
+covers the preview, so fetching one underneath would be paid for and never seen.
+
+**Gated video does not work on Vercel preview deployments** — same reason as gated images: the CDN
+cookie is scoped to `.disruptcollective.com` and never reaches `*.vercel.app`. Test on
+`staging.hub.disruptcollective.com`.
+
+**A sprite sheet would be more efficient than ten separate stills** and needs local ffmpeg, which is
+why it is not the approach. Ten requests of ~12 KB each is acceptable; revisit only if grids get much
+larger.
+
+## Configuration
+
+| | |
+|---|---|
+| `CF_STREAM_TOKEN` | Supabase function secret, **both** projects. Needs Stream:Edit. A third Cloudflare token — not `CF_R2_TOKEN`, not `CF_WORKERS_TOKEN` |
+| `CF_ACCOUNT_ID` | already set for R2 |
+| `VITE_STREAM_DOMAIN` | in the committed `.env.staging` / `.env.production`. **Nothing to add in Vercel** — `scripts/vercel-build.mjs` forces the committed values over the dashboard's |
+
+Without `CF_STREAM_TOKEN`, `stream-upload` returns an explicit 503 "not provisioned" rather than
+failing silently, and `cdn-reconcile` carries on re-keying images normally — it needs the token only
+once videos exist.
+
+## Troubleshooting
+
+**"Video processing" on a video that has finished.** The row is stale, not the video. Compare:
+
+```bash
+# what the database thinks
+curl -s "$SB/rest/v1/assets?select=name,stream_status,stream_uid&stream_uid=not.is.null" \
+  -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY"
+# what Cloudflare knows
+curl -s "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/stream/$UID" \
+  -H "Authorization: Bearer $CF_STREAM_TOKEN" | jq '.result.status'
+```
+
+Opening the gallery calls `stream-token`, which syncs it. If it stays stale, that function is not
+deployed or its secrets are missing.
+
+**`stream-upload is not deployed (404)`.** CI has not finished, or the branch was not merged. Edge
+functions deploy from `main`/`staging` via `.github/workflows/db.yml`.
+
+**`FunctionsFetchError: Failed to send a request to the Edge Function`.** A CORS preflight was
+refused, so the call never reached the function — nothing will be in its logs. Browser-facing
+functions need `_shared/cors.ts`; desktop-called ones (`r2-grant`, `cdn-reconcile`, `stream-upload`)
+do not, which is why the omission is easy to miss by comparison.
+
+**A blank video card with no error.** A gated video whose token did not mint. The URL built from the
+bare uid 401s, and an `<img>` cannot report that. The portal deliberately holds its placeholder
+instead of rendering a bare-uid URL — if you see a blank tile rather than a placeholder, that
+guard has been bypassed.
+
+**Stream refused the master.** *"could not determine the size of the file"* means the presigned URL
+answered neither HEAD nor a range GET — a signing or bucket fault on our side, not a bad video.
+
+## Where to look
+
+| | |
+|---|---|
+| upload, protection, replacement | `supabase/functions/stream-upload/index.ts` |
+| signed URLs and status sync | `supabase/functions/stream-token/index.ts` |
+| presigned R2 reads | `supabase/functions/_shared/r2.ts` |
+| every delivery URL | `packages/domain/src/streamUrls.ts` |
+| which files are video | `packages/domain/src/video.ts` |
+| pipeline stage | `desktop/src/services/supabase/streamSync.ts` |
+| portal player | `web/apps/client-hub/src/features/gallery/StreamPlayer.tsx` |
+| portal URL/token resolution | `web/apps/client-hub/src/features/gallery/hooks/useStreamMedia.ts` |
+| token cache and status overlay | `web/apps/client-hub/src/services/streamTokens.ts` |
+| schema | `supabase/migrations/20260803090000_stream_video.sql` |
+| access levels, and how a demotion propagates | [Access levels and gated delivery](/cloud-storage/access-levels) |

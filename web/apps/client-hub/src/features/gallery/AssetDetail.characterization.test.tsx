@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import type { Asset } from '@dc-hub/asset-library';
 
 /* ── Service stubs — recorded so we can assert what the component asked for ── */
@@ -32,6 +32,7 @@ const calls = {
   updateAssetStatus: vi.fn(async () => {}),
   updateAssetPerm: vi.fn(async () => {}),
   deleteAsset: vi.fn(async () => {}),
+  deleteAssetAndMedia: vi.fn(async (_a?: unknown, _o?: unknown) => {}),
   trackEvent: vi.fn(async () => {}),
   fetchEventCounts: vi.fn(async () => ({ views: 0, downloads: 0 })),
   fetchDestinations: vi.fn(async () => [] as unknown[]),
@@ -63,6 +64,7 @@ vi.mock('../../services/assetService', () => ({
   updateAssetStatus: (...a: unknown[]) => calls.updateAssetStatus(...(a as [])),
   updateAssetPerm: (...a: unknown[]) => calls.updateAssetPerm(...(a as [])),
   deleteAsset: (...a: unknown[]) => calls.deleteAsset(...(a as [])),
+  deleteAssetAndMedia: (...a: unknown[]) => calls.deleteAssetAndMedia(...(a as [])),
   assetFacetLabels: () => [],
 }));
 vi.mock('../../services/eventService', () => ({
@@ -123,8 +125,10 @@ describe('AssetDetail — what it loads on mount', () => {
 
   it('loads children AND variants together when childCount > 0', async () => {
     render(<AssetDetail asset={asset({ childCount: 2 })} mount="drawer" />);
-    await waitFor(() => expect(calls.fetchChildAssets).toHaveBeenCalledWith('asset-1'));
-    await waitFor(() => expect(calls.fetchVariants).toHaveBeenCalledWith('asset-1'));
+    await waitFor(() =>
+      expect(calls.fetchChildAssets).toHaveBeenCalledWith('asset-1', { includeDisconnected: false }));
+    await waitFor(() =>
+      expect(calls.fetchVariants).toHaveBeenCalledWith('asset-1', { includeDisconnected: false }));
   });
 
   it('re-fetches when a different asset is shown', async () => {
@@ -208,5 +212,98 @@ describe('AssetDetail — it renders without throwing across mounts and shapes',
     role = 'admin';
     render(<AssetDetail asset={asset()} mount="page" />);
     await waitFor(() => expect(calls.fetchEventCounts).toHaveBeenCalled());
+  });
+});
+
+/* ── Disconnected sub-assets ──────────────────────────────────────────────────
+ * A gallery child or a rendition sibling is never a top-level card, so when one goes
+ * `disconnected` the parent detail is the ONLY place it can be reached. These pin the two halves
+ * that made it unreachable: that staff ask for those rows at all, and that they are kept out of the
+ * browse surfaces once fetched. */
+
+describe('AssetDetail — disconnected sub-assets', () => {
+  const stale = (over: Partial<Asset> = {}): Asset =>
+    asset({ id: 'gone-1', name: 'Gallery Video', status: 'disconnected', ...over });
+
+  it('staff ask for disconnected sub-assets; other roles never see them', async () => {
+    role = 'editor';
+    render(<AssetDetail asset={asset({ childCount: 3 })} mount="drawer" />);
+    await waitFor(() =>
+      expect(calls.fetchChildAssets).toHaveBeenCalledWith('asset-1', { includeDisconnected: true }));
+    expect(calls.fetchVariants).toHaveBeenCalledWith('asset-1', { includeDisconnected: true });
+  });
+
+  it('staff fetch even at childCount 0 — that count excludes the disconnected ones', async () => {
+    // The trap this closes: a family whose every sub-asset is disconnected reports childCount 0, so
+    // gating the fetch on it made exactly the rows needing review the ones never asked for.
+    role = 'admin';
+    render(<AssetDetail asset={asset()} mount="drawer" />);
+    await waitFor(() => expect(calls.fetchChildAssets).toHaveBeenCalled());
+    expect(calls.fetchVariants).toHaveBeenCalled();
+  });
+
+  it('lists a disconnected gallery child, labelled, with a way to remove it', async () => {
+    role = 'admin';
+    calls.fetchChildAssets.mockResolvedValueOnce([stale()]);
+    render(<AssetDetail asset={asset({ childCount: 0 })} mount="drawer" />);
+
+    await waitFor(() => expect(screen.getByText('Gallery Video')).toBeTruthy());
+    expect(screen.getByText(/Gallery image · Disconnected/)).toBeTruthy();
+    expect(screen.getByText('Disconnected · 1')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeTruthy();
+  });
+
+  it('keeps a disconnected child OUT of the files grid', async () => {
+    // Mixing it back in would present a removed image as a deliverable — and put it in the
+    // lightbox and the download-all set with it.
+    role = 'admin';
+    calls.fetchChildAssets.mockResolvedValueOnce([
+      asset({ id: 'kid-1', name: 'Live One', thumbnailUrl: 'x.webp' }),
+      stale(),
+    ]);
+    render(<AssetDetail asset={asset({ childCount: 1 })} mount="drawer" />);
+
+    await waitFor(() => expect(screen.getByText('Gallery Video')).toBeTruthy());
+    expect(screen.getByText('Files · 1')).toBeTruthy();
+  });
+
+  it('removing one deletes the row and drops it from the list', async () => {
+    role = 'admin';
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    calls.fetchVariants.mockResolvedValueOnce([stale({ id: 'var-gone', name: 'Print Master' })]);
+    render(<AssetDetail asset={asset()} mount="drawer" />);
+
+    await waitFor(() => expect(screen.getByText('Print Master')).toBeTruthy());
+    expect(screen.getByText(/Version · Disconnected/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => expect(calls.deleteAssetAndMedia).toHaveBeenCalled());
+    expect(calls.deleteAssetAndMedia.mock.calls[0]?.[0]).toMatchObject({ id: 'var-gone' });
+    await waitFor(() => expect(screen.queryByText('Print Master')).toBeNull());
+    confirm.mockRestore();
+  });
+
+  it('a cancelled confirm deletes nothing', async () => {
+    role = 'admin';
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    calls.fetchChildAssets.mockResolvedValueOnce([stale()]);
+    render(<AssetDetail asset={asset()} mount="drawer" />);
+
+    await waitFor(() => expect(screen.getByText('Gallery Video')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+
+    expect(calls.deleteAssetAndMedia).not.toHaveBeenCalled();
+    expect(screen.getByText('Gallery Video')).toBeTruthy();
+    confirm.mockRestore();
+  });
+
+  it('shows nothing at all when every sub-asset is live', async () => {
+    role = 'admin';
+    calls.fetchChildAssets.mockResolvedValueOnce([asset({ id: 'kid-1', name: 'Live One' })]);
+    render(<AssetDetail asset={asset({ childCount: 1 })} mount="drawer" />);
+
+    await waitFor(() => expect(calls.fetchChildAssets).toHaveBeenCalled());
+    expect(screen.queryByText(/^Disconnected · /)).toBeNull();
   });
 });

@@ -69,7 +69,7 @@ Deno.serve(async (req) => {
   /* RLS does the work. An id the caller may not see simply does not come back, and asking for one
      is not an error — the portal batches whatever is on screen and should not have to pre-filter. */
   const { data: assets, error } = await asCaller
-    .from('assets').select('id,stream_uid,perm,status,stream_status').in('id', ids);
+    .from('assets').select('id,stream_uid,perm,status,stream_status,stream_duration').in('id', ids);
   if (error) return json(500, { error: error.message });
 
   /* ── Status sync ─────────────────────────────────────────────────────────────
@@ -78,8 +78,13 @@ Deno.serve(async (req) => {
 
      Every tier is refreshed, not just the gated ones that get tokens below: a `public` video's
      encode finishes just as invisibly, and it would otherwise show "processing" forever. */
-  const stale = (assets ?? []).filter(a => a.stream_uid && a.stream_status !== 'ready');
+  /* Also refreshed when the DURATION is missing: it is only known once encoding finishes, so a
+     video that turned ready before this column existed — or between two polls — would otherwise
+     never acquire one, and the hover preview needs it to place frames. */
+  const stale = (assets ?? []).filter(a =>
+    a.stream_uid && (a.stream_status !== 'ready' || a.stream_duration == null));
   const statuses: Record<string, string> = {};
+  const durations: Record<string, number> = {};
   if (stale.length) {
     const db = createClient(env('SUPABASE_URL'), env('SUPABASE_SERVICE_ROLE_KEY'), {
       auth: { persistSession: false },
@@ -90,16 +95,25 @@ Deno.serve(async (req) => {
         { headers: { Authorization: `Bearer ${streamToken}` } },
       );
       const b = await res.json().catch(() => null);
+      if (!res.ok) return;
       const state = b?.result?.status?.state as string | undefined;
-      if (!res.ok || !state || state === a.stream_status) return;
-      statuses[a.id] = state;
-      /* Service role for the write, deliberately: this is Cloudflare's fact being copied in, not
+      const duration = typeof b?.result?.duration === 'number' && b.result.duration > 0
+        ? b.result.duration as number : null;
+
+      const patch: Record<string, unknown> = {};
+      if (state && state !== a.stream_status) { patch.stream_status = state; statuses[a.id] = state; }
+      if (duration != null && a.stream_duration == null) {
+        patch.stream_duration = duration; durations[a.id] = duration;
+      }
+      if (!Object.keys(patch).length) return;
+
+      /* Service role for the write, deliberately: these are Cloudflare's facts being copied in, not
          anything the caller supplied, and a member has no update rights on assets — correctly.
-         Only the one column is touched. */
-      await db.from('assets').update({ stream_status: state }).eq('id', a.id);
+         Only these columns are touched. */
+      await db.from('assets').update(patch).eq('id', a.id);
       // The row the token decision below reads from, so a video that just became ready is
       // reported ready in the same response rather than one poll later.
-      a.stream_status = state;
+      if (state) a.stream_status = state;
     }));
   }
 
@@ -132,6 +146,7 @@ Deno.serve(async (req) => {
     /* Only the ones that CHANGED. The portal overlays these on the rows it already fetched, so an
        empty object means "nothing moved" rather than "no videos". */
     statuses,
+    durations,
     expires_at: Date.now() + TOKEN_TTL_SECONDS * 1000,
   });
 });

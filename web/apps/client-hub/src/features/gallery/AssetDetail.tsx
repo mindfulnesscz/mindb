@@ -12,6 +12,7 @@ import { StarRating } from './StarRating'
 import { AssetCommentsPanel } from './panels/AssetCommentsPanel'
 import { AssetStatusPanel } from './panels/AssetStatusPanel'
 import { AssetPreviewPanel } from './panels/AssetPreviewPanel'
+import { DisconnectedSubAssetsPanel } from './panels/DisconnectedSubAssetsPanel'
 import { useAssetChildren } from './hooks/useAssetChildren'
 import { useAssetRating } from './hooks/useAssetRating'
 import { useAssetEvents } from './hooks/useAssetEvents'
@@ -49,9 +50,10 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
   /* State lives in ./hooks/* — one hook per concern, so an effect's dependencies are visible
      next to the state they drive rather than buried among 22 useState calls. */
   const {
-    children, variants, childView, setChildView, carouselIdx, setCarouselIdx,
+    children, variants, staleChildren, staleVariants, removeSubAsset,
+    childView, setChildView, carouselIdx, setCarouselIdx,
     selectedVariantId, setSelectedVariantId, lightboxIndex, setLightboxIndex,
-  } = useAssetChildren(asset, focusAssetId, autoOpenLightbox)
+  } = useAssetChildren(asset, isStaff, focusAssetId, autoOpenLightbox)
   const { myRating, ratingSaved, changeRating: handleRatingChange } = useAssetRating(asset.id, userId, role)
   const { eventCounts, bumpDownloads } = useAssetEvents(asset.id, userId, role, isStaff)
   const {
@@ -191,6 +193,18 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
               ))}
             </div>
           </div>
+        )}
+
+        {/* Sub-assets whose file left the disk. Staff only, and deliberately NOT merged into the
+            files grid or the variant picker above — a removed image is a loose end, not something
+            to browse. This is the only surface in the portal that can reach them; see the panel's
+            own header for why. */}
+        {isStaff && (
+          <DisconnectedSubAssetsPanel
+            staleChildren={staleChildren}
+            staleVariants={staleVariants}
+            onRemove={removeSubAsset}
+          />
         )}
 
         {/* View / download counts — staff only */}

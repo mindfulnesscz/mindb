@@ -7,6 +7,61 @@ Two grouping systems coexist:
 - Galleries link children with `parent_id`; child shortcodes read `Parent|childStem`.
 - Stable package variants use `variant_of`; one primary row is shown as the top-level card and siblings appear in detail.
 
-Top-level queries exclude both relationship types and separately count/load them. Archived/disconnected related rows are excluded. Deleting a referenced primary may be blocked when foreign-key behavior does not cascade or null the relationship.
+Top-level queries exclude both relationship types and separately count/load them. Archived related rows are excluded. Deleting a referenced primary may be blocked when foreign-key behavior does not cascade or null the relationship.
 
-Status and permission are separate. Status describes lifecycle (`draft`, `review`, `approved`, `published`, `archived`, `disconnected`); `perm` describes audience (`public`, `client`, `internal`).
+## When a sub-asset's file leaves the disk
+
+The pipeline never deletes a row for a file that has vanished — it marks it `disconnected`, so
+ratings, comments, approvals and download history survive an unmounted drive or a folder being
+reorganised. Put the file back and the next sync reconnects it: rows are matched on
+`(stable_id, child_id)`, and `status` is one of the few columns the pipeline still writes on update.
+
+For a **top-level** asset that works out fine — it shows up under the Disconnected status filter.
+For a **child or a variant** it did not, and the reason is worth recording, because each piece of it
+was individually correct:
+
+- the grid filters out anything with a `parent_id` or `variant_of`, because a gallery is one
+  deliverable and a rendition set is one asset;
+- the parent's detail filtered out anything `disconnected`, so a removed image was not offered as a
+  deliverable;
+- the Disconnected status filter still applies the top-level restriction, so it could not show one
+  either;
+- the sidebar's disconnected count is derived from the top-level list, so the bulk-purge button it
+  gates never appeared.
+
+Net effect: the row was unreachable in the entire portal while still holding an R2 object and, for a
+video, billed Stream storage. Staging had twelve such rows before this was found — eleven variants
+and one video.
+
+Staff now fetch them explicitly (`fetchChildAssets(id, { includeDisconnected: true })`) and the
+detail view shows them in a **Disconnected** section of its own, labelled by kind, with a per-item
+Remove. They are deliberately NOT merged back into the files grid, the carousel or the variant
+picker: a removed file is a loose end, not something to browse. Removing one releases its Stream
+video first — the row is the only record of which video was whose, so deleting it first strands the
+video permanently.
+
+There is no "reconnect" button, and there should not be: only the file returning to the folder can
+truthfully reconnect a row. A button that flipped `status` would produce a published asset with no
+file behind it, which the next sync would undo.
+
+Status and permission are separate. Status describes lifecycle (`draft`, `review`, `approved`, `published`, `archived`, `disconnected`); `perm` describes audience (`public`, `guest`, `client`, `internal`).
+
+Neither alone decides access. `effective_level` is a stored generated column combining them —
+`(status in ('approved','published')) ? perm : 'internal'` — so a `public` asset still in `draft` is
+staff-only. It is what the R2 object key encodes and what the delivery Worker authorizes against; see
+[Access levels and gated delivery](/cloud-storage/access-levels).
+
+## Video columns
+
+Four columns, all null for anything that is not a video. A video's master stays in R2 (that is what
+`download_url` points at); Cloudflare Stream carries playback and stills alongside it.
+
+| Column | Meaning |
+|---|---|
+| `stream_uid` | Cloudflare video id, unique — one video per asset row |
+| `stream_status` | Stream's encoding state, verbatim. Only `ready` means its delivery URLs resolve |
+| `stream_source_hash` | sha256 of the master it was encoded from, so a version bump is noticed |
+| `stream_duration` | Length in seconds, known only once encoding finishes |
+
+`stream_uid` alone cannot say whether a video is playable: during an encode the uid exists and every
+URL built from it 404s. See [Video on Cloudflare Stream](/cloud-storage/video).

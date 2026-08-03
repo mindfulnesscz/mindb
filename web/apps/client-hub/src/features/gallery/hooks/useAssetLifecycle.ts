@@ -17,7 +17,8 @@
 
 import { useEffect, useState } from 'react'
 import type { Asset } from '@dc-hub/asset-library'
-import { updateAssetStatus, updateAssetPerm, deleteAsset } from '../../../services/assetService'
+import { updateAssetStatus, updateAssetPerm, deleteAssetAndMedia } from '../../../services/assetService'
+import { StreamReleaseError } from '../../../services/streamRelease'
 import { reconcileCdnObjects } from '../../../services/cdnReconcile'
 import { reportError } from '../../../lib/reportError'
 
@@ -118,10 +119,30 @@ export function useAssetLifecycle(
     setDeleteBusy(true)
     setDeleteError(null)
     try {
-      await deleteAsset(asset.id)
+      /* Not a bare row delete: a video asset's Stream copy is billed for as long as it is held, and
+         the row is the only record of which video was whose. Losing the row first strands the video
+         permanently. See deleteAssetAndMedia. */
+      await deleteAssetAndMedia(asset)
       onStatusChange?.()
       onClose?.()
     } catch (err) {
+      /* Cloudflare unreachable is worth a second question rather than a dead end — refusing outright
+         turns an outage into a record that can never be removed. */
+      if (err instanceof StreamReleaseError && window.confirm(
+        `${err.message}\n\nDelete the asset anyway? The video will keep costing Stream storage until `
+        + 'it is deleted from the Cloudflare dashboard by hand.',
+      )) {
+        try {
+          await deleteAssetAndMedia(asset, { force: true })
+          onStatusChange?.()
+          onClose?.()
+          return
+        } catch (forced) {
+          setDeleteError(forced instanceof Error ? forced.message : 'Failed to delete asset')
+          setDeleteBusy(false)
+          return
+        }
+      }
       setDeleteError(err instanceof Error ? err.message : 'Failed to delete asset')
       setDeleteBusy(false)
     }
