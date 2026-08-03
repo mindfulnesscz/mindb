@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
+    "//dev:local": "The Worker runs locally (its /auth route has to reach the local Supabase); only the R2 binding is remote, via `remote: true` in wrangler.jsonc. Port is pinned because the portal's VITE_CDN_GATE_URL and the cookie's scope both name it. Needs `wrangler login` and a workers.dev subdomain.",
+    "dev:local": "wrangler dev --port 8787",
     "deploy:staging": "wrangler deploy --env staging",
     "deploy:production": "wrangler deploy --env production",
     "typecheck": "tsc --noEmit",
