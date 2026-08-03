@@ -36,7 +36,7 @@ There is intentionally no root dependency tree. `npm run setup` runs `npm ci` in
 cp web/apps/client-hub/.env.local.example web/apps/client-hub/.env.local
 # VITE_SUPABASE_URL=http://127.0.0.1:54321
 # VITE_SUPABASE_ANON_KEY=<local anon from supabase status>
-# VITE_CDN_GATE_URL=http://localhost:8787
+# VITE_CDN_GATE_URL=http://localhost:8623
 npm run db:start
 npm run db:reset
 ```
@@ -51,12 +51,12 @@ Never mix local Supabase with a shared R2 bucket for pipeline work.
 
 Both work locally, and neither did before — not because of a design limit, but because four things were never wired up. If gated thumbnails are blank or video says "not provisioned", check these in order:
 
-1. **`supabase/functions/.env`** needs `R2_GATED_BUCKET=dc-hub-gated-dev`, `R2_GATED_DOMAIN=http://localhost:8787` and `CF_STREAM_TOKEN`. Without the first two, `r2-grant` hands the desktop no gated tier and the pipeline refuses to publish; without the third, `stream-token` and `stream-upload` answer 503 `Video not provisioned` — which reads like "this asset has no video".
+1. **`supabase/functions/.env`** needs `R2_GATED_BUCKET=dc-hub-gated-dev`, `R2_GATED_DOMAIN=http://localhost:8623` and `CF_STREAM_TOKEN`. Without the first two, `r2-grant` hands the desktop no gated tier and the pipeline refuses to publish; without the third, `stream-token` and `stream-upload` answer 503 `Video not provisioned` — which reads like "this asset has no video".
 2. **The local edge runtime must have been started after the functions were added.** `cdn-reconcile`, `stream-token` and `stream-upload` answer `404 Function not found` if `supabase start` predates them. Restart the stack.
 3. **`VITE_CDN_GATE_URL`** must be set, or the portal treats no URL as gated and never requests a cookie — the failure is silent by design.
 4. **The gate must be running.** `npm run dev` starts it; `npm run dev:gate` alone.
 
-Why a localhost cookie works at all: the gate's `COOKIE_DOMAIN` is a per-environment var, `localhost` for a local run, and cookies ignore the **port** when deciding same-site — so a cookie set by the gate on `:8787` rides along with an `<img>` on the portal's `:5173`. An ephemeral `*.vercel.app` preview genuinely cannot do this, because a cookie scoped to the real domain is never sent there.
+Why a localhost cookie works at all: the gate's `COOKIE_DOMAIN` is a per-environment var, `localhost` for a local run, and cookies ignore the **port** when deciding same-site — so a cookie set by the gate on `:8623` rides along with an `<img>` on the portal's `:5173`. An ephemeral `*.vercel.app` preview genuinely cannot do this, because a cookie scoped to the real domain is never sent there.
 
 The gate's R2 binding is `remote: true` — the Worker runs locally (its `/auth` route has to reach the local Supabase) while the bucket is the real one. Simulation is not an option: the pipeline uploads through the R2 S3 API, so bytes always land in a real bucket, and a simulated binding would authorize every request correctly and then 404. That needs `wrangler login` and a workers.dev subdomain on the account, so `npm run dev` treats the gate as **optional** — if it cannot start, the other apps keep running and the portal degrades to no gated delivery.
 
@@ -71,9 +71,9 @@ npm run dev
 | `desktop` | Tauri | native window; Vite `localhost:1420` |
 | `web` | client-hub | normally `localhost:5173` (default `.env.local`) |
 | `docs` | Nextra | `localhost:3001` |
-| `gate` | cdn-gate Worker | `localhost:8787` — **optional**, see above |
+| `gate` | cdn-gate Worker | `localhost:8623` — **optional**, see above |
 
-Focused starts: `npm run dev:desktop`, `npm run dev:web`, `npm run dev:web:staging`, `npm run dev:docs`, `npm run dev:gate`. Port `7623` must be free for Dropbox/Google OAuth and desktop magic-link callbacks; `8787` for the gate.
+Focused starts: `npm run dev:desktop`, `npm run dev:web`, `npm run dev:web:staging`, `npm run dev:docs`, `npm run dev:gate`. Port `7623` must be free for Dropbox/Google OAuth and desktop magic-link callbacks; `8623` for the gate.
 
 ## 5. Choose the correct change boundary
 

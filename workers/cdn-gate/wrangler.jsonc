@@ -15,7 +15,7 @@
      A local run has no disruptcollective.com to scope a cookie to, so it uses `localhost`.
      Browsers treat localhost as a secure context, so the Secure attribute still works over http.
      Cookies also ignore the PORT when deciding same-site, which is the whole reason this works: a
-     cookie set by the gate on :8787 is sent with an <img> on the portal's :5173.
+     cookie set by the gate on :8623 is sent with an <img> on the portal's :5173.
 
      The R2 binding is REMOTE (see below) rather than simulated, so a local run serves the same
      bytes the pipeline uploaded. That is the difference between local dev being a real environment

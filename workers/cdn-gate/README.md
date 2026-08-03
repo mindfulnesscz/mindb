@@ -87,7 +87,7 @@ Manual platform steps Wrangler cannot do:
 ```bash
 npx vitest run workers/cdn-gate              # from the repo root
 cp workers/cdn-gate/.dev.vars.example workers/cdn-gate/.dev.vars
-npm --prefix workers/cdn-gate run dev        # wrangler dev on :8787, R2 simulated locally
+npm --prefix workers/cdn-gate run dev        # wrangler dev on :8623, R2 simulated locally
 ```
 
 `authz.ts` and `token.ts` are I/O-free by design, so the security matrix — every level against every
@@ -110,13 +110,13 @@ npx wrangler r2 object put \
   dc-hub-gated-dev/internal/00000000-0000-0000-0000-000000000001/probe.txt \
   --file ./probe.txt --content-type text/plain --local
 
-curl -i localhost:8787/internal/00000000-0000-0000-0000-000000000001/probe.txt   # 403
-curl -i -X POST localhost:8787/auth -H "Authorization: Bearer $TOKEN"            # 200 + Set-Cookie
+curl -i localhost:8623/internal/00000000-0000-0000-0000-000000000001/probe.txt   # 403
+curl -i -X POST localhost:8623/auth -H "Authorization: Bearer $TOKEN"            # 200 + Set-Cookie
 ```
 
-`COOKIE_DOMAIN` is `localhost` locally, and `localhost:5173` (portal) and `localhost:8787` (this
+`COOKIE_DOMAIN` is `localhost` locally, and `localhost:5173` (portal) and `localhost:8623` (this
 Worker) are **same-site** — ports do not affect SameSite — so the cookie really is sent on `<img>`
-requests in a local browser. Set `VITE_CDN_GATE_URL=http://localhost:8787` in
+requests in a local browser. Set `VITE_CDN_GATE_URL=http://localhost:8623` in
 `web/apps/client-hub/.env.local` to exercise the portal against it.
 
 ### What local dev cannot tell you
