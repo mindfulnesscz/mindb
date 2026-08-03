@@ -26,7 +26,7 @@ npm run test:e2e                     # needs the local Supabase stack + dev serv
 | 1 | URL state primitives (`filterUrl.ts`, `useFilterParams`) | ✅ done |
 | 2 | Filters in the URL | ✅ done |
 | 3 | `/:slug/a/:assetId` detail route | ✅ done |
-| 4 | `focus` / `lb` params | ⬜ not started |
+| 4 | `focus` / `lb` params | ✅ done |
 | 5 | TanStack Query | ⬜ not started |
 | 6 | `/share/:id` becomes real | ⬜ not started |
 
@@ -250,6 +250,71 @@ paragraph to read.**
 - `ClientPortalPage` does not refetch the client when the drawer opens (same component type at the
   same route depth reconciles). Confirmed by the spec's static analysis and consistent with the
   tests, which would otherwise flicker the gate.
+
+---
+
+## Phase 4 — drawer interactions write the URL ✅
+
+Phase 4a (URL → state) landed with Phase 3. This is 4b: the variant picker, the carousel and the
+lightbox write back.
+
+| File | What |
+|---|---|
+| `hooks/useAssetChildren.ts` | `carouselIdx` / `selectedVariantId` / `lightboxIndex` removed; fetch effect no longer keyed on focus |
+| `hooks/useDetailFocus.ts` | new — focus + lightbox, controlled or local |
+| `AssetDetail.tsx` | derives all three from the focused **id**; new `onDetailStateChange` prop |
+| `panels/AssetPreviewPanel.tsx` | reports the item acted on instead of setting an index |
+| `GalleryView.tsx` | `setDetailState` — the push/replace rule |
+| `GalleryView.detailState.test.tsx` | new — 17 tests, the real component tree |
+
+469 tests. `AssetDetail`'s own characterization suite passes unedited, which is the evidence that
+gutting `useAssetChildren` did not change what the detail loads or renders.
+
+### Why the fetch effect had to be split
+
+`useAssetChildren`'s single effect both fetched and resolved focus, so `focusAssetId` was one of its
+dependencies. Phase 4b makes every carousel arrow rewrite `focus` — which would have re-run
+`fetchChildAssets` **and** `fetchVariants` on every arrow press. Deriving the three positions instead
+of storing them is what removes `focusAssetId` from the fetch's dep list. The hook's header comment
+now records this; the live-vs-stale explanation is untouched.
+
+`childView` stays in the hook — it is the one value with no URL representation (which way you are
+looking at a set of files is not worth an entry in a shared link). Its effect only ever **promotes**
+to `carousel`, never demotes: `children` gets a new identity on every refetch, so a symmetric effect
+would silently undo the viewer's Grid choice whenever anything else in the drawer reloaded.
+
+### ONE callback, not two
+
+`onDetailStateChange(next: DetailState)` carries focus and lightbox together. Two callbacks would mean
+two `navigate()` calls in one handler, each reading the pre-navigation URL — the second silently
+winning. That is the same trap `useFilterParams` documents, and a whole-value update cannot express
+it. `writeDetailParams` is whole-value for the same reason: with merge-by-default, "close the
+lightbox" would be the one operation that could not be said.
+
+### Controlled or local
+
+`useDetailFocus` is controlled when `onDetailStateChange` is supplied and local otherwise. Both mounts
+are real: the portal drawer keeps the state in the URL, and `/share/:id` has no route of its own to
+write to. Without the local fallback the share page's lightbox would open and snap shut on the next
+render, reading from a prop that never changed. **Phase 6 depends on this.**
+
+### The push/replace rule
+
+```ts
+const opensLightbox = next.lightbox && !lightbox
+navigate({ … }, { replace: !opensLightbox })
+```
+
+Push on the false→true lightbox transition only. Back then closes the lightbox and leaves the drawer
+up. Everything else replaces — variant selection and carousel stepping are refinements, and scrubbing
+40 frames must not bury the grid 40 entries deep. Closing the lightbox replaces too, so the
+open/close pair can never grow history on its own.
+
+### Small URL-cleanliness decisions
+
+- Selecting the primary variant clears `focus` rather than setting `focus=<the asset itself>`.
+- `?lb=1` with no `focus` opens on the first item that has media — a `focus` pointing at something
+  with no media of its own does not leave the lightbox shut.
 
 ---
 

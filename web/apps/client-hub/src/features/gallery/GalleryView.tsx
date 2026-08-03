@@ -20,7 +20,7 @@ import { AssetCard } from './AssetCard'
 import {
   CardSkeleton, EmptyState, DetailSkeleton, DetailNotAvailable, type EmptyReason,
 } from './GalleryStates'
-import { readDetailParams, writeDetailParams } from './detailUrl'
+import { readDetailParams, writeDetailParams, type DetailState } from './detailUrl'
 import { useOpenAsset } from './hooks/useOpenAsset'
 import { FiltersRail } from './FiltersRail'
 import { useStreamMedia } from './hooks/useStreamMedia'
@@ -159,6 +159,22 @@ export default function GalleryView() {
     navigate({ pathname: `/${slug}`, search: writeDetailParams(location.search, {}) })
   }
 
+  /**
+   * The drawer's own state — which sibling is focused, whether the lightbox is up — written back.
+   *
+   * PUSH only when the lightbox OPENS, so Back closes the lightbox and leaves the drawer up. Every
+   * other write replaces: selecting a variant and stepping the carousel are refinements, and a
+   * 40-frame scrub that pushed would bury the grid 40 entries deep. Closing the lightbox replaces
+   * too, so the pair can never grow history on its own.
+   */
+  function setDetailState(next: DetailState) {
+    const opensLightbox = next.lightbox && !lightbox
+    navigate(
+      { pathname: location.pathname, search: writeDetailParams(location.search, next) },
+      { replace: !opensLightbox },
+    )
+  }
+
   function emptyReason(): EmptyReason {
     if (hasFiltersApplied) return 'filtered'
     if (role === 'public') return 'no-access'
@@ -253,6 +269,7 @@ export default function GalleryView() {
           activeFacets={{ entities: filters.entities, formats: filters.formats, angles: filters.angles }}
           focusAssetId={open.focusId}
           autoOpenLightbox={lightbox}
+          onDetailStateChange={setDetailState}
         />
       )}
       {open.loading   && <DetailSkeleton />}
