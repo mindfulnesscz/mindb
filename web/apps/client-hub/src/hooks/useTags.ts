@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { supabase, isConfigured } from '../lib/supabase'
 
 export interface TagGroup {
@@ -54,35 +54,42 @@ function buildGroups(rows: TagRow[], dim: Dim): TagGroup[] {
   return groups
 }
 
+/* Module-level, so "no tags yet" is always the SAME object. `useTags`'s value feeds the rail's
+   option pool; a fresh empty on every render would give the rail a new prop identity each time. */
+const EMPTY: TagsByDimension = {
+  entity: [], format: [], angle: [],
+  groups: { entity: [], format: [], angle: [] },
+}
+
+/** A client's tag vocabulary barely moves, and it is the same for every viewer of that client. */
+const TAGS_STALE_MS = 5 * 60_000
+
 export function useTags(clientId: string | undefined): TagsByDimension {
-  const empty: TagsByDimension = {
-    entity: [], format: [], angle: [],
-    groups: { entity: [], format: [], angle: [] },
-  }
-  const [tags, setTags] = useState<TagsByDimension>(empty)
+  const query = useQuery({
+    queryKey: ['tags', clientId],
+    // Not keyed on role: RLS decides what comes back, and a tag vocabulary is client-wide.
+    enabled: !!clientId && !!supabase && isConfigured(),
+    staleTime: TAGS_STALE_MS,
+    queryFn: async (): Promise<TagsByDimension> => {
+      const { data } = await supabase!
+        .from('tags' as never)
+        .select('id, name, dimension, parent_id')
+        .eq('client_id', clientId!)
+        .order('sort_order')
+      const rows = (data ?? []) as TagRow[]
 
-  useEffect(() => {
-    if (!clientId || !supabase || !isConfigured()) return
-    supabase
-      .from('tags' as never)
-      .select('id, name, dimension, parent_id')
-      .eq('client_id', clientId)
-      .order('sort_order')
-      .then(({ data }) => {
-        const rows = (data ?? []) as TagRow[]
+      const entityGroups = buildGroups(rows, 'entity')
+      const formatGroups = buildGroups(rows, 'format')
+      const angleGroups  = buildGroups(rows, 'angle')
 
-        const entityGroups = buildGroups(rows, 'entity')
-        const formatGroups = buildGroups(rows, 'format')
-        const angleGroups  = buildGroups(rows, 'angle')
+      return {
+        entity: entityGroups.flatMap(g => g.items),
+        format: formatGroups.flatMap(g => g.items),
+        angle:  angleGroups.flatMap(g => g.items),
+        groups: { entity: entityGroups, format: formatGroups, angle: angleGroups },
+      }
+    },
+  })
 
-        setTags({
-          entity: entityGroups.flatMap(g => g.items),
-          format: formatGroups.flatMap(g => g.items),
-          angle:  angleGroups.flatMap(g => g.items),
-          groups: { entity: entityGroups, format: formatGroups, angle: angleGroups },
-        })
-      })
-  }, [clientId])
-
-  return tags
+  return query.data ?? EMPTY
 }

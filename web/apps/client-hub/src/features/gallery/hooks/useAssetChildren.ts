@@ -1,10 +1,4 @@
-/* Children, variants, and which one is focused — deliberately ONE hook.
- *
- * These six pieces of state are set together by a single effect and cannot be separated without
- * making the coupling implicit: opening the detail from a hover tile has to pick the child, switch
- * to carousel view, set the carousel index, choose the variant, and possibly open the lightbox —
- * all from one decision about `focusAssetId`. Splitting that into six hooks would replace one
- * readable effect with six that must fire in the right order.
+/* Children, variants, and which of them is on screen as a grid or a carousel.
  *
  * `children` are gallery preview images (a grid); `variants` are format/size siblings sharing one
  * folder identity (a picker). They are fetched together but mean different things — see
@@ -15,26 +9,33 @@
  * and the "Files · N" count — i.e. present a removed image as a deliverable. They come back in
  * `staleChildren`/`staleVariants` instead, for the review section to label and act on, and only for
  * staff, who are the only role that fetches them at all.
+ *
+ * ── What used to be here, and why it left ─────────────────────────────────────────────────────────
+ *
+ * This hook also owned `carouselIdx`, `selectedVariantId` and `lightboxIndex`, all set by the same
+ * effect that did the fetching — one decision about `focusAssetId` picked the child, switched to
+ * carousel view, set the index, chose the variant and possibly opened the lightbox.
+ *
+ * That coupling is gone because those three are now DERIVED from `focusAssetId` and the lightbox
+ * flag, which the portal keeps in the URL. Deriving them is not a style preference: while they were
+ * state set by the fetching effect, `focusAssetId` was a dependency of that effect, so every arrow
+ * press on the carousel — each of which now rewrites `focus` — would have re-run both queries.
+ *
+ * `childView` stays, because it is the one value with no URL representation: which way you are
+ * looking at a set of files is not worth an entry in a shared link. It gets its own effect, which
+ * fetches nothing.
  */
 
 import { useCallback, useEffect, useState } from 'react'
 import type { Asset } from '@dc-hub/asset-library'
 import { fetchChildAssets, fetchVariants, deleteAssetAndMedia } from '../../../services/assetService'
 
-export function useAssetChildren(
-  asset: Asset,
-  isStaff: boolean,
-  focusAssetId?: string,
-  autoOpenLightbox?: boolean,
-) {
+export function useAssetChildren(asset: Asset, isStaff: boolean, focusAssetId?: string) {
   const [children, setChildren] = useState<Asset[]>([])
   const [variants, setVariants] = useState<Asset[]>([])
   const [staleChildren, setStaleChildren] = useState<Asset[]>([])
   const [staleVariants, setStaleVariants] = useState<Asset[]>([])
   const [childView, setChildView] = useState<'grid' | 'carousel'>('grid')
-  const [carouselIdx, setCarouselIdx] = useState(0)
-  const [selectedVariantId, setSelectedVariantId] = useState<string>(asset.id)
-  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
 
   // Load children (gallery preview images) and variants (format/size siblings)
   useEffect(() => {
@@ -49,47 +50,32 @@ export function useAssetChildren(
         fetchVariants(asset.id, opts).catch(() => [] as Asset[]),
       ]).then(([allKids, allVars]) => {
         const isStale = (a: Asset) => a.status === 'disconnected'
-        const kids = allKids.filter(a => !isStale(a))
-        const vars = allVars.filter(a => !isStale(a))
-        setChildren(kids)
-        setVariants(vars)
+        setChildren(allKids.filter(a => !isStale(a)))
+        setVariants(allVars.filter(a => !isStale(a)))
         setStaleChildren(allKids.filter(isStale))
         setStaleVariants(allVars.filter(isStale))
-        if (focusAssetId) {
-          const childIdx = kids.findIndex(c => c.id === focusAssetId)
-          if (childIdx >= 0) {
-            setChildView('carousel')
-            setCarouselIdx(childIdx)
-            setSelectedVariantId(asset.id)
-            if (autoOpenLightbox) {
-              const withSrc = kids.filter(c => c.thumbnailUrl || c.downloadUrl)
-              const lbIdx = withSrc.findIndex(c => c.id === focusAssetId)
-              if (lbIdx >= 0) setLightboxIndex(lbIdx)
-            }
-            return
-          }
-          if (vars.some(v => v.id === focusAssetId) || focusAssetId === asset.id) {
-            setSelectedVariantId(focusAssetId)
-          }
-        }
-        if (autoOpenLightbox && kids.length === 0) {
-          // Single / variant focus — open lightbox on the selected asset when it has media
-          if (asset.thumbnailUrl || asset.downloadUrl) setLightboxIndex(0)
-        }
       })
     } else {
       setChildren([])
       setVariants([])
       setStaleChildren([])
       setStaleVariants([])
-      if (autoOpenLightbox && (asset.thumbnailUrl || asset.downloadUrl)) {
-        setLightboxIndex(0)
-      }
     }
-    setCarouselIdx(0)
-    setSelectedVariantId(focusAssetId && focusAssetId !== asset.id ? focusAssetId : asset.id)
+  }, [asset.id, asset.childCount, isStaff])
 
-  }, [asset.id, asset.childCount, isStaff, focusAssetId, autoOpenLightbox])
+  /* A new asset starts in the grid, so one drawer does not inherit the last one's mode. Declared
+     BEFORE the promotion below, because effects run in order and this one has to lose the tie on the
+     render where both fire. */
+  useEffect(() => { setChildView('grid') }, [asset.id])
+
+  /* Opening on a specific gallery child means looking at that one image, so the carousel is the right
+     view — the grid would show it as one tile among twenty.
+     Only ever PROMOTES. Demoting here would fight the Grid button: `children` gets a new identity on
+     every refetch of the parent, so a symmetric effect would silently undo the viewer's choice
+     whenever anything else in the drawer reloaded. */
+  useEffect(() => {
+    if (focusAssetId && children.some(c => c.id === focusAssetId)) setChildView('carousel')
+  }, [focusAssetId, children])
 
   /**
    * Permanently remove a disconnected sub-asset.
@@ -106,7 +92,6 @@ export function useAssetChildren(
 
   return {
     children, variants, staleChildren, staleVariants, removeSubAsset,
-    childView, setChildView, carouselIdx, setCarouselIdx,
-    selectedVariantId, setSelectedVariantId, lightboxIndex, setLightboxIndex,
+    childView, setChildView,
   }
 }

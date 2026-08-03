@@ -5,6 +5,57 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [3.1.0] — 2026-08-03
+
+The portal's views are addressable. A filtered grid, an open asset, the focused frame and the
+lightbox all live in the URL, so a view can be sent to someone, survives a reload and a
+magic-link round trip, and Back does what it should.
+
+### Added
+
+- **Filter params on `/:slug`** — `?q= &latest= &status= &perm= &type= &entity= &format= &angle=`.
+  Multi-value params are **repeated** (`?entity=Sofa&entity=Chair`), never comma-joined: tag labels
+  are free text from a client's own vocabulary, and a comma inside one would otherwise split it into
+  two tags silently. Names are stable dimension **keys**, never a client's renamed
+  `dimensionLabels`, so a rename cannot break links already sent.
+- **`/:slug/a/:assetId`** — the detail drawer is a route. Cold-loads the grid and the drawer
+  together. The id may be a gallery child or a format variant, neither of which is ever a card in
+  the grid; it resolves upwards and opens the parent with that row focused, which is what makes a
+  link forwarded out of someone's lightbox work.
+- **`?focus=<uuid>` and `?lb=1`** on the detail route — the focused child or variant, and the
+  lightbox. Ids, not indices: a position would point at a different picture the moment a sibling is
+  added or disconnected. A link copied mid-scrub opens on the frame that was on screen.
+- **`filterUrl.ts`** in `@dc-hub/asset-library` — `filtersToSearchParams`, `searchParamsToFilters`,
+  `filterCacheKey`. Canonical output, tolerant input: a value outside the allowed vocabulary is
+  dropped rather than forwarded to PostgREST, which rejects the whole query on an unknown enum.
+- **`ASSET_STATUSES`, `ASSET_PERMS`, `ENTITY_TYPES`** — the three closed vocabularies as const
+  arrays, types derived from them. A parser cannot validate against a type.
+- **A real data cache** (TanStack Query), replacing a `JSON.stringify` key compared inside an
+  effect, a ref to decide whether to show a skeleton, and a counter to force refetches. The cache
+  key **is** the canonical URL string, so Back and Forward hit warm cache by construction.
+
+### Fixed
+
+- **A magic-link error no longer wipes the view it was returning to.** `ClientPortalPage`'s
+  auth-error handler stripped the query string along with the hash. Harmless while the portal had no
+  addressable state; from this release it would have discarded exactly the filtered view the
+  recipient was sent.
+- **`npm run lint` on a developer machine.** ESLint was linting bundled vendor code under
+  `supabase/.temp/` and `.wrangler/tmp/` — both gitignored, so CI stayed green while the gate failed
+  locally with ~200 errors.
+
+### Changed
+
+- A filter change no longer closes the open drawer. The open asset used to be looked up in the
+  current list, so filtering it out closed the drawer under the viewer.
+
+### Removed
+
+- `AppLayout` and `ActivityView` — imported by nothing, with nav pointing at routes that do not
+  exist. The routing work chose sibling routes over a nested `<Outlet/>` shell, which is what
+  `AppLayout` was for.
+
+
 ## [3.0.0] — 2026-07-28
 
 Folder-based stable identity is now the only identity. The shortcode-matching path that

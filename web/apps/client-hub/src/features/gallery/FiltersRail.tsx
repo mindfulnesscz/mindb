@@ -283,20 +283,30 @@ export function FiltersRail({
         className="w-full text-xs font-sans border border-border rounded-sm px-2 py-1 mb-4 bg-bg placeholder:text-text-subtle focus:outline-none focus:border-cosmos-black transition-colors"
       />
 
-      {/* Latest only */}
-      <label className="flex items-center gap-2 mb-5 cursor-pointer select-none">
-        <div
-          onClick={() => onChange({ ...filters, latestOnly: !filters.latestOnly })}
-          className={`w-9 h-5 rounded-pill relative shrink-0 transition-colors duration-base cursor-pointer ${
+      {/* Latest only.
+          A real `role="switch"` button, not a <div onClick> inside a <label>. That is what this was,
+          and the words "Latest version only" were dead to the click — a <label> only forwards a click
+          when it labels a form control, and it labelled a div. It was also unreachable by keyboard and
+          nameless to a screen reader. */}
+      <button
+        type="button"
+        role="switch"
+        aria-checked={filters.latestOnly}
+        onClick={() => onChange({ ...filters, latestOnly: !filters.latestOnly })}
+        className="flex items-center gap-2 mb-5 cursor-pointer select-none w-full text-left"
+      >
+        <span
+          aria-hidden
+          className={`w-9 h-5 rounded-pill relative shrink-0 block transition-colors duration-base ${
             filters.latestOnly ? 'bg-cosmos-black' : 'bg-gray-300'
           }`}
         >
           <span className={`absolute top-0.5 w-4 h-4 bg-clear-white rounded-pill transition-transform duration-base ${
             filters.latestOnly ? 'translate-x-4' : 'translate-x-0.5'
           }`} />
-        </div>
+        </span>
         <span className="text-sm font-sans text-cosmos-black">Latest version only</span>
-      </label>
+      </button>
 
       {/* Status */}
       <div className="mb-5">

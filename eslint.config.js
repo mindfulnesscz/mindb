@@ -22,6 +22,12 @@ export default tseslint.config(
       '**/.next/**',
       '**/out/**',
       '**/target/**',
+      // Local tool scratch space. Both are gitignored, so they exist only on a machine that has run
+      // `supabase start` or `wrangler dev` — which made `npm run lint` fail there with ~200 errors
+      // in bundled vendor code while CI stayed green. A gate that is red only on developer machines
+      // is a gate people learn to skip.
+      '**/.temp/**',
+      '**/.wrangler/**',
       '**/*.d.ts',
       'packages/database/src/database.types.ts',
       'web/apps/client-hub/src/lib/database.types.ts',

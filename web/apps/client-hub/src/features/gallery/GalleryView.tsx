@@ -1,31 +1,50 @@
 /* Gallery view — the portal's main screen.
  *
- * Owns the data (useAssets, useTags) and the filter state; presentation lives in ./AssetCard,
- * ./FiltersRail and ./GalleryStates.
+ * Owns the data (useAssets, useTags); presentation lives in ./AssetCard, ./FiltersRail and
+ * ./GalleryStates.
+ *
+ * The filter state is NOT owned here — it lives in the query string, via useFilterParams. A filtered
+ * view is therefore an address: it can be sent to someone, it survives a reload and a magic-link
+ * round trip, and Back leaves the portal instead of doing nothing.
  */
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
+import { useNavigate, useLocation, useParams } from 'react-router-dom'
 import { useRole } from '../../context/RoleContext'
-import { getDefaultFilters, type FilterState, type Asset } from '@dc-hub/asset-library'
+import { getDefaultFilters, type Asset } from '@dc-hub/asset-library'
+import { useFilterParams } from '../../hooks/useFilterParams'
 import { useAssets } from '../../hooks/useAssets'
 import { useTags, type TagsByDimension } from '../../hooks/useTags'
-import { fetchAsset } from '../../services/assetService'
 import AssetDetail from './AssetDetail'
 import { AssetCard } from './AssetCard'
-import { CardSkeleton, EmptyState, type EmptyReason } from './GalleryStates'
+import {
+  CardSkeleton, EmptyState, DetailSkeleton, DetailNotAvailable, type EmptyReason,
+} from './GalleryStates'
+import { readDetailParams, writeDetailParams, type DetailState } from './detailUrl'
+import { useOpenAsset } from './hooks/useOpenAsset'
 import { FiltersRail } from './FiltersRail'
 import { useStreamMedia } from './hooks/useStreamMedia'
 import { STATUS_KEYS_STAFF, STATUS_KEYS_CLIENT } from './statusLabels'
 import { DEFAULT_DIMENSION_LABELS } from '@dc-hub/database'
 
+/** How long typing has to stop before the search reaches the URL. */
+const SEARCH_DEBOUNCE_MS = 250
+
 export default function GalleryView() {
   const { role, activeClient } = useRole()
-  const [filters, setFilters] = useState<FilterState>(getDefaultFilters())
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [focusSiblingId, setFocusSiblingId] = useState<string | null>(null)
-  const [openLightboxOnFocus, setOpenLightboxOnFocus] = useState(false)
-  const [resolvedDetail, setResolvedDetail] = useState<Asset | null>(null)
+  /* Filters live in the query string, not in state: a filtered view is a place you can send someone,
+     and a reload or a magic-link round trip returns to it. Same [value, setter] shape as the
+     useState this replaces, including the updater form. */
+  const [filters, setFilters] = useFilterParams()
   const [railVisible, setRailVisible] = useState(true)
+
+  /* Which asset is open, and what is focused inside it, come from the URL — the path segment and the
+     `focus`/`lb` params. `slug` types as optional but is always defined at runtime: GalleryView is
+     rendered only from ClientPortalPage, which is only reachable on a `:slug` route. */
+  const { slug, assetId } = useParams<{ slug: string; assetId?: string }>()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const { focusId: focusParam, lightbox } = readDetailParams(location.search)
 
   const isStaff = role === 'admin' || role === 'editor' || role === 'super_admin'
   const statusKeys = isStaff ? STATUS_KEYS_STAFF : STATUS_KEYS_CLIENT
@@ -33,7 +52,26 @@ export default function GalleryView() {
 
   const clientId = activeClient?.id
 
-  // Stable empty filters — used only for the options pool, never changes → fetches once per client
+  /* ── The search box ───────────────────────────────────────────────────────────────────────────
+     Controlled by local state and pushed to the URL on the TRAILING EDGE, so typing writes one
+     history-replace per pause rather than one per keystroke. It is not only about history noise:
+     writing per keystroke re-parses the URL into a new FilterState mid-word, the input re-renders
+     from it, and the caret jumps. The draft is adopted back whenever the URL's search changes from
+     anywhere else — a cold load, Back, or Clear. */
+  const [searchDraft, setSearchDraft] = useState(filters.search)
+  useEffect(() => { setSearchDraft(filters.search) }, [filters.search])
+  useEffect(() => {
+    if (searchDraft === filters.search) return
+    const t = window.setTimeout(
+      () => setFilters(f => ({ ...f, search: searchDraft })),
+      SEARCH_DEBOUNCE_MS,
+    )
+    return () => window.clearTimeout(t)
+  }, [searchDraft, filters.search, setFilters])
+
+  /* Stable empty filters — the OPTION POOL, not a view, so it deliberately stays out of the URL.
+     Never changes → fetches once per client, and the rail keeps offering every tag even when a
+     filter is applied. */
   const stableFilters = useMemo(() => getDefaultFilters(), [])
   const { assets: optionPool } = useAssets(stableFilters, role, clientId)
 
@@ -93,44 +131,48 @@ export default function GalleryView() {
     filters.search?.trim() !== '' ||
     filters.latestOnly
 
-  const selectedAsset = selectedId
-    ? assets.find(a => a.id === selectedId) ?? resolvedDetail
-    : null
+  const open = useOpenAsset(assetId, assets, focusParam)
 
-  /** Open a top-level card, or a hover-tile sibling (child/variant) focused inside the parent detail. */
-  async function openAsset(primary: Asset, focusId?: string, opts?: { lightbox?: boolean }) {
-    const wantLightbox = !!opts?.lightbox
-    const targetId = focusId && focusId !== primary.id ? focusId : primary.id
-    if (targetId === primary.id) {
-      setFocusSiblingId(null)
-      setOpenLightboxOnFocus(wantLightbox)
-      setResolvedDetail(null)
-      setSelectedId(primary.id)
-      return
-    }
-    // Sibling may not be in the top-level list — resolve parent via DB, then focus.
-    const row = await fetchAsset(targetId)
-    if (!row) {
-      setFocusSiblingId(null)
-      setOpenLightboxOnFocus(false)
-      setResolvedDetail(null)
-      setSelectedId(primary.id)
-      return
-    }
-    const parentId = row.parentId || row.variantOf || primary.id
-    const parentInList = assets.find(a => a.id === parentId)
-    if (parentInList) {
-      setResolvedDetail(null)
-      setFocusSiblingId(targetId)
-      setOpenLightboxOnFocus(wantLightbox)
-      setSelectedId(parentInList.id)
-      return
-    }
-    const parent = parentId === primary.id ? primary : await fetchAsset(parentId)
-    setResolvedDetail(parent ?? primary)
-    setFocusSiblingId(targetId)
-    setOpenLightboxOnFocus(wantLightbox)
-    setSelectedId(parent?.id ?? primary.id)
+  /**
+   * Open a top-level card, or a hover-tile sibling focused inside its parent's detail.
+   *
+   * PUSHES. Opening an asset is a new place, and Back closing the drawer is what a
+   * modal-over-a-list is expected to do. Filtering, by contrast, replaces.
+   *
+   * `location.search` is carried forward, so opening an asset cannot drop the filters — without it,
+   * Back would return to an unfiltered grid.
+   *
+   * No fetch here any more. The card's own id goes in the path and the sibling's in `focus`; every
+   * bit of resolution — including a path id that turns out to be a child — happens in useOpenAsset,
+   * where it also runs for a cold load.
+   */
+  function openAsset(primary: Asset, focusId?: string, opts?: { lightbox?: boolean }) {
+    const focus = focusId && focusId !== primary.id ? focusId : undefined
+    navigate({
+      pathname: `/${slug}/a/${primary.id}`,
+      search: writeDetailParams(location.search, { focusId: focus, lightbox: !!opts?.lightbox }),
+    })
+  }
+
+  /** Back to the grid, filters intact, `focus`/`lb` dropped. */
+  function closeAsset() {
+    navigate({ pathname: `/${slug}`, search: writeDetailParams(location.search, {}) })
+  }
+
+  /**
+   * The drawer's own state — which sibling is focused, whether the lightbox is up — written back.
+   *
+   * PUSH only when the lightbox OPENS, so Back closes the lightbox and leaves the drawer up. Every
+   * other write replaces: selecting a variant and stepping the carousel are refinements, and a
+   * 40-frame scrub that pushed would bury the grid 40 entries deep. Closing the lightbox replaces
+   * too, so the pair can never grow history on its own.
+   */
+  function setDetailState(next: DetailState) {
+    const opensLightbox = next.lightbox && !lightbox
+    navigate(
+      { pathname: location.pathname, search: writeDetailParams(location.search, next) },
+      { replace: !opensLightbox },
+    )
   }
 
   function emptyReason(): EmptyReason {
@@ -172,8 +214,8 @@ export default function GalleryView() {
           <input
             type="search"
             placeholder="Search assets…"
-            value={filters.search}
-            onChange={e => setFilters(f => ({ ...f, search: e.target.value }))}
+            value={searchDraft}
+            onChange={e => setSearchDraft(e.target.value)}
             className="flex-1 text-sm font-sans border border-border rounded-sm px-3 py-1.5 bg-bg placeholder:text-text-subtle focus:outline-none focus:border-cosmos-black transition-colors"
           />
           <span className="text-[11px] font-sans text-text-muted whitespace-nowrap">
@@ -205,7 +247,7 @@ export default function GalleryView() {
                   key={asset.id}
                   asset={asset}
                   previewFrames={frames}
-                  onOpen={(focusId, opts) => { void openAsset(asset, focusId, opts) }}
+                  onOpen={(focusId, opts) => openAsset(asset, focusId, opts)}
                   role={role}
                   accent={accent}
                 />
@@ -215,23 +257,23 @@ export default function GalleryView() {
         </div>
       </div>
 
-      {/* Detail drawer */}
-      {selectedAsset && (
+      {/* Detail drawer. Three states, because it is reachable by address: the asset is in hand
+          (a click, or a link into the current grid), it is still being resolved, or the link points
+          at something this viewer cannot see. An empty drawer is not one of them. */}
+      {open.asset && (
         <AssetDetail
-          asset={selectedAsset}
-          onClose={() => {
-            setSelectedId(null)
-            setFocusSiblingId(null)
-            setOpenLightboxOnFocus(false)
-            setResolvedDetail(null)
-          }}
+          asset={open.asset}
+          onClose={closeAsset}
           mount="drawer"
           onStatusChange={() => reload()}
           activeFacets={{ entities: filters.entities, formats: filters.formats, angles: filters.angles }}
-          focusAssetId={focusSiblingId ?? undefined}
-          autoOpenLightbox={openLightboxOnFocus}
+          focusAssetId={open.focusId}
+          autoOpenLightbox={lightbox}
+          onDetailStateChange={setDetailState}
         />
       )}
+      {open.loading   && <DetailSkeleton />}
+      {open.notFound  && <DetailNotAvailable onClose={closeAsset} />}
     </div>
   )
 }

@@ -1,7 +1,39 @@
 # Web portal architecture
 
-The web application is React/Vite with React Router and a shared asset-library package. Routes are `/` for staff landing, `/settings`, `/share/:id`, and `/:slug` for client portals. Supabase provides authentication and all persistent data.
+The web application is React/Vite with React Router and a shared asset-library package. Supabase provides authentication and all persistent data.
+
+```
+/                          admin landing / staff sign-in
+/settings                  Supabase connection config
+/share/:id                 single asset, RLS-gated, no client chrome
+/:slug                     client portal gallery
+  ?q= &latest= &status= &perm= &type= &entity= &format= &angle=
+/:slug/a/:assetId          gallery + detail drawer
+  ?focus=<uuid> &lb=1  (plus all filter params, carried through)
+```
+
+`:slug` is a root catch-all — declare any new single-segment top-level route above it in `App.tsx`.
+Both portal routes render the same `ClientPortalPage`, as siblings rather than as a nested route with
+an `<Outlet/>`: that page owns the client fetch and both auth gates, which must run identically on
+each path, and nesting would put the detail drawer outside the component that owns the grid it
+overlays. The full parameter table is in [Client Portals](/portals).
+
+## State lives in the URL, data lives in a cache
+
+Filters, the open asset, the focused child or variant, and the lightbox are all derived from the
+address — not from `useState`. So a view is something you can send to someone, and it survives a
+reload and a magic-link round trip. `useFilterParams` binds `FilterState` to the query string;
+`filterUrl.ts` in `@dc-hub/asset-library` does the encoding and is pure, so it is tested without a
+browser.
+
+`filtersToSearchParams` produces a **canonical** string — fixed key order, arrays sorted and
+de-duplicated. TanStack Query keys the asset cache on that same string, so the address bar and the
+cache key are one value and Back and Forward hit warm cache by construction. One module-level
+`QueryClient` lives outside the router, with `refetchOnWindowFocus` off: a portal is a browsing
+surface, not a dashboard.
+
+## Modes, roles, services
 
 When no Supabase configuration exists, the application uses mock clients and a switchable demo role. In configured mode, `AuthProvider` restores the Supabase session and loads `profiles`; `RoleProvider` derives role/user and optionally loads the profile’s assigned client. A portal slug can explicitly set the active client for staff navigation.
 
-Service modules isolate PostgREST calls for assets, clients, comments, ratings, tags, users, and events. Client-side permission helpers control UI behavior, but database RLS must remain the authoritative security layer because browser code can be bypassed.
+Service modules isolate PostgREST calls for assets, clients, comments, ratings, tags, users, and events. Client-side permission helpers control UI behavior, but database RLS must remain the authoritative security layer because browser code can be bypassed. Nothing in the URL is ever authorization: a per-user token in a query string would fragment the edge cache to near zero and defeat `?v=<hash>` immutability, and it is not what decides access in any case.

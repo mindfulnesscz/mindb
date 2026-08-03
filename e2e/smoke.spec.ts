@@ -75,3 +75,111 @@ test.describe('signed in', () => {
     await expect(page.getByText(FIXTURE_ASSET_NAME).first()).toBeVisible();
   });
 });
+
+/* Addressable views — the one thing that cannot be verified anywhere but here.
+ *
+ * The unit suites drive a MemoryRouter, which has no address bar, no reload and no browser history. So
+ * `page.url()`, `page.reload()` and `goBack()` are exactly what these five add: they answer "is the URL
+ * really the state", which is a property of the browser, not of the component.
+ *
+ * Filters here are STATUS and LATEST, not tags. Both are always present in the rail — the status keys
+ * are a fixed list and the toggle is unconditional — whereas the tag sections only render when the
+ * client has a vocabulary, which would make the test depend on fixture data it does not own.
+ *
+ * The URL is asserted against `page.url()`, never a router value: navigating to an empty query can
+ * leave a `"?"` in router state while the address bar shows a clean path, and the address bar is the
+ * thing that gets copied into an email.
+ */
+test.describe('views are addressable', () => {
+  /** A status checkbox in the filters rail, by its visible label. */
+  const statusBox = (page: Page, label: string) =>
+    page.locator('aside').first().locator('label', { hasText: label }).getByRole('checkbox');
+
+  /** Status + latest applied, and the URL that resulted. */
+  async function applyTwoFilters(page: Page) {
+    await signIn(page);
+    await page.goto(`/${FIXTURE_SLUG}`);
+    await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('combobox', { name: 'Switch client' })
+      .selectOption({ label: 'E2E Smoke (safe to delete)' });
+    await expect(page.getByText(FIXTURE_ASSET_NAME).first()).toBeVisible({ timeout: 15_000 });
+
+    await statusBox(page, 'Published').check();
+    await expect(page).toHaveURL(/status=published/);
+    await page.getByRole('switch', { name: 'Latest version only' }).click();
+    await expect(page).toHaveURL(/latest=1/);
+
+    return page.url();
+  }
+
+  test('a filtered view survives a reload', async ({ page }) => {
+    const filtered = await applyTwoFilters(page);
+    expect(filtered).toContain('status=published');
+    expect(filtered).toContain('latest=1');
+
+    await page.reload();
+
+    await expect(page.getByText(FIXTURE_ASSET_NAME).first()).toBeVisible({ timeout: 15_000 });
+    await expect(statusBox(page, 'Published')).toBeChecked();
+    expect(page.url()).toBe(filtered);
+  });
+
+  test('opening an asset keeps the filters, and the drawer survives a reload', async ({ page }) => {
+    await applyTwoFilters(page);
+
+    await page.getByText(FIXTURE_ASSET_NAME).first().click();
+
+    await expect(page).toHaveURL(/\/a\//);
+    expect(page.url()).toContain('status=published');
+    expect(page.url()).toContain('latest=1');
+
+    // The whole point of the route: the drawer comes back on a cold load of the same address.
+    await page.reload();
+    await expect(page.getByRole('button', { name: 'Close' })).toBeVisible({ timeout: 15_000 });
+  });
+
+  test('Back closes the drawer and leaves the filtered grid', async ({ page }) => {
+    await applyTwoFilters(page);
+    await page.getByText(FIXTURE_ASSET_NAME).first().click();
+    await expect(page.getByRole('button', { name: 'Close' })).toBeVisible();
+
+    await page.goBack();
+
+    await expect(page.getByRole('button', { name: 'Close' })).toBeHidden();
+    expect(page.url()).toContain('status=published');
+    await expect(statusBox(page, 'Published')).toBeChecked();
+  });
+
+  test('Back closes the lightbox and leaves the drawer open', async ({ page }) => {
+    await applyTwoFilters(page);
+    await page.getByText(FIXTURE_ASSET_NAME).first().click();
+    await expect(page.getByRole('button', { name: 'Close' })).toBeVisible();
+
+    // The asset has no children, so the preview is its own thumbnail — one click into the lightbox.
+    await page.locator('button.cursor-zoom-in').first().click();
+    await expect(page).toHaveURL(/lb=1/);
+
+    await page.goBack();
+
+    await expect(page).not.toHaveURL(/lb=1/);
+    // Back closed the lightbox, not the asset.
+    await expect(page.getByRole('button', { name: 'Close' })).toBeVisible();
+  });
+
+  test('an asset URL sent to someone with no session hits the sign-in gate', async ({ page, browser }) => {
+    await applyTwoFilters(page);
+    await page.getByText(FIXTURE_ASSET_NAME).first().click();
+    await expect(page).toHaveURL(/\/a\//);
+    const shared = page.url();
+
+    // A genuinely fresh context: no session, no storage, nothing warm.
+    const other = await browser.newContext();
+    const stranger = await other.newPage();
+    await stranger.goto(shared);
+
+    await expect(stranger.getByRole('button', { name: /Sign in/ })).toBeVisible({ timeout: 15_000 });
+    // Not a crash and not a blank page — the branded welcome, as on the bare portal path.
+    await expect(stranger.getByText('E2E Smoke', { exact: false })).toBeVisible();
+    await other.close();
+  });
+});

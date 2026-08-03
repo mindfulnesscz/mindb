@@ -14,6 +14,8 @@ import { AssetStatusPanel } from './panels/AssetStatusPanel'
 import { AssetPreviewPanel } from './panels/AssetPreviewPanel'
 import { DisconnectedSubAssetsPanel } from './panels/DisconnectedSubAssetsPanel'
 import { useAssetChildren } from './hooks/useAssetChildren'
+import { useDetailFocus } from './hooks/useDetailFocus'
+import type { DetailState } from './detailUrl'
 import { useAssetRating } from './hooks/useAssetRating'
 import { useAssetEvents } from './hooks/useAssetEvents'
 import { useAssetComments } from './hooks/useAssetComments'
@@ -34,13 +36,32 @@ interface Props {
   // actually matched the filter (e.g. a tag that only lives on one variant) instead of leaving
   // it buried in alphabetical order.
   activeFacets?: { entities?: string[]; formats?: string[]; angles?: string[] }
-  /** When opening from a hover tile, focus this child/variant id inside the detail. */
+  /** The child or variant focused inside the detail — a carousel position and a variant selection. */
   focusAssetId?: string
-  /** Also open the lightbox on the focused child (gallery tile click). */
+  /**
+   * Whether the lightbox is up, on the focused item.
+   *
+   * Named for its original use — opening straight into the lightbox from a gallery hover tile. It is
+   * now simply the lightbox's open state, because the portal keeps that in the URL as `lb=1` and
+   * Back has to be able to close it.
+   */
   autoOpenLightbox?: boolean
+  /**
+   * `focusAssetId` / `autoOpenLightbox` changed through interaction — a variant picked, the carousel
+   * stepped, the lightbox opened or closed.
+   *
+   * Supplying this makes those two props CONTROLLED; the portal does, and writes them to the URL.
+   * Omitting it leaves the detail to keep them locally, which is what `/share/:id` needs.
+   *
+   * One callback carrying both values, not two: see useDetailFocus.
+   */
+  onDetailStateChange?: (next: DetailState) => void
 }
 
-export default function AssetDetail({ asset, onClose, mount, onStatusChange, activeFacets, focusAssetId, autoOpenLightbox }: Props) {
+export default function AssetDetail({
+  asset, onClose, mount, onStatusChange, activeFacets,
+  focusAssetId, autoOpenLightbox, onDetailStateChange,
+}: Props) {
   const { role, activeClient } = useRole()
   const { session } = useAuth()
   const userId = session?.user?.id ?? null
@@ -49,11 +70,13 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
 
   /* State lives in ./hooks/* — one hook per concern, so an effect's dependencies are visible
      next to the state they drive rather than buried among 22 useState calls. */
+  const focus = useDetailFocus(asset.id, {
+    focusAssetId, lightbox: autoOpenLightbox, onChange: onDetailStateChange,
+  })
   const {
     children, variants, staleChildren, staleVariants, removeSubAsset,
-    childView, setChildView, carouselIdx, setCarouselIdx,
-    selectedVariantId, setSelectedVariantId, lightboxIndex, setLightboxIndex,
-  } = useAssetChildren(asset, isStaff, focusAssetId, autoOpenLightbox)
+    childView, setChildView,
+  } = useAssetChildren(asset, isStaff, focus.focusId)
   const { myRating, ratingSaved, changeRating: handleRatingChange } = useAssetRating(asset.id, userId, role)
   const { eventCounts, bumpDownloads } = useAssetEvents(asset.id, userId, role, isStaff)
   const {
@@ -74,7 +97,16 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
       return aMatch === bMatch ? 0 : aMatch ? -1 : 1
     })
   }, [variants, activeFacets])
+  /* DERIVED from the focused id, not stored alongside it. An id survives a sibling being added or
+     disconnected; an index does not, which is why the URL carries ids and the positions are computed
+     here. A `focus` naming neither a child nor a variant of this asset is simply ignored — a stale or
+     hand-edited link then opens the parent normally instead of showing nothing. */
+  const selectedVariantId = focus.focusId && sortedVariants.some(v => v.id === focus.focusId)
+    ? focus.focusId
+    : asset.id
   const selectedAsset = sortedVariants.find(v => v.id === selectedVariantId) ?? asset
+  const focusedChildIdx = focus.focusId ? children.findIndex(c => c.id === focus.focusId) : -1
+  const carouselIdx = focusedChildIdx >= 0 ? focusedChildIdx : 0
 
   /* Gallery children that are videos. A folder of cuts is now recognised as a gallery (see
      dam/scan.ts), so the children grid can hold videos whose frame lives on Stream rather than in
@@ -88,6 +120,17 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
     }),
     [children, resolveStream],
   )
+
+  /* The lightbox's index, also derived. The pool is the one the preview panel builds: gallery children
+     when there are any, else the selected asset alone, minus anything with no media at all. */
+  const lightboxPool = (previewChildren.length > 0 ? previewChildren : [selectedAsset])
+    .filter(a => a.thumbnailUrl || a.downloadUrl)
+  const focusedInPool = lightboxPool.findIndex(a => a.id === (focus.focusId ?? selectedAsset.id))
+  const lightboxIndex = !focus.lightbox || lightboxPool.length === 0
+    ? null
+    // `lb=1` pointing at something with no media of its own still opens — on the first item that has.
+    : Math.max(0, focusedInPool)
+
   const shared      = sortedVariants.length > 0 ? sharedLabels([asset, ...sortedVariants]) : []
   const displayName = shared.length > 0 ? shared.join(' ') : asset.name
 
@@ -137,9 +180,9 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
           childView={childView}
           setChildView={setChildView}
           carouselIdx={carouselIdx}
-          setCarouselIdx={setCarouselIdx}
           lightboxIndex={lightboxIndex}
-          setLightboxIndex={setLightboxIndex}
+          onFocus={focus.setFocus}
+          onCloseLightbox={focus.closeLightbox}
           role={role}
           userId={userId}
           isStaff={isStaff}
@@ -180,7 +223,9 @@ export default function AssetDetail({ asset, onClose, mount, onStatusChange, act
               {[asset, ...sortedVariants].map((v, i) => (
                 <button
                   key={v.id}
-                  onClick={() => setSelectedVariantId(v.id)}
+                  /* The primary is `undefined` focus, not its own id: the URL's clean form for
+                     "nothing special selected" is no `focus` param at all. */
+                  onClick={() => focus.setFocus(v.id === asset.id ? undefined : v.id)}
                   title={v.name}
                   className={`text-[11px] font-sans font-medium px-2.5 py-1.5 rounded-chip border transition-colors max-w-35 truncate ${
                     selectedVariantId === v.id

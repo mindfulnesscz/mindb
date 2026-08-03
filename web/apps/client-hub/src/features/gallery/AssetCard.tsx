@@ -11,6 +11,7 @@ import { assetFacetLabels } from '../../services/assetService'
 import { webAssetActions } from '../../lib/assetActions'
 import { MultiAssetHoverGrid, useSiblingPreviews, useDelayedHover, type SiblingPreview } from './MultiAssetHover'
 import { STATUS_LABELS } from './statusLabels'
+import { AssetImage } from '../../components/AssetImage'
 
 export function AssetCard({
   asset,
@@ -95,11 +96,11 @@ export function AssetCard({
       <div className="relative aspect-square overflow-hidden cursor-pointer [transform-style:preserve-3d]">
         {restingThumb
           ? (
-            <img
-              referrerPolicy="no-referrer"
+            <AssetImage
               src={restingThumb}
               alt={asset.name}
               className="relative z-[1] w-full h-full object-cover cursor-pointer"
+              fallbackClassName="relative z-[1] w-full h-full"
             />
           )
           : <div className="relative z-[1] w-full h-full bg-gray-150" />
