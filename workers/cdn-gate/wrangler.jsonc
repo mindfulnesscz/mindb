@@ -45,6 +45,16 @@
 	// bindings are proxied Cloudflare-side. `npm run dev` treats the gate as optional for that reason
 	// (see scripts/dev.mjs); without it the portal simply runs without gated delivery.
 	//
+	// ⚠ "You need to register a workers.dev subdomain" FIRES EVEN WHEN ONE EXISTS. It did here, on an
+	// account whose subdomain was registered and whose /workers/subdomain/edge-preview endpoint
+	// answered correctly a minute later — so treat it as transient and RETRY before changing anything.
+	// Check, do not assume:
+	//     curl -s https://api.cloudflare.com/client/v4/accounts/<id>/workers/subdomain -H "Authorization: Bearer <token>"
+	// The dashboard's subdomain field offers a RENAME, which is not the same action and is not a fix:
+	// renaming stops *.<old>.workers.dev routing immediately, and this account's subdomain is shared
+	// with unrelated projects. Nothing in DC Hub depends on its name — both deployed environments use
+	// custom domains and set workers_dev: false — so there is never a reason to change it from here.
+	//
 	// Do not add the staging or production buckets here. The Worker only ever reads `GATED`, so extra
 	// bindings buy nothing, and naming those buckets at the top level would point every developer's
 	// `wrangler dev` at real client assets.
