@@ -18,6 +18,17 @@ Therefore a wall of green lines means local sidecar thumbnails were absent—not
 
 Width and quality are parsed from settings, with fallbacks of 320 and 70 in service code. Height preserves aspect ratio. Temporary directories are removed after conversion. Required executables are `cwebp`, `pdftoppm`, and LibreOffice for presentations.
 
+## Video is not handled here
+
+`THUMB_EXTS` deliberately excludes video, and adding it would not produce thumbnails — it would
+produce one `generate_thumbnail` error per video per run, because the Rust command cannot decode
+video. A video's still frame comes from Cloudflare Stream instead, built from `stream_uid` in the
+portal. See [Video on Cloudflare Stream](/cloud-storage/video).
+
+The same goes for `GALLERY_THUMB_EXTS` (the Obsidian vault's contact sheets), for a second reason:
+it picks one file alphabetically to represent a folder, so a mixed folder starting with `A-roll.mp4`
+would stop producing the still it produces today.
+
 ## Cache semantics and limitations
 
 Existence—not mtime or content hash—governs local regeneration. Editing `Deck v3.pdf` without changing its stem leaves an old sidecar in place. Delete the sidecar to force regeneration. Conversely, R2 uses content hashes; these are intentionally different cache layers.

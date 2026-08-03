@@ -9,19 +9,28 @@
  * `children` are gallery preview images (a grid); `variants` are format/size siblings sharing one
  * folder identity (a picker). They are fetched together but mean different things — see
  * exportPlan.ts on the desktop side, which is what writes the distinction.
+ *
+ * LIVE AND STALE ARE KEPT APART. A sub-asset whose file left the disk is `disconnected`, and mixing
+ * those back into `children`/`variants` would put them in the files grid, the carousel, the lightbox
+ * and the "Files · N" count — i.e. present a removed image as a deliverable. They come back in
+ * `staleChildren`/`staleVariants` instead, for the review section to label and act on, and only for
+ * staff, who are the only role that fetches them at all.
  */
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { Asset } from '@dc-hub/asset-library'
-import { fetchChildAssets, fetchVariants } from '../../../services/assetService'
+import { fetchChildAssets, fetchVariants, deleteAssetAndMedia } from '../../../services/assetService'
 
 export function useAssetChildren(
   asset: Asset,
+  isStaff: boolean,
   focusAssetId?: string,
   autoOpenLightbox?: boolean,
 ) {
   const [children, setChildren] = useState<Asset[]>([])
   const [variants, setVariants] = useState<Asset[]>([])
+  const [staleChildren, setStaleChildren] = useState<Asset[]>([])
+  const [staleVariants, setStaleVariants] = useState<Asset[]>([])
   const [childView, setChildView] = useState<'grid' | 'carousel'>('grid')
   const [carouselIdx, setCarouselIdx] = useState(0)
   const [selectedVariantId, setSelectedVariantId] = useState<string>(asset.id)
@@ -29,13 +38,23 @@ export function useAssetChildren(
 
   // Load children (gallery preview images) and variants (format/size siblings)
   useEffect(() => {
-    if ((asset.childCount ?? 0) > 0) {
+    /* `childCount` counts LIVE sub-assets only, so it is exactly zero for a family whose every
+       child or variant has been disconnected — the case that most needs reviewing. Staff therefore
+       ask unconditionally; the two extra queries land alongside the five the detail already makes.
+       Everyone else keeps the short-circuit, so a plain single asset still costs no round-trips. */
+    if ((asset.childCount ?? 0) > 0 || isStaff) {
+      const opts = { includeDisconnected: isStaff }
       Promise.all([
-        fetchChildAssets(asset.id).catch(() => [] as Asset[]),
-        fetchVariants(asset.id).catch(() => [] as Asset[]),
-      ]).then(([kids, vars]) => {
+        fetchChildAssets(asset.id, opts).catch(() => [] as Asset[]),
+        fetchVariants(asset.id, opts).catch(() => [] as Asset[]),
+      ]).then(([allKids, allVars]) => {
+        const isStale = (a: Asset) => a.status === 'disconnected'
+        const kids = allKids.filter(a => !isStale(a))
+        const vars = allVars.filter(a => !isStale(a))
         setChildren(kids)
         setVariants(vars)
+        setStaleChildren(allKids.filter(isStale))
+        setStaleVariants(allVars.filter(isStale))
         if (focusAssetId) {
           const childIdx = kids.findIndex(c => c.id === focusAssetId)
           if (childIdx >= 0) {
@@ -61,17 +80,33 @@ export function useAssetChildren(
     } else {
       setChildren([])
       setVariants([])
+      setStaleChildren([])
+      setStaleVariants([])
       if (autoOpenLightbox && (asset.thumbnailUrl || asset.downloadUrl)) {
         setLightboxIndex(0)
       }
     }
     setCarouselIdx(0)
     setSelectedVariantId(focusAssetId && focusAssetId !== asset.id ? focusAssetId : asset.id)
-     
-  }, [asset.id, asset.childCount, focusAssetId, autoOpenLightbox])
+
+  }, [asset.id, asset.childCount, isStaff, focusAssetId, autoOpenLightbox])
+
+  /**
+   * Permanently remove a disconnected sub-asset.
+   *
+   * Pruned from local state rather than refetched: the parent's own row has not changed, so a
+   * refetch would re-run five other queries to learn one thing this already knows. `force` is
+   * passed through for the "Cloudflare is unreachable, remove the record anyway" case.
+   */
+  const removeSubAsset = useCallback(async (target: Asset, opts?: { force?: boolean }) => {
+    await deleteAssetAndMedia(target, opts)
+    setStaleChildren(list => list.filter(a => a.id !== target.id))
+    setStaleVariants(list => list.filter(a => a.id !== target.id))
+  }, [])
 
   return {
-    children, variants, childView, setChildView, carouselIdx, setCarouselIdx,
+    children, variants, staleChildren, staleVariants, removeSubAsset,
+    childView, setChildView, carouselIdx, setCarouselIdx,
     selectedVariantId, setSelectedVariantId, lightboxIndex, setLightboxIndex,
   }
 }

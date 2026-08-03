@@ -156,6 +156,75 @@ more widely, split it into its own gallery folder.
 A **variant set** is different: separating a rendition's visibility is a real if rare need (an
 internal print master beside a public web version), so the portal offers a checkbox, on by default.
 
+## Managing a level
+
+### Who may change one
+
+`perm` is **portal-owned**. The pipeline supplies it once at INSERT and then has no opinion —
+`stripPortalOwnedFields` drops it from every update. That is deliberate: before it existed, every
+publish run silently undid an editor's promotion or lock-down, and because the level is in the object
+key it dragged the bytes back too.
+
+`status` is different and still written by the pipeline on updates, because that is how a row whose
+file returned to disk stops being `disconnected`.
+
+Changing a level requires `editor`, `admin` or `super_admin`. A member can never change one; RLS
+gives them no update rights on `assets` at all.
+
+### What happens when you change one
+
+One edit sets off four things, in this order:
+
+1. **Discovery changes immediately.** RLS re-evaluates on the next query, so the asset appears or
+   disappears from galleries at once.
+2. **A trigger queues the asset** (`cdn_move_queue`), but only if `effective_level` actually
+   changed — `perm` and `status` are written on most pipeline runs, and queueing every asset every
+   run would turn a queue into a full-table sweep.
+3. **`cdn-reconcile` moves the bytes** to the key the new level requires, and updates
+   `thumbnail_url` / `download_url`. The move is a copy: the original stays until a separate
+   `--delete-source` pass removes it, which is what makes the whole change reversible by repointing
+   the URLs back.
+4. **If the asset is a video, the same pass flips Stream's `requireSignedURLs`** — see
+   [Video on Cloudflare Stream](/cloud-storage/video). A video's level lives in that flag exactly as
+   an image's lives in its key, so a `public` → `client` demotion that skipped this would keep
+   serving to anyone holding the uid.
+
+Steps 3 and 4 need a caller to drain the queue. The portal does it after an edit and the desktop
+after a run, so in practice it is seconds — but an empty `cdn_move_queue` is the only proof that
+bytes and levels agree.
+
+### Changing many at once
+
+There is no bulk control in the portal, on purpose — "make these 300 assets public" is not an action
+worth making easy. For a genuine bulk change, edit `perm` in SQL and let the trigger and reconciler
+follow:
+
+```sql
+-- Queueing is automatic; verify before and after.
+select effective_level, count(*) from public.assets group by 1 order by 1;
+update public.assets set perm = 'client'
+ where client_id = '…' and perm = 'public' and parent_id is null;
+select count(*) from public.cdn_move_queue;   -- should be non-zero, then drain to zero
+```
+
+Gallery children are omitted (`parent_id is null`) because the inheritance trigger sets them from the
+parent — including them would fight it.
+
+`scripts/rekey-gated-objects.mjs` is the tool for the object side. `--reclassify-public` exists but
+is never run by a timer: it changes who can *see* things, which is a decision.
+
+### Verifying it took
+
+| Question | How |
+|---|---|
+| do bytes and levels agree? | `select count(*) from public.cdn_move_queue` — zero means yes |
+| what is world-readable right now? | `supabase/audit/perm_exposure.sql` |
+| any family disagreeing internally? | `supabase/audit/perm_family_mismatch.sql` |
+| is a specific URL actually refused? | fetch it signed out — expect 403, not 404 |
+
+A 404 where you expected 403 means the object is not where its row claims, which is drift rather than
+a permission problem.
+
 ## What this does not do
 
 **It does not un-publish anything.** A URL that has already been served stays fetchable at that

@@ -1,6 +1,8 @@
 import { supabase } from '../lib/supabase'
 import type { Asset, FilterState, Role, AssetStatus, AssetPerm } from '@dc-hub/asset-library'
 import type { AssetRow, AssetStats } from '@dc-hub/database'
+import { releaseStreamVideo } from './streamRelease'
+import { reportError } from '../lib/reportError'
 
 type AssetRowWithStats = AssetRow & { stats: AssetStats | AssetStats[] | null }
 
@@ -58,6 +60,7 @@ function toAsset(row: AssetRowWithStats): Asset {
     downloadUrls: parseDownloadUrls(row.download_urls),
     streamUid: row.stream_uid ?? null,
     streamStatus: row.stream_status ?? null,
+    streamDuration: row.stream_duration ?? null,
     stableId: row.stable_id ?? null,
     updatedAt: row.updated_at,
   }
@@ -207,29 +210,55 @@ export async function fetchAsset(id: string): Promise<Asset | null> {
   return toAsset({ ...(data as unknown as AssetRow), stats: statsMap.get(id) ?? null })
 }
 
-export async function fetchChildAssets(parentId: string): Promise<Asset[]> {
+/**
+ * Whether to include rows whose file has left the disk.
+ *
+ * OFF for everyone but staff, and off by default. A disconnected sub-asset is not a deliverable —
+ * it is a loose end — so it must never appear in a browse surface. But it also never appears as a
+ * top-level card (see the `parent_id`/`variant_of` filter in fetchAssets), which means excluding it
+ * HERE too made it unreachable in the entire portal: not in the grid, not in its parent, and not
+ * under the Disconnected status filter, which still applies that same top-level restriction. The
+ * rows accumulate silently, keep paying for R2 and Stream storage, and nothing can act on them.
+ *
+ * So staff opt in, and the detail view shows what it gets in a section of its own rather than
+ * mixed into the parent's files — see panels/DisconnectedSubAssetsPanel.tsx.
+ *
+ * `archived` stays excluded either way: that one is a deliberate editorial state with its own
+ * filter, not an unresolved one.
+ */
+export interface SubAssetOptions {
+  includeDisconnected?: boolean
+}
+
+export async function fetchChildAssets(
+  parentId: string,
+  opts: SubAssetOptions = {},
+): Promise<Asset[]> {
   if (!supabase) throw new Error('Supabase not configured')
-  const { data, error } = await (supabase as any)
+  let query = (supabase as any)
     .from('assets')
     .select('*')
     .eq('parent_id', parentId)
     .neq('status', 'archived')
-    .neq('status', 'disconnected')
-    .order('name')
+  if (!opts.includeDisconnected) query = query.neq('status', 'disconnected')
+  const { data, error } = await query.order('name')
   if (error) throw new Error(error.message)
   return (data as AssetRow[]).map(row => toAsset({ ...row, stats: null }))
 }
 
 /** Folder-based stable identity variants (Task 3) — siblings of a primary asset row. */
-export async function fetchVariants(primaryId: string): Promise<Asset[]> {
+export async function fetchVariants(
+  primaryId: string,
+  opts: SubAssetOptions = {},
+): Promise<Asset[]> {
   if (!supabase) throw new Error('Supabase not configured')
-  const { data, error } = await (supabase as any)
+  let query = (supabase as any)
     .from('assets')
     .select('*')
     .eq('variant_of', primaryId)
     .neq('status', 'archived')
-    .neq('status', 'disconnected')
-    .order('name')
+  if (!opts.includeDisconnected) query = query.neq('status', 'disconnected')
+  const { data, error } = await query.order('name')
   if (error) throw new Error(error.message)
   return (data as AssetRow[]).map(row => toAsset({ ...row, stats: null }))
 }
@@ -280,9 +309,42 @@ export async function updateAssetPerm(
 
 export async function deleteAsset(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase not configured')
-   
+
   const { error } = await (supabase as any).from('assets').delete().eq('id', id)
   if (error) throw new Error(error.message)
+}
+
+/**
+ * Delete an asset row and whatever media only that row referenced.
+ *
+ * Today that means its Cloudflare Stream video, which is billed for as long as it is held and is
+ * unattributable the moment the row naming it is gone. R2 objects are deliberately NOT touched:
+ * they are keyed by stable identity, a sibling version may share the folder, and the pipeline
+ * already reports orphaned keys for a separate, explicit sweep.
+ *
+ * `force` is for the case where Cloudflare cannot be reached. Refusing to delete the row at all
+ * would make an outage into a permanently stuck record; proceeding silently would leak a paid video
+ * with no trace of what it was. So the caller is told, and chooses.
+ */
+export async function deleteAssetAndMedia(
+  asset: Pick<Asset, 'id' | 'streamUid'>,
+  opts: { force?: boolean } = {},
+): Promise<void> {
+  if (asset.streamUid) {
+    try {
+      await releaseStreamVideo(asset.id)
+    } catch (err) {
+      if (!opts.force) throw err
+      /* Forced: the operator has accepted the leak. Recorded rather than dropped, because after the
+         row is deleted this report is the only thing that will ever name the stranded video — and
+         it has to carry the uid, since the row that held it is about to stop existing. */
+      reportError('asset.deleteAssetAndMedia.forcedStreamLeak', new Error(
+        `Stream video ${asset.streamUid} left behind by the deletion of asset ${asset.id}: `
+        + (err instanceof Error ? err.message : String(err)),
+      ))
+    }
+  }
+  await deleteAsset(asset.id)
 }
 
 /** Deletes every `disconnected` asset for a client, one row at a time — `variant_of` has no
@@ -294,17 +356,23 @@ export async function deleteDisconnectedAssets(
   if (!supabase) throw new Error('Supabase not configured')
   const { data, error } = await (supabase as any)
     .from('assets')
-    .select('id,name')
+    .select('id,name,stream_uid')
     .eq('client_id', clientId)
     .eq('status', 'disconnected')
   if (error) throw new Error(error.message)
 
   let deleted = 0
   const blocked: string[] = []
-  for (const row of (data as Array<{ id: string; name: string }>) ?? []) {
-    const { error: delError } = await (supabase as any).from('assets').delete().eq('id', row.id)
-    if (delError) blocked.push(row.name)
-    else deleted++
+  for (const row of (data as Array<{ id: string; name: string; stream_uid: string | null }>) ?? []) {
+    try {
+      /* `force`, unlike the per-item removal in the detail view: a sweep that stops on the first
+         unreachable video would leave the rest of the batch half-done with no way to tell how far
+         it got. The leak is reported per row instead. */
+      await deleteAssetAndMedia({ id: row.id, streamUid: row.stream_uid }, { force: true })
+      deleted++
+    } catch {
+      blocked.push(row.name)
+    }
   }
   return { deleted, blocked }
 }

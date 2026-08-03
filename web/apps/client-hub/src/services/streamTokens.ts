@@ -23,6 +23,27 @@ interface CachedToken {
    instead of being re-minted on every mount. Cleared on sign-out. */
 const cache = new Map<string, CachedToken>()
 
+/* Encoding states newer than the ones the page was rendered with.
+ *
+ * `stream_status` is written once at upload — `downloading` or `queued` — and encoding finishes
+ * minutes later. The rows the portal fetched are therefore stale for exactly as long as it takes,
+ * and a video that has finished still shows "processing". stream-token refreshes the column
+ * server-side and reports what moved; this holds the answer until the next full fetch catches up. */
+const statusOverride = new Map<string, string>()
+
+/** Fresher encoding state for an asset, if the last call learned one. */
+export function freshStreamStatus(assetId: string): string | undefined {
+  return statusOverride.get(assetId)
+}
+
+/* Durations, same idea. A video's length is only known once encoding finishes, so a row fetched
+   before that has none — and the hover preview cannot place frames without it. */
+const durationOverride = new Map<string, number>()
+
+export function freshStreamDuration(assetId: string): number | undefined {
+  return durationOverride.get(assetId)
+}
+
 /* One in-flight request per asset id, so ten cards mounting at once produce one network call
    rather than ten. Without this a grid re-render storms the function. */
 let inFlight: Promise<void> | null = null
@@ -50,6 +71,8 @@ export function cachedStreamToken(uid: string): string | null {
 export function clearStreamTokens(): void {
   cache.clear()
   pending.clear()
+  statusOverride.clear()
+  durationOverride.clear()
 }
 
 /**
@@ -78,11 +101,19 @@ export async function ensureStreamTokens(assetIds: string[]): Promise<void> {
     try {
       const { data, error } = await supabase.functions.invoke<{
         tokens: Record<string, string>
+        statuses: Record<string, string>
+        durations: Record<string, number>
         expires_at: number
       }>('stream-token', { body: { asset_ids: ids } })
       if (error) throw error
       for (const [uid, token] of Object.entries(data?.tokens ?? {})) {
         cache.set(uid, { token, expiresAt: data!.expires_at })
+      }
+      for (const [assetId, status] of Object.entries(data?.statuses ?? {})) {
+        statusOverride.set(assetId, status)
+      }
+      for (const [assetId, seconds] of Object.entries(data?.durations ?? {})) {
+        durationOverride.set(assetId, seconds)
       }
     } catch (e) {
       // `cdn.` because this is delivery authorization — the same concern as the gate cookie, just
