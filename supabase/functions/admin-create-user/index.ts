@@ -2,13 +2,10 @@
 // then apply role + client access via update_user_access.
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
-
-const ALLOWED_ORIGINS = new Set([
-  'https://staging.hub.disruptcollective.com',
-  'https://hub.disruptcollective.com',
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
-]);
+/* Was an inline copy of the origin list and the two helpers below it. Adopted the shared module so
+   the allow-list is one configurable thing (`ALLOWED_ORIGINS`) rather than three hardcoded copies of
+   the agency's own domain — see ../_shared/cors.ts. */
+import { preflight, corsJson as json } from '../_shared/cors.ts';
 
 interface CreateUserBody {
   email?: string;
@@ -17,30 +14,6 @@ interface CreateUserBody {
   client_id?: string;
   member_client_ids?: string[];
   send_invitation?: boolean;
-}
-
-function corsHeaders(req: Request): Record<string, string> {
-  const origin = req.headers.get('Origin') ?? '';
-  let allow = 'https://staging.hub.disruptcollective.com';
-  if (origin) {
-    try {
-      const host = new URL(origin).hostname;
-      if (ALLOWED_ORIGINS.has(origin) || host.endsWith('.vercel.app')) allow = origin;
-    } catch { /* ignore */ }
-  }
-  return {
-    'Access-Control-Allow-Origin': allow,
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Max-Age': '86400',
-  };
-}
-
-function json(req: Request, status: number, body: Record<string, unknown>): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json', ...corsHeaders(req) },
-  });
 }
 
 function serviceHeaders(serviceKey: string): Record<string, string> {
@@ -69,9 +42,8 @@ async function findUserIdByEmail(
 }
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: corsHeaders(req) });
-  }
+  const pre = preflight(req);
+  if (pre) return pre;
   if (req.method !== 'POST') return json(req, 405, { error: 'POST only' });
 
   const authHeader = req.headers.get('Authorization') ?? '';
