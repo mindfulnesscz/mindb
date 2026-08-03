@@ -31,14 +31,20 @@ export function edgeFunctionError(fnName: string, status: number, rawBody: strin
     return new Error(
       `${fnName} is not deployed (404): ${detail} — the code is in the repo but not on this `
       + `project yet. On staging or production that usually means CI has not finished; locally, `
-      + `run \`supabase functions deploy ${fnName}\`.`,
+      + `run \`supabase functions deploy ${fnName}\`. If it has never been served since you added `
+      + `it, recreate the local stack instead — \`supabase stop && supabase start\` — because the `
+      + `function list is fixed when the local container is created, and restarting that container `
+      + `reuses the old list.`,
     )
   }
 
   if (fromGateway || status === 502 || status === 504) {
     return new Error(
       `${fnName} unreachable (${status}): ${detail} — the function did not respond. `
-      + `Locally, check the edge runtime is running (\`docker start supabase_edge_runtime_<project>\`).`,
+      /* Deliberately NOT `docker start`, which is what this used to say. It works, and that is the
+         problem: an old container comes back up serving only the functions that existed when it was
+         created, so the 503 turns into a 404 on anything newer and looks like a fresh fault. */
+      + `Locally, recreate the edge runtime: \`supabase stop && supabase start\`.`,
     )
   }
 

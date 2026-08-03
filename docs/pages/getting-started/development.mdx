@@ -52,7 +52,20 @@ Never mix local Supabase with a shared R2 bucket for pipeline work.
 Both work locally, and neither did before — not because of a design limit, but because four things were never wired up. If gated thumbnails are blank or video says "not provisioned", check these in order:
 
 1. **`supabase/functions/.env`** needs `R2_GATED_BUCKET=dc-hub-gated-dev`, `R2_GATED_DOMAIN=http://localhost:8623` and `CF_STREAM_TOKEN`. Without the first two, `r2-grant` hands the desktop no gated tier and the pipeline refuses to publish; without the third, `stream-token` and `stream-upload` answer 503 `Video not provisioned` — which reads like "this asset has no video".
-2. **The local edge runtime must have been started after the functions were added.** `cdn-reconcile`, `stream-token` and `stream-upload` answer `404 Function not found` if `supabase start` predates them. Restart the stack.
+2. **The local edge runtime must have been *created* after the functions were added** — created, not started. Its function list is baked into the container's entrypoint when the container is built, even though `supabase/functions/` is bind-mounted, so a function added later answers `404 Function not found` forever. `docker start` brings the stale list back up, and a bare `supabase start` takes an "already running" fast path and skips recreation. Only a full cycle rebuilds it:
+
+   ```bash
+   npx supabase stop    # backs up local data by default
+   npx supabase start
+   ```
+
+   Check what it is actually serving — the list is the first thing it logs:
+
+   ```bash
+   docker logs supabase_edge_runtime_dc-hub 2>&1 | head -8
+   ```
+
+   A **stopped** runtime looks different and is worth telling apart: Kong cannot resolve the container inside the Docker network, so calls fail with `503 … name resolution failed` rather than 404. Both arrive at the desktop as "CDN steps disabled".
 3. **`VITE_CDN_GATE_URL`** must be set, or the portal treats no URL as gated and never requests a cookie — the failure is silent by design.
 4. **The gate must be running.** `npm run dev` starts it; `npm run dev:gate` alone.
 
