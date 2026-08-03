@@ -16,6 +16,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 import { effectiveLevel, tierFor, stripVersion } from '../../../packages/domain/src/assetStorage.ts';
 import { isVideoFile } from '../../../packages/domain/src/video.ts';
 import { tempCredentials, presignGet } from '../_shared/r2.ts';
+import { preflight, corsJson } from '../_shared/cors.ts';
 
 /* Long enough for Stream to pull a large master, short enough that a leaked URL is worthless by the
    time anyone finds it. Cannot exceed the R2 temporary credentials' own hour — a presigned URL dies
@@ -23,11 +24,16 @@ import { tempCredentials, presignGet } from '../_shared/r2.ts';
    partway through rather than failing up front. */
 const INGEST_URL_TTL = 3600;
 
-function json(status: number, body: Record<string, unknown>): Response {
-  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
-}
-
 Deno.serve(async (req) => {
+  /* CORS, because the PORTAL now calls this too — the `release` action below runs when staff delete
+     a video asset. Every other caller is the desktop app, which is not a browser origin and never
+     preflights, which is why this function went without it until now. A missing preflight fails
+     before the function is reached, so there is nothing in the logs to find. */
+  const pre = preflight(req);
+  if (pre) return pre;
+
+  const json = (status: number, body: Record<string, unknown>) => corsJson(req, status, body);
+
   if (req.method !== 'POST') return json(405, { error: 'POST only' });
 
   const env = (k: string) => Deno.env.get(k) ?? '';
@@ -60,7 +66,9 @@ Deno.serve(async (req) => {
   }
   const isAdminOrAbove = ['admin', 'super_admin'].includes(profile.role);
 
-  const body = await req.json().catch(() => ({})) as { asset_id?: string; replace?: boolean };
+  const body = await req.json().catch(() => ({})) as {
+    asset_id?: string; replace?: boolean; release?: boolean;
+  };
   if (!body.asset_id) return json(400, { error: 'asset_id required' });
 
   /* Service role for the read: the asset may sit at a level the caller cannot see — an `internal`
@@ -78,6 +86,48 @@ Deno.serve(async (req) => {
     const { data: membership } = await asCaller.from('client_members')
       .select('client_id').eq('user_id', userData.user.id).eq('client_id', asset.client_id).maybeSingle();
     if (!membership) return json(403, { error: 'Not assigned to this client' });
+  }
+
+  const api = `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream`;
+  const streamHeaders = { Authorization: `Bearer ${streamToken}`, 'Content-Type': 'application/json' };
+
+  /* ── Release ─────────────────────────────────────────────────────────────────
+     Give the video back. Stream bills for every minute it holds, and the asset row is the ONLY
+     record of which video belonged to which asset, so a row deleted without this leaves a charge
+     nobody can attribute or safely clear.
+
+     It lives here rather than in a function of its own because this is already the module trusted
+     with CF_STREAM_TOKEN, and that token can delete production's videos from a staging deploy — the
+     two environments share one Stream account. One caller, one place to audit.
+
+     The columns are cleared before the caller deletes the row, so a client that dies in between
+     leaves an asset with no video rather than a row pointing at a video that no longer exists. */
+  if (body.release) {
+    if (!asset.stream_uid) return json(200, { released: false, reason: 'no video' });
+
+    const del = await fetch(`${api}/${asset.stream_uid}`, { method: 'DELETE', headers: streamHeaders });
+    // 404 is success: the goal is "no video left behind", not "a delete was performed". Retrying a
+    // half-finished release must not fail on the part that already worked.
+    if (!del.ok && del.status !== 404) {
+      const detail = await del.text().catch(() => '');
+      console.error('stream release failed', asset.id, asset.stream_uid, del.status, detail);
+      return json(502, {
+        error: `Cloudflare would not delete the video (HTTP ${del.status}). `
+             + 'The asset was left in place — nothing was deleted.',
+      });
+    }
+
+    const { error: clearErr } = await db.from('assets')
+      .update({ stream_uid: null, stream_status: null, stream_source_hash: null })
+      .eq('id', asset.id);
+    /* The video is already gone, so this is not recoverable by retrying the delete. Reported as a
+       failure anyway: the caller's next step is to delete the row, and if that is what actually
+       clears the reference then fine — but it must not be told the release succeeded when the
+       database still claims a video that no longer exists. */
+    if (clearErr) {
+      return json(500, { error: `Video deleted but the row still references it: ${clearErr.message}` });
+    }
+    return json(200, { released: true, stream_uid: asset.stream_uid });
   }
 
   /* Idempotent by default. The desktop retries a failed run wholesale and the portal has a button;
@@ -114,9 +164,6 @@ Deno.serve(async (req) => {
      URL rather than recomputing it would be wrong for a row mid-reconciliation. */
   const creds = await tempCredentials(accountId, cfR2Token, parentKey, bucket);
   const ingestUrl = await presignGet(accountId, creds, bucket, key, INGEST_URL_TTL);
-
-  const api = `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream`;
-  const streamHeaders = { Authorization: `Bearer ${streamToken}`, 'Content-Type': 'application/json' };
 
   /* Which database owns this video. Staging and production share one Cloudflare account — Stream
      has no equivalent of the two R2 buckets — so without a marker the two environments' videos are

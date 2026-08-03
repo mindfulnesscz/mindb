@@ -5,9 +5,13 @@
  * surfaces as `FunctionsFetchError: Failed to send a request to the Edge Function`, which reads
  * like the function is down.
  *
- * Only needed for functions called from the portal. `r2-grant`, `cdn-reconcile` and `stream-upload`
- * are called by the DESKTOP app, which is not a browser origin and never preflights — which is
- * exactly why the omission in `stream-token` was not obvious by comparison with its neighbours.
+ * Only needed for functions called from the portal. `r2-grant` and `cdn-reconcile` are called by the
+ * DESKTOP app, which is not a browser origin and never preflights — which is exactly why the
+ * omission in `stream-token` was not obvious by comparison with its neighbours.
+ *
+ * `stream-upload` was in that desktop-only list until the portal gained a way to delete a video
+ * asset, which has to hand the video back to Cloudflare first. A function moving from one list to
+ * the other is the case this comment exists to catch.
  *
  * `admin-create-user` and `r2-branding-upload` each carry this same logic inline. They work, so
  * they are left alone here rather than widening an urgent fix; adopt this when either is next
