@@ -1,6 +1,18 @@
 export type Role = 'public' | 'member' | 'editor' | 'admin' | 'super_admin'
 
-export type AssetStatus = 'draft' | 'review' | 'approved' | 'published' | 'archived' | 'disconnected'
+/* The three closed vocabularies below are CONST ARRAYS with the type derived from them, not bare
+ * type unions. The type identity is unchanged — `typeof X[number]` is the same union it always was —
+ * but a parser can now validate against them at runtime, which a type cannot do.
+ *
+ * That is what `filterUrl.ts` needs: a URL is untrusted input, and `?status=banana` has to be
+ * dropped rather than passed through to PostgREST as an enum value it will reject.
+ *
+ * Order is display order where one exists, not alphabetical.
+ */
+
+export const ASSET_STATUSES = ['draft', 'review', 'approved', 'published', 'archived', 'disconnected'] as const
+export type AssetStatus = typeof ASSET_STATUSES[number]
+
 /**
  * Who MAY see an asset, in ascending order of restriction. `guest` (added 2026-07-31) means
  * anyone signed in, whoever they are — the level behind email capture.
@@ -9,9 +21,13 @@ export type AssetStatus = 'draft' | 'review' | 'approved' | 'published' | 'archi
  * actually decides both row discovery and byte delivery is the two combined. See
  * `effectiveLevel` in ./permissions.
  */
-export type AssetPerm = 'public' | 'guest' | 'client' | 'internal'
+export const ASSET_PERMS = ['public', 'guest', 'client', 'internal'] as const
+export type AssetPerm = typeof ASSET_PERMS[number]
+
 export type ApprovalState = 'approved' | 'pending' | 'changes' | 'none'
-export type EntityType = 'product' | 'customer' | 'partner' | 'event' | 'company'
+
+export const ENTITY_TYPES = ['product', 'customer', 'partner', 'event', 'company'] as const
+export type EntityType = typeof ENTITY_TYPES[number]
 
 /**
  * A client's portal-owned identity. Defined once, in @dc-hub/database, next to the generated row type
