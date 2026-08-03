@@ -1,6 +1,21 @@
-import { useState, useEffect, useRef } from 'react'
+/* The grid's data.
+ *
+ * Backed by TanStack Query. What that replaced was a `JSON.stringify({filters, role, clientId, rev})`
+ * key compared inside an effect, a `hasData` ref to decide whether to show a skeleton, and a `rev`
+ * counter to force a refetch. Those three between them were a cache — just one with no sharing, no
+ * dedupe, and no memory of anything you had already looked at.
+ *
+ * THE CACHE KEY IS THE URL. `filterCacheKey(filters)` is the same canonical string the address bar
+ * shows, so navigating Back to a view you had open hits warm cache by construction rather than by a
+ * second memoization that has to be kept in step with the first.
+ *
+ * The StrictMode double-mount hazard the old comment here warned about is gone: Query owns dedupe, so
+ * two mounts with one key make one request.
+ */
+
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import type { Asset, FilterState, Role } from '@dc-hub/asset-library'
-import { MOCK_ASSETS, applyFilters } from '@dc-hub/asset-library'
+import { MOCK_ASSETS, applyFilters, filterCacheKey } from '@dc-hub/asset-library'
 import { fetchAssets } from '../services/assetService'
 import { isConfigured } from '../lib/supabase'
 
@@ -14,73 +29,55 @@ interface UseAssetsResult {
   reload: () => void
 }
 
+/** How long a fetched grid is served without a background refetch. */
+const ASSETS_STALE_MS = 30_000
+
+const EMPTY: Asset[] = []
+
 export function useAssets(
   filters: FilterState,
   role: Role,
   clientId?: string,
 ): UseAssetsResult {
-  const [assets, setAssets] = useState<Asset[]>([])
-  const [allAssets, setAllAssets] = useState<Asset[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [rev, setRev] = useState(0)
   const usingMock = !isConfigured()
+  const client = useQueryClient()
 
-  // Track whether we've received at least one successful response
-  const hasData = useRef(false)
-
-  const filtersKey = JSON.stringify({ filters, role, clientId, rev })
-
-  // No ref-based dedupe here: the filtersKey dependency already re-runs the
-  // effect only on value changes, and a ref guard breaks under StrictMode's
-  // dev double-mount — run #1's fetch gets cancelled by the cleanup, run #2
-  // sees the same key and skips, and `loading` never resolves.
-  useEffect(() => {
-    let cancelled = false
-    // Show skeleton only on the very first load; keep stale assets visible during re-fetch
-    if (!hasData.current) setLoading(true)
-    setError(null)
-
-    if (usingMock) {
-      const result = applyFilters(MOCK_ASSETS, filters, role, clientId)
-      if (!cancelled) {
-        setAssets(result)
-        setAllAssets(MOCK_ASSETS)
-        setTotal(MOCK_ASSETS.length)
-        setLoading(false)
-        hasData.current = true
+  const query = useQuery({
+    queryKey: ['assets', clientId, role, filterCacheKey(filters)],
+    queryFn: async () => {
+      // Demo mode: the same branch as before, moved inside the fetcher so the caching, the dedupe and
+      // the return shape are identical whether or not there is a Supabase to talk to.
+      if (usingMock) {
+        return {
+          assets: applyFilters(MOCK_ASSETS, filters, role, clientId),
+          allAssets: MOCK_ASSETS,
+          total: MOCK_ASSETS.length,
+        }
       }
-      return
-    }
-
-    fetchAssets({ filters, role, clientId })
-      .then(({ assets: data, allAssets: all }) => {
-        if (!cancelled) {
-          setAssets(data)
-          setAllAssets(all)
-          setTotal(data.length)
-          setLoading(false)
-          hasData.current = true
-        }
-      })
-      .catch(err => {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err))
-          setLoading(false)
-        }
-      })
-
-    return () => { cancelled = true }
-  }, [filtersKey, usingMock])
+      const { assets, allAssets } = await fetchAssets({ filters, role, clientId })
+      return { assets, allAssets, total: assets.length }
+    },
+    staleTime: ASSETS_STALE_MS,
+    /* Keeps the previous grid on screen while a new filter's query is in flight — what the `hasData`
+       ref used to do, minus the ref. The skeleton therefore appears on the very first load only. */
+    placeholderData: keepPreviousData,
+  })
 
   return {
-    assets,
-    allAssets,
-    total,
-    loading,
-    error,
+    assets: query.data?.assets ?? EMPTY,
+    allAssets: query.data?.allAssets ?? EMPTY,
+    total: query.data?.total ?? 0,
+    loading: query.isPending,
+    error: query.error ? (query.error as Error).message : null,
     usingMock,
-    reload: () => { hasData.current = false; setRev(r => r + 1) },
+    /**
+     * Refetch after a mutation — a status change, or a sweep of disconnected assets.
+     *
+     * A PREFIX match, deliberately: it invalidates the option-pool query alongside the visible one.
+     * Both callers of this are real mutations, and after one of them the pool is genuinely stale —
+     * delete an asset and its tags may no longer be in the vocabulary the rail offers. Scoping this
+     * to the live key would save one query and leave the rail listing a tag nothing has.
+     */
+    reload: () => { void client.invalidateQueries({ queryKey: ['assets'] }) },
   }
 }

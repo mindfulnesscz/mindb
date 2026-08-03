@@ -5,9 +5,63 @@
 | URL | Who | What |
 |---|---|---|
 | `/` | admin, editor | Admin dashboard — clients, users, settings |
-| `/:slug` | member, public, staff | Branded client portal with asset gallery |
-| `/share/:id` | anyone | Public share link for a single asset |
 | `/settings` | authenticated | Supabase connection configuration |
+| `/share/:id` | anyone RLS lets through | Single asset, no client chrome |
+| `/:slug` | member, public, staff | Branded client portal with asset gallery |
+| `/:slug/a/:assetId` | as above | The gallery with the detail drawer open |
+
+`:slug` is a **root catch-all**. Any new single-segment top-level route must be declared *before* it
+in `App.tsx`.
+
+### Query parameters
+
+Everything the portal shows is addressable, so a view can be sent to someone and survives a reload
+or a magic-link round trip.
+
+On `/:slug` and `/:slug/a/:assetId`:
+
+| Param | Form | Meaning |
+|---|---|---|
+| `q` | `?q=oak+chair` | Free-text search. Trimmed |
+| `latest` | `?latest=1` | Latest versions only. Only the literal `1` is true |
+| `status` | `?status=approved&status=published` | Repeated |
+| `perm` | `?perm=client` | Repeated |
+| `type` | `?type=product` | Repeated — entity type |
+| `entity` / `format` / `angle` | `?entity=Sofa&entity=Chair` | Repeated — the three tag dimensions |
+
+On `/:slug/a/:assetId` as well:
+
+| Param | Form | Meaning |
+|---|---|---|
+| `focus` | `?focus=<uuid>` | Child or variant of `:assetId` to focus |
+| `lb` | `?lb=1` | Lightbox open, on the focused item |
+
+Four things about this encoding are load-bearing:
+
+- **Multi-value params are repeated, not comma-joined.** Tag labels are free text from the client's
+  own vocabulary, so one will eventually contain a comma — `?entity=Sofa,%203-seat` split on commas
+  would silently become two tags that match nothing.
+- **The names are stable dimension keys, never the client's `dimensionLabels`.** A client renaming
+  "Entity" to "Product" must not break links already sent.
+- **Defaults are omitted**, so `/ess` is the canonical clean view and clearing every filter returns
+  the URL to it with no empty params.
+- **`focus` carries an id, not a carousel position.** A position points at a different picture the
+  moment a sibling is added or disconnected — which is exactly what happens to a link between being
+  sent and being opened.
+
+An unknown param is ignored, and a value outside the allowed vocabulary is dropped: a stale or
+hand-edited URL degrades to a valid view rather than to an error. Encoding lives in
+`packages/asset-library/src/filterUrl.ts` and `web/apps/client-hub/src/features/gallery/detailUrl.ts`.
+
+**`v` is reserved** and must never be used as an app-route param — it is the content-hash
+cache-buster on asset CDN URLs.
+
+### History
+
+Filtering, selecting a variant and stepping the carousel **replace** — they are refinements of where
+you are, and pushing would make Back a slow rewind through every checkbox. Opening an asset and
+opening the lightbox **push**, so Back closes the drawer, and Back from the lightbox leaves the drawer
+open.
 
 ## How portals work
 
@@ -18,6 +72,33 @@ Each client has a `slug` (e.g. `ess`, `northwind`). The portal at `/:slug`:
 3. Shows the asset gallery filtered to that client once authenticated
 
 The portal page sets `activeClient` from the slug, so the gallery always shows the right client's assets regardless of what `profile.client_id` contains.
+
+## Share links
+
+`/share/:id` renders one asset with no client chrome. **The link is an address, not a key** — there is
+no token in it, and it never expires. The recipient's own identity decides what they get, and RLS is
+the only gate: `effective_level = 'public'` is the only level an anonymous visitor can match, and
+`client` / `internal` need the right session.
+
+So the same URL renders four different things:
+
+| Situation | What the recipient sees |
+|---|---|
+| the row is visible to them | the asset |
+| nothing came back, no session | "Sign in to view this asset", with a sign-in call to action |
+| nothing came back, signed in | "You don't have access to this asset" |
+| still loading | a skeleton |
+
+The last two messages are deliberately interchangeable in what they reveal: RLS returns nothing both
+for "no such asset" and for "not yours", and neither message may confirm which.
+
+**A visible row does not guarantee visible pixels.** `perm='guest'` is exactly this case — RLS
+returns the row to any signed-in user, but the image comes from the gated bucket through the
+`cdn-gate` Worker, which needs the CDN cookie. Thumbnails therefore render through `AssetImage`,
+which shows a "Preview unavailable" placeholder rather than the browser's broken-image glyph.
+
+`asset_events` is capped at 120 per asset per minute *because* this surface is public. Do not add view
+tracking to it beyond what the detail already fires on mount.
 
 ## Staff view inside a portal
 

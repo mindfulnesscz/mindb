@@ -25,9 +25,21 @@ jobs:
         working-directory: desktop
       - run: npm run check
       - run: npm run version:check
-      # Unsigned build — editors right-click → Open on first launch.
-      # Set TAURI_SIGNING_PRIVATE_KEY + TAURI_SIGNING_PRIVATE_KEY_PASSWORD for signed builds.
-      # Set UPDATER_PUBKEY in tauri.conf.json when enabling auto-update.
+      # Unsigned and un-notarized. Gatekeeper refuses it on download, and "right-click → Open" is no
+      # longer reliable on current macOS — the route is System Settings → Privacy & Security → Open
+      # Anyway, or `xattr -dr com.apple.quarantine "/Applications/DC Hub.app"`.
+      # Also ARM-ONLY: macos-latest runners are Apple Silicon and `"targets": "all"` selects bundle
+      # FORMATS, not architectures, so this .dmg does not run on an Intel Mac.
+      # For signed builds, set TAURI_SIGNING_PRIVATE_KEY + TAURI_SIGNING_PRIVATE_KEY_PASSWORD.
+      #
+      # AUTO-UPDATE IS OFF, and turning it on is four steps, not one. The old note here said "set
+      # UPDATER_PUBKEY", which understated it — the config that was there held a Supabase
+      # publishable key in the `pubkey` field and pointed at a `latest.json` this workflow never
+      # produced, so it looked configured and could never work. To enable:
+      #   1. `npx tauri signer generate` — private key + password into repo secrets
+      #   2. restore `plugins.updater` (pubkey + endpoints) in tauri.conf.json
+      #   3. restore the `tauri_plugin_updater` registration in src-tauri/src/lib.rs
+      #   4. emit and upload the updater artifacts, so the endpoint actually resolves
       - run: npm run tauri build
         working-directory: desktop
       - name: Publish release with artifacts

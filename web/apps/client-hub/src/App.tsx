@@ -99,8 +99,19 @@ export default function App() {
       {/* Public asset share links */}
       <Route path="share/:id" element={<AssetDetailPage />} />
 
-      {/* Client portals — branded page, DC 404, or gallery after login */}
+      {/* Client portals — branded page, DC 404, or gallery after login.
+          `:slug` IS A ROOT CATCH-ALL. Declare any new single-segment top-level route ABOVE it.
+          React Router v6 ranks static above dynamic so it would probably work anyway; declare it
+          first regardless, because the next person will not check.
+
+          Two sibling routes to one element, deliberately — not a nested route with an <Outlet/>.
+          ClientPortalPage owns the client fetch, the sign-in gate and the CompleteProfile gate, and
+          all three must run identically on both paths. Nesting would either duplicate those gates or
+          force GalleryView to render an Outlet, which puts the drawer outside the component that
+          owns the grid it overlays. Rendering the same component type at the same depth reconciles
+          rather than remounts, so the client is NOT refetched when the drawer opens. */}
       <Route path=":slug" element={<ClientPortalPage />} />
+      <Route path=":slug/a/:assetId" element={<ClientPortalPage />} />
       </Routes>
     </RouteErrorBoundary>
   )
