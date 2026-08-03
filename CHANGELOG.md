@@ -5,6 +5,19 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [3.1.1] — 2026-08-03
+
+Desktop release CI installs the full workspace again, so a version tag can produce a
+macOS `.dmg` instead of dying on `eslint: command not found`.
+
+### Fixed
+
+- **`release-desktop.yml`** — ran `npm ci` only under `desktop/`, then root `npm run check`.
+  Root `.bin` (eslint and the rest) was empty, so tagged builds failed with exit 127 and
+  never uploaded installer artifacts. Now uses `npm run setup` like `check.yml`, caches
+  both lockfiles, and installs the clippy component for `lint:rust`.
+
+
 ## [3.1.0] — 2026-08-03
 
 The portal's views are addressable. A filtered grid, an open asset, the focused frame and the
