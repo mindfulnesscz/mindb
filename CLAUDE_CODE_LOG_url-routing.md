@@ -27,7 +27,7 @@ npm run test:e2e                     # needs the local Supabase stack + dev serv
 | 2 | Filters in the URL | ✅ done |
 | 3 | `/:slug/a/:assetId` detail route | ✅ done |
 | 4 | `focus` / `lb` params | ✅ done |
-| 5 | TanStack Query | ⬜ not started |
+| 5 | TanStack Query | ✅ done — version bumped to **3.1.0** |
 | 6 | `/share/:id` becomes real | ⬜ not started |
 
 ---
@@ -315,6 +315,63 @@ open/close pair can never grow history on its own.
 - Selecting the primary variant clears `focus` rather than setting `focus=<the asset itself>`.
 - `?lb=1` with no `focus` opens on the first item that has media — a `focus` pointing at something
   with no media of its own does not leave the lightbox shut.
+
+---
+
+## Phase 5 — TanStack Query ✅
+
+`@tanstack/react-query@^5.101.4` in `web/apps/client-hub`. Version bumped to **3.1.0**; the
+`CHANGELOG.md` placeholder is filled in.
+
+| File | What |
+|---|---|
+| `lib/queryClient.ts` | new — one module-level client, `retry: 1`, `refetchOnWindowFocus: false` |
+| `main.tsx` | `QueryClientProvider` **outside** `BrowserRouter` |
+| `hooks/useAssets.ts` | rewritten; key `['assets', clientId, role, filterCacheKey(filters)]`, 30 s |
+| `hooks/useTags.ts` | `['tags', clientId]`, 5 min |
+| `hooks/useClients.ts` | `['clients']`, 5 min |
+| `GalleryView.cache.test.tsx` | new — 10 tests, the real `useAssets` over a stubbed `fetchAssets` |
+
+Deleted along the way: the `JSON.stringify({filters, role, clientId, rev})` key, the `hasData` ref,
+the `rev` counter, and the StrictMode double-mount comment (Query owns dedupe now).
+
+479 tests. No call site changed.
+
+### Deviation from the spec — invalidation stayed inside the hooks
+
+The spec lists per-call-site edits: `GalleryView`'s `onDeletedDisconnected`/`onStatusChange` calling
+`invalidateQueries({queryKey: ['assets']})`, and `AdminLandingPage.handleSaved` invalidating
+`['clients']`. Instead each hook's `reload()` **is** the invalidation of its own key. Same effect,
+same keys, and it satisfies the spec's own stronger requirement — "keep every public return shape
+identical so no call site changes" — literally. `GalleryView` and `AdminLandingPage` are untouched by
+this phase. `ClientDrawer` needed no change either way.
+
+### The prefix-match decision, as the spec asks
+
+**`invalidateQueries({queryKey: ['assets']})` is a prefix match and it invalidates the option-pool
+query too. That is deliberate.** Both callers of `reload` are real mutations — a status change, or a
+sweep of disconnected assets — and after one of them the pool is *genuinely* stale: delete an asset
+and its tags may no longer be in the vocabulary the rail offers. Scoping the invalidation to the live
+key would save one query and leave the rail listing a tag nothing has. Pinned by
+`GalleryView.cache.test.tsx` → "invalidation reaches the option pool as well as the live view".
+
+### Measured, not assumed
+
+- **The default view is ONE fetch**, though `GalleryView` calls `useAssets` twice. Both keys reduce to
+  `filterCacheKey === ''`, so Query dedupes them. Do not "fix" this into two artificial keys.
+- **Toggling a filter off costs nothing.** Asserted as a `fetchAssets` call count, not as a render.
+- **Two orderings of the same filter set are one key** — the canonicalisation from Phase 1 earning
+  its keep.
+- Opening and closing the drawer refetches nothing.
+
+### Testing note
+
+`GalleryView.cache.test.tsx` is the only suite that runs the real `useAssets`; it stubs
+`fetchAssets` one level lower and counts calls. It builds a **fresh `QueryClient` per test** with
+`retry: false` — a module-level client would carry results between tests and the counts would depend
+on execution order. Its `ready()` helper waits for the grid to have rendered, not merely for
+`fetchAssets` to have been *called*: the rail has no checkboxes to click until the option pool's data
+has landed.
 
 ---
 
