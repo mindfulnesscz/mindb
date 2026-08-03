@@ -15,14 +15,20 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          # One workspace, one lockfile — desktop/ has no lockfile of its own.
-          cache-dependency-path: package-lock.json
+          # Root workspace + docs (docs has its own lockfile; see `npm run setup`).
+          cache-dependency-path: |
+            package-lock.json
+            docs/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # `npm run check` ends in `lint:rust` (clippy). Same gate as check.yml.
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
-      - run: npm ci
-        working-directory: desktop
+      # Must install the whole workspace at the repo root. A desktop-only `npm ci`
+      # leaves root `.bin` empty, so `eslint` / other check scripts exit 127.
+      - run: npm run setup
       - run: npm run check
       - run: npm run version:check
       # Unsigned and un-notarized. Gatekeeper refuses it on download, and "right-click → Open" is no
