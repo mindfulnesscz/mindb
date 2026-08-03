@@ -63,6 +63,14 @@
 	"env": {
 		"staging": {
 			"name": "dc-hub-cdn-gate-staging",
+			// Explicit, not left to the default. Registering the account's workers.dev subdomain — which
+			// `wrangler dev` needs for remote bindings — also makes `<name>.<subdomain>.workers.dev` an
+			// available route for anything deployed afterwards. Not a hole: the cookie is scoped to
+			// .disruptcollective.com and is never sent to workers.dev, so such a request 403s. But it is
+			// a second public door to a Worker whose whole job is reading a bucket with no public access,
+			// and the Cache API is a silent no-op off the custom domain, so a request arriving there
+			// would also bypass the cache. Nothing needs it; say so rather than infer it.
+			"workers_dev": false,
 			"observability": {
 				"enabled": true
 			},
@@ -94,6 +102,9 @@
 		},
 		"production": {
 			"name": "dc-hub-cdn-gate",
+			// See the staging note. Doubly so here: this binding is the only door to the whole gated
+			// library.
+			"workers_dev": false,
 			"observability": {
 				"enabled": true
 			},
