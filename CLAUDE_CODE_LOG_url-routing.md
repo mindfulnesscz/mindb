@@ -28,7 +28,8 @@ npm run test:e2e                     # needs the local Supabase stack + dev serv
 | 3 | `/:slug/a/:assetId` detail route | ✅ done |
 | 4 | `focus` / `lb` params | ✅ done |
 | 5 | TanStack Query | ✅ done — version bumped to **3.1.0** |
-| 6 | `/share/:id` becomes real | ⬜ not started |
+| 6 | `/share/:id` becomes real | ✅ done |
+| — | e2e specs, docs, `npm run check` | ✅ done |
 
 ---
 
@@ -375,11 +376,113 @@ has landed.
 
 ---
 
+## Phase 6 — `/share/:id` becomes real ✅
+
+| File | What |
+|---|---|
+| `features/gallery/AssetDetailPage.tsx` | rewritten — reads the database, four states, both back links fixed |
+| `components/AssetImage.tsx` | new — thumbnail with a placeholder fallback |
+| `components/AssetImage.test.tsx` | new — 6 tests |
+| `features/gallery/AssetDetailPage.test.tsx` | new — 10 tests |
+| `panels/AssetPreviewPanel.tsx`, `AssetCard.tsx` | thumbnails go through `AssetImage` |
+| `docs/pages/portals.mdx`, `docs/pages/web-portal/overview.mdx` | the real route table and param list |
+
+### Decisions
+
+- **The back link comes from `useRole().activeClient?.slug`.** RoleContext already resolves the client
+  row behind `profile.client_id`, so no new RPC. An **anonymous** viewer gets no back link at all —
+  resolving a slug from `asset.clientId` for them would need one, and widening an unauthenticated
+  surface to decorate a header is not a trade worth making. Both back links were previously
+  `Link to="/"`, which sends a client to the staff admin landing.
+- **`useQuery(['asset', id])`**, consistent with Phase 5, with the demo-mode `MOCK_ASSETS` branch
+  inside the `queryFn` so `/share/:id` still works with no Supabase configured.
+- **No `onDetailStateChange`.** This route has nowhere to write focus/lightbox to, so `useDetailFocus`
+  falls back to local state — the reason that fallback exists.
+- **No new view-event writes**, per the spec. `asset_events` is capped at 120/asset/minute *because*
+  this surface is public.
+
+### `AssetImage` scope
+
+Applied to the **thumbnail** surfaces: the preview panel's three image sites (grid tile, carousel
+frame, single asset) and the grid card. **Not** applied inside `ImageLightbox` — that shows the full
+original behind two layered `<img>`s with a motion cross-fade and its own `fullReady` state, so it
+needs its own error path rather than this component. A 401 there currently shows the browser glyph over
+a black overlay. **Left as a follow-up, deliberately, and noted here rather than silently.**
+
+The failure is remembered against the URL that produced it, not as a boolean: the carousel reuses one
+instance as it steps, so a bare flag set on one gated frame would show the placeholder for every frame
+after it.
+
+---
+
+## e2e and the full gate ✅
+
+`e2e/smoke.spec.ts` gained a `views are addressable` block — 5 tests. **9/9 pass against the real local
+stack.** `npm run check` exits 0.
+
+Filters there are **status and latest, not tags**: both are always in the rail (the status keys are a
+fixed list, the toggle is unconditional), whereas tag sections only render when the client has a
+vocabulary — which would make the test depend on fixture data it does not own.
+
+`e2e/fixture.ts` now gives the fixture asset a `thumbnail_url`: a 1×1 PNG **data URI**, so the lightbox
+is reachable without the suite depending on R2, on `cdn-gate`, or on a network at all.
+
+### A real defect the e2e run found
+
+All five new specs failed identically at first, and it was not the routing. **Clicking the words
+"Latest version only" did nothing.** The control was a `<div onClick>` inside a `<label>`, and a
+`<label>` only forwards a click when it labels a *form control* — it labelled a div. It was also
+unreachable by keyboard and nameless to a screen reader.
+
+Fixed properly rather than worked around in the locator: it is a `<button role="switch"
+aria-checked>` now, with the visual pill `aria-hidden`. Clicking the text works, clicking the pill
+works, Tab reaches it, and a screen reader announces it.
+
+Phase 0's characterization tests pass **unedited** through that change, because they click
+`getByText('Latest version only').previousElementSibling` and the click still bubbles to the control.
+Pre-existing defect, unrelated to this work, found only because an e2e test drove the real DOM.
+
+---
+
 ## Open questions carried forward
 
 - **Supabase production redirect allowlist.** The spec asks to verify the production entry is
   `…/**` and not a bare origin. That config lives in the Supabase dashboard, has no representation
   in this repo, and cannot be checked from here. **Still unverified — someone with dashboard access
   must confirm it before Phase 2 ships**, or a magic-link round trip will drop the query string in
-  production even after the `replaceState` fix.
-- **Dead code (`AppLayout`, `ActivityView`).** Decision due in Phase 3; not made yet.
+  production even after the `replaceState` fix. **This is the only outstanding item that can bite in
+  production**; everything else below is optional follow-up work.
+- **`ImageLightbox` has no image-error fallback.** A gated original that 401s shows the browser's
+  broken-image glyph inside the lightbox. `AssetImage` does not fit there — two layered `<img>`s, a
+  motion cross-fade, and its own `fullReady` state. See the Phase 6 notes.
+- **`STATUS_KEYS_STAFF` is still a second hand-maintained list** of the six statuses, in a different
+  order from `ASSET_STATUSES` (its order is the rail's display order). Worth removing deliberately,
+  with its own commit, since re-deriving it would reorder the UI.
+- **Admin tabs and drawers stay on `useState`** — out of scope by the spec
+  (`AdminLandingPage`'s `clients`/`users`/`errors`, `ClientDrawer`'s tag and destination panels). A
+  clean follow-up now that `useFilterParams` and `detailUrl.ts` exist as the pattern.
+
+## Where things stand
+
+All seven phases are done. `feature/routing`, version **3.1.0**, seven commits.
+
+```text
+npx vitest run     30 files, 495 tests, green
+npx playwright test  9 tests, green against the local stack
+npm run check        exit 0
+```
+
+Suites added by this work, and what each is *for* — the distinction matters if you extend them:
+
+| Suite | Runs | Do not |
+|---|---|---|
+| `filterUrl.test.ts` | pure encoding, plain node | — |
+| `useFilterParams.test.tsx` | the router binding | assert history via `window.history.length` — MemoryRouter never touches it |
+| `GalleryView.characterization.test.tsx` | behaviour that must not change | **edit it.** A failure here is a signal, not a task |
+| `GalleryView.url.test.tsx` | filters ⇄ query string | — |
+| `GalleryView.detailRoute.test.tsx` | the `/a/:assetId` route, cold loads | — |
+| `GalleryView.detailState.test.tsx` | `focus`/`lb`, real component tree | — |
+| `GalleryView.cache.test.tsx` | round-trip **counts**, real `useAssets` | share a `QueryClient` between tests |
+| `AssetDetailPage.test.tsx` | the four share-link states | — |
+| `AssetImage.test.tsx` | the thumbnail fallback | — |
+| `e2e/smoke.spec.ts` → `views are addressable` | the address bar, reload, real Back | put filtering rules here — they belong in the unit suites |

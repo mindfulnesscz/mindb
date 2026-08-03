@@ -12,6 +12,7 @@
 import type { Dispatch, SetStateAction } from 'react'
 import { canDownload, type Asset, type Role } from '@dc-hub/asset-library'
 import type { DetailFocus } from '../hooks/useDetailFocus'
+import { AssetImage } from '../../../components/AssetImage'
 import type { PortalDestination } from '../../../services/destinationService'
 import { ImageLightbox } from '../ImageLightbox'
 import { StreamPlayer } from '../StreamPlayer'
@@ -104,7 +105,7 @@ export function AssetPreviewPanel({
                     className="aspect-square rounded-sm overflow-hidden relative text-left cursor-zoom-in hover:ring-1 hover:ring-cosmos-black transition-shadow bg-gray-150"
                   >
                     {child.thumbnailUrl
-                      ? <img referrerPolicy="no-referrer" src={child.thumbnailUrl} alt={child.name} className="w-full h-full object-cover" />
+                      ? <AssetImage src={child.thumbnailUrl} alt={child.name} className="w-full h-full object-cover" fallbackClassName="w-full h-full" />
                       : <div className="w-full h-full flex items-center justify-center text-text-muted text-xs font-sans">{i + 1}</div>
                     }
                   </button>
@@ -122,7 +123,7 @@ export function AssetPreviewPanel({
                   }}
                 >
                   {children[carouselIdx]?.thumbnailUrl
-                    ? <img referrerPolicy="no-referrer" src={children[carouselIdx].thumbnailUrl} alt={children[carouselIdx].name} className="w-full h-full object-contain" />
+                    ? <AssetImage src={children[carouselIdx].thumbnailUrl!} alt={children[carouselIdx].name} className="w-full h-full object-contain" fallbackClassName="w-full h-full" />
                     : <div className="w-full h-full bg-gray-150" />
                   }
                 </button>
@@ -159,7 +160,7 @@ export function AssetPreviewPanel({
             onClick={() => { if (selectedAsset.thumbnailUrl) openLightboxOn(selectedAsset.id) }}
           >
             {selectedAsset.thumbnailUrl
-              ? <img referrerPolicy="no-referrer" src={selectedAsset.thumbnailUrl} alt={selectedAsset.name} className="w-full h-full object-contain" />
+              ? <AssetImage src={selectedAsset.thumbnailUrl} alt={selectedAsset.name} className="w-full h-full object-contain" fallbackClassName="w-full h-full" />
               : <div className="w-full h-full bg-gray-150" />
             }
           </button>
