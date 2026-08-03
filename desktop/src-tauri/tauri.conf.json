@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "DC Hub",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "identifier": "com.disruptcollective.dc-hub",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -38,15 +38,6 @@
   "plugins": {
     "fs": {
       "requireLiteralLeadingDot": false
-    },
-    "updater": {
-      "pubkey": "sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH",
-      "endpoints": [
-        "https://github.com/mindfulnesscz/mindb/releases/latest/download/latest.json"
-      ],
-      "windows": {
-        "installMode": "passive"
-      }
     }
   }
 }

@@ -33,6 +33,15 @@ export const FIXTURE_CLIENT_ID = 'eeeeeeee-1111-4eee-8eee-e00000000001';
 export const FIXTURE_SLUG = 'e2e-smoke';
 export const FIXTURE_ASSET_NAME = 'Smoke Test Deck';
 
+/* A 1×1 transparent PNG, inline.
+ *
+ * The asset needs SOME thumbnail for the lightbox to be reachable — the preview is a button gated on
+ * `thumbnailUrl`. A data URI rather than a CDN URL because this suite must not depend on R2, on the
+ * `cdn-gate` Worker, or on a network at all: the routing behaviour under test is the same whatever the
+ * bytes are, and a remote image would make the run fail for a reason unrelated to the app. */
+export const FIXTURE_THUMB =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==';
+
 const svc = {
   apikey: SERVICE_KEY,
   Authorization: `Bearer ${SERVICE_KEY}`,
@@ -78,6 +87,7 @@ export async function createFixtureTenant(): Promise<{ assetId: string }> {
       status: 'published',
       perm: 'client',
       latest: true,
+      thumbnail_url: FIXTURE_THUMB,
     }),
   });
   if (!asset.ok) throw new Error(`fixture asset: ${await asset.text()}`);

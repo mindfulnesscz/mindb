@@ -162,7 +162,17 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        /* Updater deliberately NOT registered. Its config is gone from tauri.conf.json — the
+           `pubkey` there was a pasted Supabase publishable key rather than a minisign key, and the
+           release workflow publishes no `latest.json` for the endpoint to fetch, so auto-update has
+           never been able to work. Registering a plugin whose config is absent is the shape most
+           likely to fail at startup, and nothing calls it: no frontend usage, and no updater
+           permission in capabilities/default.json.
+
+           The crates stay in Cargo.toml and package.json, so turning this on is: generate a keypair
+           (`npx tauri signer generate`), put the private key + password in repo secrets, add
+           `pubkey`/`endpoints` back, have release-desktop.yml emit updater artifacts, and restore
+           this line. */
         .invoke_handler(tauri::generate_handler![
             generate_thumbnail,
             wait_for_oauth_redirect,

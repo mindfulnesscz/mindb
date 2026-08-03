@@ -225,7 +225,12 @@ export default function ClientPortalPage() {
     const params = new URLSearchParams(hash.slice(1))
     const desc = params.get('error_description')
     if (desc) setLinkError(desc.replace(/\+/g, ' '))
-    window.history.replaceState(null, '', window.location.pathname)
+    /* Strips the hash and KEEPS the query string. Dropping the search was harmless while the portal
+       had no addressable state; now that filters live there, an expired magic link would silently
+       wipe the view the recipient was being sent back to — the SignInModal's
+       `redirectTo={window.location.href}` carries the filtered URL, so this is the other half of
+       that working. */
+    window.history.replaceState(null, '', window.location.pathname + window.location.search)
   }, [])
 
   // Fetch client by slug — works unauthenticated via security definer RPC
