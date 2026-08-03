@@ -25,7 +25,7 @@ npm run test:e2e                     # needs the local Supabase stack + dev serv
 | 0 | Characterization tests for `GalleryView` | ✅ done |
 | 1 | URL state primitives (`filterUrl.ts`, `useFilterParams`) | ✅ done |
 | 2 | Filters in the URL | ✅ done |
-| 3 | `/:slug/a/:assetId` detail route | ⬜ not started |
+| 3 | `/:slug/a/:assetId` detail route | ✅ done |
 | 4 | `focus` / `lb` params | ⬜ not started |
 | 5 | TanStack Query | ⬜ not started |
 | 6 | `/share/:id` becomes real | ⬜ not started |
@@ -170,6 +170,86 @@ that was one of the stated reasons not to build the hook on `useSearchParams`.
 - Under `MemoryRouter`, clearing the last filter leaves `location.search === ''` — no stray `?`. The
   spec's warning about `"?"` surviving in router state did not reproduce here, but the e2e specs
   still assert `page.url()` because that is the string a client is actually given.
+
+---
+
+## Phase 3 — the detail drawer is a route ✅
+
+| File | What |
+|---|---|
+| `App.tsx` | `<Route path=":slug/a/:assetId" element={<ClientPortalPage />} />`, with the catch-all warning in a comment |
+| `features/gallery/detailUrl.ts` | new — `DETAIL_PARAMS`, `readDetailParams`, `writeDetailParams` |
+| `features/gallery/hooks/useOpenAsset.ts` | new — resolves the path id to a top-level asset + focus |
+| `features/gallery/GalleryStates.tsx` | new `DetailSkeleton`, `DetailNotAvailable` |
+| `features/gallery/GalleryView.tsx` | four `useState`s deleted; `openAsset` is a synchronous `navigate` |
+| `features/gallery/GalleryView.detailRoute.test.tsx` | new — 21 tests |
+| deleted | `components/layout/AppLayout.tsx`, `features/activity/ActivityView.tsx` |
+
+Phase 0's characterization tests still pass unedited. Total suite: 452.
+
+### Deviation from the spec — `focus` and `lb` are WRITTEN in Phase 3, not Phase 4
+
+The spec puts `focus` and `lb` in Phase 4 and has Phase 3 navigate to `primary.id` alone. Doing
+exactly that would have lost two behaviours that work today, for the length of one commit: clicking a
+hover tile focuses that sibling, and clicking a gallery-child tile opens the lightbox on it. Both
+lived in the `focusSiblingId` / `openLightboxOnFocus` state this phase deletes, so there was nowhere
+to park them.
+
+So the cut moved by one step:
+
+- **Phase 3** — `focus`/`lb` are written when an asset is OPENED, and read from the URL. One
+  direction, one writer.
+- **Phase 4** — interactions *inside* the drawer (variant picker, carousel, lightbox open/close)
+  write them back. That is the part that needs state lifted out of `useAssetChildren`.
+
+Net effect is the same and no phase regresses. Phase 4a as written in the spec ("one-way, URL →
+state") is therefore already done.
+
+### Decisions taken
+
+- **`openAsset` no longer fetches anything.** It was an async click handler that resolved a sibling
+  to its parent before it could set state. Now the card's own id goes in the path, the sibling's in
+  `focus`, and every bit of resolution lives in `useOpenAsset` — where it has to be anyway, because a
+  cold load has no click to hang the work off. The click path is synchronous.
+- **The path id may be a child or a variant.** `/ess/a/<child-id>` opens the child's parent with the
+  child focused. Required by the spec's acceptance list, and it is what makes a link forwarded from
+  someone's lightbox work — a gallery child is never a card in the grid.
+- **Closing PUSHES.** Open pushes, so Back closes; close pushes too, so Back reopens. Every URL the
+  viewer visited is in history and Back always undoes the last thing. Replace-on-close was the
+  alternative and would leave two identical adjacent entries.
+- **`notFound` does not distinguish "no such asset" from "not yours".** RLS returns nothing in both
+  cases. Telling them apart would confirm the existence of an asset the viewer may not see, from the
+  client, where nothing can be enforced anyway. One message: "Not available."
+- **The not-available and loading states occupy the DRAWER, not the page.** The grid behind them is
+  still a working view; replacing it because one link is stale throws that away.
+- **Dead code: both deleted.** `AppLayout` is an `<Outlet/>`-based shell whose nav points at routes
+  that do not exist (`/activity`, `/clients`), and this phase deliberately chose sibling routes over
+  a nested shell — adopting it would contradict the routing decision being made in the same commit.
+  `ActivityView` was hardcoded sample data referenced by nothing. `src/components/layout/` and
+  `src/features/activity/` are gone.
+
+### Behaviour that genuinely changed
+
+**A filter change no longer closes the open drawer.** Before, the open asset was looked up in the
+current list, so filtering it out of the grid closed the drawer under the viewer. It is an address
+now: the grid narrows and what you were looking at stays.
+
+Phase 0 pinned the old behaviour as a fact (with a comment saying so) and *still passes* — because in
+that file `fetchAsset` is stubbed to return `null`, so the excluded asset resolves to "not
+available" and the drawer stub is absent either way. The new behaviour is pinned deliberately in
+`GalleryView.detailRoute.test.tsx` → "a filter change while the drawer is open keeps it open", where
+`fetchAsset` also knows the top-level fixtures. **If that Phase 0 test is ever revisited, this is the
+paragraph to read.**
+
+### Verified while doing it
+
+- Opening an asset does **not** re-canonicalise the filter params — `writeDetailParams` preserves
+  foreign params byte-for-byte and in order. Canonicalisation happens only when the rail writes. So
+  `/ess?entity=Chair&latest=1` → `/ess/a/id-beta?entity=Chair&latest=1`, not the sorted form. A
+  viewer who is only looking around never has their link quietly rewritten.
+- `ClientPortalPage` does not refetch the client when the drawer opens (same component type at the
+  same route depth reconciles). Confirmed by the spec's static analysis and consistent with the
+  tests, which would otherwise flicker the gate.
 
 ---
 

@@ -9,15 +9,19 @@
  */
 
 import { useState, useMemo, useEffect } from 'react'
+import { useNavigate, useLocation, useParams } from 'react-router-dom'
 import { useRole } from '../../context/RoleContext'
 import { getDefaultFilters, type Asset } from '@dc-hub/asset-library'
 import { useFilterParams } from '../../hooks/useFilterParams'
 import { useAssets } from '../../hooks/useAssets'
 import { useTags, type TagsByDimension } from '../../hooks/useTags'
-import { fetchAsset } from '../../services/assetService'
 import AssetDetail from './AssetDetail'
 import { AssetCard } from './AssetCard'
-import { CardSkeleton, EmptyState, type EmptyReason } from './GalleryStates'
+import {
+  CardSkeleton, EmptyState, DetailSkeleton, DetailNotAvailable, type EmptyReason,
+} from './GalleryStates'
+import { readDetailParams, writeDetailParams } from './detailUrl'
+import { useOpenAsset } from './hooks/useOpenAsset'
 import { FiltersRail } from './FiltersRail'
 import { useStreamMedia } from './hooks/useStreamMedia'
 import { STATUS_KEYS_STAFF, STATUS_KEYS_CLIENT } from './statusLabels'
@@ -32,11 +36,15 @@ export default function GalleryView() {
      and a reload or a magic-link round trip returns to it. Same [value, setter] shape as the
      useState this replaces, including the updater form. */
   const [filters, setFilters] = useFilterParams()
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [focusSiblingId, setFocusSiblingId] = useState<string | null>(null)
-  const [openLightboxOnFocus, setOpenLightboxOnFocus] = useState(false)
-  const [resolvedDetail, setResolvedDetail] = useState<Asset | null>(null)
   const [railVisible, setRailVisible] = useState(true)
+
+  /* Which asset is open, and what is focused inside it, come from the URL — the path segment and the
+     `focus`/`lb` params. `slug` types as optional but is always defined at runtime: GalleryView is
+     rendered only from ClientPortalPage, which is only reachable on a `:slug` route. */
+  const { slug, assetId } = useParams<{ slug: string; assetId?: string }>()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const { focusId: focusParam, lightbox } = readDetailParams(location.search)
 
   const isStaff = role === 'admin' || role === 'editor' || role === 'super_admin'
   const statusKeys = isStaff ? STATUS_KEYS_STAFF : STATUS_KEYS_CLIENT
@@ -123,44 +131,32 @@ export default function GalleryView() {
     filters.search?.trim() !== '' ||
     filters.latestOnly
 
-  const selectedAsset = selectedId
-    ? assets.find(a => a.id === selectedId) ?? resolvedDetail
-    : null
+  const open = useOpenAsset(assetId, assets, focusParam)
 
-  /** Open a top-level card, or a hover-tile sibling (child/variant) focused inside the parent detail. */
-  async function openAsset(primary: Asset, focusId?: string, opts?: { lightbox?: boolean }) {
-    const wantLightbox = !!opts?.lightbox
-    const targetId = focusId && focusId !== primary.id ? focusId : primary.id
-    if (targetId === primary.id) {
-      setFocusSiblingId(null)
-      setOpenLightboxOnFocus(wantLightbox)
-      setResolvedDetail(null)
-      setSelectedId(primary.id)
-      return
-    }
-    // Sibling may not be in the top-level list — resolve parent via DB, then focus.
-    const row = await fetchAsset(targetId)
-    if (!row) {
-      setFocusSiblingId(null)
-      setOpenLightboxOnFocus(false)
-      setResolvedDetail(null)
-      setSelectedId(primary.id)
-      return
-    }
-    const parentId = row.parentId || row.variantOf || primary.id
-    const parentInList = assets.find(a => a.id === parentId)
-    if (parentInList) {
-      setResolvedDetail(null)
-      setFocusSiblingId(targetId)
-      setOpenLightboxOnFocus(wantLightbox)
-      setSelectedId(parentInList.id)
-      return
-    }
-    const parent = parentId === primary.id ? primary : await fetchAsset(parentId)
-    setResolvedDetail(parent ?? primary)
-    setFocusSiblingId(targetId)
-    setOpenLightboxOnFocus(wantLightbox)
-    setSelectedId(parent?.id ?? primary.id)
+  /**
+   * Open a top-level card, or a hover-tile sibling focused inside its parent's detail.
+   *
+   * PUSHES. Opening an asset is a new place, and Back closing the drawer is what a
+   * modal-over-a-list is expected to do. Filtering, by contrast, replaces.
+   *
+   * `location.search` is carried forward, so opening an asset cannot drop the filters — without it,
+   * Back would return to an unfiltered grid.
+   *
+   * No fetch here any more. The card's own id goes in the path and the sibling's in `focus`; every
+   * bit of resolution — including a path id that turns out to be a child — happens in useOpenAsset,
+   * where it also runs for a cold load.
+   */
+  function openAsset(primary: Asset, focusId?: string, opts?: { lightbox?: boolean }) {
+    const focus = focusId && focusId !== primary.id ? focusId : undefined
+    navigate({
+      pathname: `/${slug}/a/${primary.id}`,
+      search: writeDetailParams(location.search, { focusId: focus, lightbox: !!opts?.lightbox }),
+    })
+  }
+
+  /** Back to the grid, filters intact, `focus`/`lb` dropped. */
+  function closeAsset() {
+    navigate({ pathname: `/${slug}`, search: writeDetailParams(location.search, {}) })
   }
 
   function emptyReason(): EmptyReason {
@@ -235,7 +231,7 @@ export default function GalleryView() {
                   key={asset.id}
                   asset={asset}
                   previewFrames={frames}
-                  onOpen={(focusId, opts) => { void openAsset(asset, focusId, opts) }}
+                  onOpen={(focusId, opts) => openAsset(asset, focusId, opts)}
                   role={role}
                   accent={accent}
                 />
@@ -245,23 +241,22 @@ export default function GalleryView() {
         </div>
       </div>
 
-      {/* Detail drawer */}
-      {selectedAsset && (
+      {/* Detail drawer. Three states, because it is reachable by address: the asset is in hand
+          (a click, or a link into the current grid), it is still being resolved, or the link points
+          at something this viewer cannot see. An empty drawer is not one of them. */}
+      {open.asset && (
         <AssetDetail
-          asset={selectedAsset}
-          onClose={() => {
-            setSelectedId(null)
-            setFocusSiblingId(null)
-            setOpenLightboxOnFocus(false)
-            setResolvedDetail(null)
-          }}
+          asset={open.asset}
+          onClose={closeAsset}
           mount="drawer"
           onStatusChange={() => reload()}
           activeFacets={{ entities: filters.entities, formats: filters.formats, angles: filters.angles }}
-          focusAssetId={focusSiblingId ?? undefined}
-          autoOpenLightbox={openLightboxOnFocus}
+          focusAssetId={open.focusId}
+          autoOpenLightbox={lightbox}
         />
       )}
+      {open.loading   && <DetailSkeleton />}
+      {open.notFound  && <DetailNotAvailable onClose={closeAsset} />}
     </div>
   )
 }
