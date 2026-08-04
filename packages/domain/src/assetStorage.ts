@@ -175,6 +175,49 @@ export function assetUrl(domain: string, objectKey: string, contentHash?: string
   return `${base}?v=${contentHash.slice(0, 12)}`;
 }
 
+/**
+ * Page-preview URLs for a document, derived from its THUMBNAIL URL.
+ *
+ * The portal has no page URL column — there is one object per page, so storing fifty URLs per asset
+ * would be absurd. It could rebuild each address from client id + level + identity, but that means
+ * the portal restating the key rule and the level lookup, and any drift between the two shows up as
+ * a broken image or a 403.
+ *
+ * Deriving from the thumbnail avoids all of it. The thumbnail is at
+ * `{domain}/{level}/{client}/thumbnails/{stable}/{child}.webp` and a page at
+ * `{domain}/{level}/{client}/pages/{stable}/{child}/001.webp` — same domain, same level, same
+ * identity, one segment different. Whatever tier and level the thumbnail resolved to, the pages
+ * inherit by construction, so they cannot disagree.
+ *
+ * The `?v=` stamp is carried over deliberately. It is the thumbnail's content hash, not the page's,
+ * but both are rendered from the same source document: change the document and the thumbnail's hash
+ * changes too, which busts the cached pages along with it. Reusing it is therefore correct coupling
+ * rather than a shortcut.
+ *
+ * Returns an empty array for a missing thumbnail, a zero count, or a URL that is not a thumbnail
+ * address — the portal renders nothing rather than guessing at an address.
+ */
+export function pageUrlsFromThumbnail(
+  thumbnailUrl: string | null | undefined,
+  count: number,
+): string[] {
+  if (!thumbnailUrl || count <= 0) return [];
+
+  const q = thumbnailUrl.indexOf('?');
+  const base = q === -1 ? thumbnailUrl : thumbnailUrl.slice(0, q);
+  const query = q === -1 ? '' : thumbnailUrl.slice(q);
+
+  // `/thumbnails/{stable}/{child}.webp` → `/pages/{stable}/{child}/`
+  const match = base.match(/^(.*)\/thumbnails\/([^/]+)\/([^/]+)\.webp$/);
+  if (!match) return [];
+  const [, prefix, stableId, childId] = match;
+
+  return Array.from(
+    { length: count },
+    (_, i) => `${prefix}/pages/${stableId}/${childId}/${pageObjectName(i + 1)}${query}`,
+  );
+}
+
 /* ── Reading a key back ────────────────────────────────────────────────────── */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

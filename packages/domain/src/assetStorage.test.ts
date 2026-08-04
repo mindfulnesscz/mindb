@@ -10,7 +10,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   effectiveLevel, tierFor, storageTarget, assetUrl, stripVersion,
-  pageTarget, pagePrefix, pageObjectName, isServableGatedKey, parseObjectPath, type AccessLevel,
+  pageTarget, pagePrefix, pageObjectName, pageUrlsFromThumbnail,
+  isServableGatedKey, parseObjectPath, type AccessLevel,
 } from './assetStorage';
 
 const CLIENT = '8f3e1c2a-0000-4000-8000-000000000001';
@@ -166,3 +167,54 @@ describe('stripVersion', () => {
     expect(stripVersion('https://cdn.example.com/k.webp')).toBe('https://cdn.example.com/k.webp');
   });
 });
+
+describe('pageUrlsFromThumbnail — the portal has no page URL column', () => {
+  const GATED = `https://files.example.com/client/${CLIENT}/thumbnails/a1000001/c1.webp?v=abcdef012345`
+
+  it('swaps the thumbnails segment for a per-page path, keeping domain and level', () => {
+    // The point of deriving rather than rebuilding: whatever tier and level the thumbnail resolved
+    // to, the pages inherit. They cannot disagree, so there is no broken-image or 403 drift.
+    expect(pageUrlsFromThumbnail(GATED, 2)).toEqual([
+      `https://files.example.com/client/${CLIENT}/pages/a1000001/c1/001.webp?v=abcdef012345`,
+      `https://files.example.com/client/${CLIENT}/pages/a1000001/c1/002.webp?v=abcdef012345`,
+    ])
+  })
+
+  it('works the same for a public thumbnail, which carries no level segment', () => {
+    const publicThumb = `https://cdn.example.com/${CLIENT}/thumbnails/a1/c1.webp`
+    expect(pageUrlsFromThumbnail(publicThumb, 1))
+      .toEqual([`https://cdn.example.com/${CLIENT}/pages/a1/c1/001.webp`])
+  })
+
+  it('carries the cache stamp across', () => {
+    // The thumbnail's content hash, not the page's — but both render from the same source document,
+    // so an edited document changes the thumbnail hash and busts the cached pages with it.
+    expect(pageUrlsFromThumbnail(GATED, 1)[0]).toContain('?v=abcdef012345')
+    expect(pageUrlsFromThumbnail(GATED.split('?')[0], 1)[0]).not.toContain('?')
+  })
+
+  it('pads page numbers to match the objects the pipeline wrote', () => {
+    const urls = pageUrlsFromThumbnail(GATED, 12)
+    expect(urls).toHaveLength(12)
+    expect(urls[9]).toContain('/010.webp')
+    expect(urls[11]).toContain('/012.webp')
+  })
+
+  it('returns nothing rather than guessing at an address', () => {
+    expect(pageUrlsFromThumbnail(GATED, 0)).toEqual([])
+    expect(pageUrlsFromThumbnail(null, 5)).toEqual([])
+    expect(pageUrlsFromThumbnail(undefined, 5)).toEqual([])
+    expect(pageUrlsFromThumbnail('', 5)).toEqual([])
+    // Not a thumbnail address — an originals URL, or something hand-edited.
+    expect(pageUrlsFromThumbnail(`https://x/${CLIENT}/originals/a1/c1.pdf`, 3)).toEqual([])
+    expect(pageUrlsFromThumbnail('https://x/not-a-key', 3)).toEqual([])
+  })
+
+  it('round-trips against the key the pipeline actually writes', () => {
+    // Ties the derivation to pageTarget rather than to a hand-written string, so a change to the key
+    // shape breaks this test instead of silently breaking the portal.
+    const thumb = `https://files.example.com/${storageTarget('client', CLIENT, 'thumbnails', 'a7', 'c3', '.webp').key}`
+    const expected = `https://files.example.com/${pageTarget('client', CLIENT, 'a7', 'c3', 1).key}`
+    expect(pageUrlsFromThumbnail(thumb, 1)).toEqual([expected])
+  })
+})
