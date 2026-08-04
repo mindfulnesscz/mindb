@@ -167,7 +167,7 @@ async fn wait_for_oauth_redirect() -> Result<String, String> {
               min-height:100vh;margin:0;text-align:center\">\
             <div>\
               <div style=\"font-size:3rem;margin-bottom:1rem\">\xe2\x9c\x93</div>\
-              <h2 style=\"margin:0 0 .5rem;color:#4ade80\">DC Hub connected!</h2>\
+              <h2 style=\"margin:0 0 .5rem;color:#4ade80\">Sotto connected!</h2>\
               <p style=\"color:#888;margin:0\">You can close this tab and return to the app.</p>\
             </div></body></html>";
 

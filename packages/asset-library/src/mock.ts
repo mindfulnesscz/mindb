@@ -1,4 +1,4 @@
-import { DEFAULT_DIMENSION_LABELS } from '@dc-hub/database'
+import { DEFAULT_DIMENSION_LABELS } from '@sotto/database'
 import type { Asset, Client, Comment } from './types.js'
 
 // A real client always has labels — `toClientIdentity` defaults each one — so the mocks carry them

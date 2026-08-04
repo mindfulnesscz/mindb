@@ -8,7 +8,7 @@
  * Touches the filesystem (manifests), so this stays desktop-side.
  */
 
-import { extractStableId } from '@dc-hub/domain';
+import { extractStableId } from '@sotto/domain';
 import { type ManifestStates, getManifestState, resolveChildId, writeManifest } from './manifest';
 
 export function cdnStemKey(absPath: string): string {

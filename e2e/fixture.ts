@@ -27,7 +27,7 @@ export const SERVICE_KEY =
 
 /** From seed.sql. The password exists only on the local stack, by design. */
 export const ADMIN_EMAIL = 'admin@acme.test';
-export const ADMIN_PASSWORD = 'dchub-local';
+export const ADMIN_PASSWORD = 'sotto-local';
 
 export const FIXTURE_CLIENT_ID = 'eeeeeeee-1111-4eee-8eee-e00000000001';
 export const FIXTURE_SLUG = 'e2e-smoke';

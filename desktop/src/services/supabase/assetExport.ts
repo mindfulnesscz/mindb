@@ -15,7 +15,7 @@
  * safe once assetExport.characterization.test.ts pinned the behaviour hermetically.
  */
 
-import { buildVocabMap, parseFilename, type VocabularyData, type GalleryGroup, type SingleAsset } from '@dc-hub/domain';
+import { buildVocabMap, parseFilename, type VocabularyData, type GalleryGroup, type SingleAsset } from '@sotto/domain';
 import type { CloudUrlEntry } from '../pipeline/types';
 import { writeReadme } from '../readmeService';
 import type { SupabaseConfig } from './rest';

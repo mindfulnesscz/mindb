@@ -11,7 +11,7 @@
  * missed. Scoping it to files touched this run would make a miss permanent.
  */
 
-import { isVideoFile, stripVersion } from '@dc-hub/domain';
+import { isVideoFile, stripVersion } from '@sotto/domain';
 import type { SupabaseConfig } from './rest';
 import { makeHeaders, fetchAllForClient } from './rest';
 import { requestStreamUpload } from './streamUpload';

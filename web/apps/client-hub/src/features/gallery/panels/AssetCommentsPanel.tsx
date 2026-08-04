@@ -6,7 +6,7 @@
  * itself on `canComment`.
  */
 
-import { canComment, type Role } from '@dc-hub/asset-library'
+import { canComment, type Role } from '@sotto/asset-library'
 import type { RealComment } from '../../../services/commentService'
 
 export interface AssetCommentsPanelProps {

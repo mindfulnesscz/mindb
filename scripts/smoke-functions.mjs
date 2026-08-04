@@ -16,7 +16,7 @@
  * far enough to make a decision — an auth rejection, a validation error, a "not provisioned" 503.
  * All of those prove the module resolved its imports and ran. What it does NOT do is exercise the
  * work: that needs real Cloudflare credentials and a seeded tenant. The logic worth unit-testing has
- * been pulled into `@dc-hub/domain` instead (see `planPageMoves`), where the ordinary test run covers
+ * been pulled into `@sotto/domain` instead (see `planPageMoves`), where the ordinary test run covers
  * it. This script covers the half that only a runtime can answer: does it load at all.
  *
  * ONLY TRUSTWORTHY ON A FRESH RUNTIME, and this is the whole operating manual for the script. The

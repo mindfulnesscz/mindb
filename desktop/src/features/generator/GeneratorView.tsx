@@ -4,7 +4,7 @@ import {
   type Slot, dimensionLabelForSlot, parentGroupsForSlot,
   buildFilenameCode, buildObsidianTags,
   type VocabTag,
-} from '@dc-hub/domain';
+} from '@sotto/domain';
 import { useVocabularyStore } from '../../store/vocabularyStore';
 import { useClientStore } from '../../store/clientStore';
 import css from './GeneratorView.module.css';

@@ -16,7 +16,7 @@ import { invoke } from '@tauri-apps/api/core';
 import {
   filterHighestVersions, storageTarget, assetUrl, tierFor,
   pageTarget, pagePrefix, pageObjectName, type AccessLevel, type ObjectKind,
-} from '@dc-hub/domain';
+} from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
 import { cdnStemKey } from '../supabaseService';
 import { loadR2Cache, saveR2Cache, r2CacheKey, rememberR2Upload } from './r2Cache';

@@ -1,6 +1,6 @@
 # Claude Code handoff — OAuth login (GitHub → Google → SharePoint)
 
-Working file for wiring up and testing OAuth sign-in on the DC Hub web portal.
+Working file for wiring up and testing OAuth sign-in on the Sotto web portal.
 Order: **GitHub first, Google second, Microsoft/SharePoint last** (needs a test
 tenant). Delete or archive this file once all three are live.
 

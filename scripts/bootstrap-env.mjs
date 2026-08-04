@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * bootstrap-env — provision a hosted DC Hub environment (a new tier like
+ * bootstrap-env — provision a hosted Sotto environment (a new tier like
  * staging, or a whole new agency instance) to the point a desktop editor can
  * sign in and publish.
  *
@@ -177,7 +177,7 @@ try {
     if (!EXECUTE) {
       console.log('  [dry-run] supabase secrets set --env-file <temp>');
     } else {
-      const tmp = join(tmpdir(), `dchub-cf-secrets-${ref}.env`);
+      const tmp = join(tmpdir(), `sotto-cf-secrets-${ref}.env`);
       writeFileSync(tmp, [...secrets, ''].join('\n'), { mode: 0o600 });
       try {
         execSync(`supabase secrets set --env-file ${tmp}`, { stdio: 'inherit', env: { ...process.env, SUPABASE_ACCESS_TOKEN: cfg.SUPABASE_ACCESS_TOKEN } });

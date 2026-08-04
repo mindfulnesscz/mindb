@@ -37,7 +37,14 @@ export const DEFAULT_DIMENSION_LABELS: DimensionLabels = {
  * subsets — the failure that made a portal field silently invisible on desktop.
  */
 export const CLIENT_IDENTITY_SELECT =
-  'id,name,accent,initials,slug,logo_url,website,portal_bg,domain_whitelist,dimension_labels,preview_page_limit'
+  /* `preview_page_limit` is deliberately NOT here. This list is shared with the desktop, which runs
+     against Production, Staging and Local — and PostgREST rejects the WHOLE query with
+     "column does not exist" against any database where the migration has not been applied yet. That
+     broke client loading entirely ("Could not load clients"), which is a far worse failure than not
+     knowing a page limit. The pipeline reads the limit through `fetchPreviewPageLimit`, which is a
+     separate query that degrades to the documented default; the portal admin reads it via
+     `select('*')`. Add a column here only once every environment is guaranteed to have it. */
+  'id,name,accent,initials,slug,logo_url,website,portal_bg,domain_whitelist,dimension_labels'
 
 /** The portal-owned facts about a client. Machine-local state (folders, tokens) is never in here. */
 export interface ClientIdentity {

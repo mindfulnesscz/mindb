@@ -130,7 +130,7 @@ fn pdfium_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 /* ── Worker processes: the only way to render PDFs in parallel ───────────── */
 
 /// Hidden argv flag that turns this executable into a one-shot render worker.
-pub const WORKER_FLAG: &str = "--dchub-render-worker";
+pub const WORKER_FLAG: &str = "--sotto-render-worker";
 
 /// Render page 1 of a PDF to a WebP thumbnail, in a short-lived WORKER PROCESS.
 ///
@@ -456,7 +456,7 @@ pub fn office_previews(
     quality: u32,
     limit: u32,
 ) -> Result<RenderOutcome, String> {
-    let work = TempDir::new("dchub-office")?;
+    let work = TempDir::new("sotto-office")?;
     let pdf = office_to_pdf(app, src, work.path())?;
     run_worker(&RenderJob {
         lib_dir: pdfium_dir(app)?.to_string_lossy().into_owned(),
@@ -680,7 +680,7 @@ mod tests {
        checking alone cannot see either, which is why `pages.json` exists at all. */
     #[test]
     fn previews_are_current_only_while_every_input_matches() {
-        let work = TempDir::new("dchub-manifest").unwrap();
+        let work = TempDir::new("sotto-manifest").unwrap();
         let src = work.path().join("doc.pdf");
         let pages = work.path().join("doc-thumb");
         std::fs::write(&src, b"pretend document").unwrap();
@@ -708,7 +708,7 @@ mod tests {
        interrupted run must not look complete. This is why the manifest is written last. */
     #[test]
     fn a_manifest_promising_missing_pages_is_not_current() {
-        let work = TempDir::new("dchub-manifest-gap").unwrap();
+        let work = TempDir::new("sotto-manifest-gap").unwrap();
         let src = work.path().join("doc.pdf");
         let pages = work.path().join("doc-thumb");
         std::fs::write(&src, b"doc").unwrap();
@@ -726,7 +726,7 @@ mod tests {
 
     #[test]
     fn a_missing_or_unreadable_manifest_means_regenerate() {
-        let work = TempDir::new("dchub-manifest-none").unwrap();
+        let work = TempDir::new("sotto-manifest-none").unwrap();
         let src = work.path().join("doc.pdf");
         let pages = work.path().join("doc-thumb");
         std::fs::write(&src, b"doc").unwrap();
@@ -773,7 +773,7 @@ mod tests {
 
     #[test]
     fn temp_dirs_are_unique_and_removed_on_drop() {
-        let (a, b) = (TempDir::new("dchub-test").unwrap(), TempDir::new("dchub-test").unwrap());
+        let (a, b) = (TempDir::new("sotto-test").unwrap(), TempDir::new("sotto-test").unwrap());
         assert_ne!(a.path(), b.path(), "concurrent conversions must not share a temp dir");
         let path = a.path().to_path_buf();
         assert!(path.is_dir());
@@ -838,7 +838,7 @@ mod tests {
             eprintln!("skipping: no bundled PDFium — run `npm run deps:native`");
             return;
         };
-        let work = TempDir::new("dchub-render-test").unwrap();
+        let work = TempDir::new("sotto-render-test").unwrap();
         let src = work.path().join("in.pdf");
         let dest = work.path().join("out.webp");
         std::fs::write(&src, minimal_pdf()).unwrap();
@@ -885,7 +885,7 @@ mod tests {
     fn worker_main_renders_a_pdf_and_reports_failure_by_exit_code() {
         let _serial = pdfium_serial();
         let Some(lib_dir) = pdfium_lib_dir() else { return };
-        let work = TempDir::new("dchub-worker").unwrap();
+        let work = TempDir::new("sotto-worker").unwrap();
         let good = work.path().join("good.pdf");
         let bad = work.path().join("bad.pdf");
         std::fs::write(&good, minimal_pdf()).unwrap();
@@ -921,7 +921,7 @@ mod tests {
     fn renders_pages_into_the_preview_folder_with_padded_names() {
         let _serial = pdfium_serial();
         let Some(lib_dir) = pdfium_lib_dir() else { return };
-        let work = TempDir::new("dchub-pages").unwrap();
+        let work = TempDir::new("sotto-pages").unwrap();
         let src = work.path().join("in.pdf");
         let thumb = work.path().join("in-thumb.webp");
         let pages = work.path().join("in-thumb");
@@ -942,7 +942,7 @@ mod tests {
     fn a_page_limit_caps_rendering_but_still_reports_the_real_total() {
         let _serial = pdfium_serial();
         let Some(lib_dir) = pdfium_lib_dir() else { return };
-        let work = TempDir::new("dchub-pages-cap").unwrap();
+        let work = TempDir::new("sotto-pages-cap").unwrap();
         let src = work.path().join("in.pdf");
         let thumb = work.path().join("t.webp");
         let pages = work.path().join("p");
@@ -962,7 +962,7 @@ mod tests {
     fn re_rendering_clears_pages_left_by_a_previous_run() {
         let _serial = pdfium_serial();
         let Some(lib_dir) = pdfium_lib_dir() else { return };
-        let work = TempDir::new("dchub-pages-stale").unwrap();
+        let work = TempDir::new("sotto-pages-stale").unwrap();
         let src = work.path().join("in.pdf");
         let thumb = work.path().join("t.webp");
         let pages = work.path().join("p");
@@ -982,7 +982,7 @@ mod tests {
     fn a_corrupt_pdf_errors_instead_of_writing_a_broken_thumbnail() {
         let _serial = pdfium_serial();
         let Some(lib_dir) = pdfium_lib_dir() else { return };
-        let work = TempDir::new("dchub-render-bad").unwrap();
+        let work = TempDir::new("sotto-render-bad").unwrap();
         let src = work.path().join("bad.pdf");
         let dest = work.path().join("bad.webp");
         std::fs::write(&src, b"%PDF-1.4\nthis is not a pdf").unwrap();

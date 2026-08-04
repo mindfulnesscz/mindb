@@ -1,4 +1,4 @@
-import type { AssetActions, Asset } from '@dc-hub/asset-library'
+import type { AssetActions, Asset } from '@sotto/asset-library'
 import { reportError } from './reportError'
 import { isGatedUrl } from '../services/cdnGate'
 

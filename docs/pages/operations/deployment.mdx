@@ -131,7 +131,7 @@ The web app reads Supabase URL/anon key from environment (Vercel env vars in pro
 
 Desktop workstations need filesystem permissions plus native dependencies for requested thumbnail formats. Port 7623 must be available for OAuth and sign-in callbacks. OneDrive device flow needs outbound HTTPS but no callback listener.
 
-R2 storage is **environment-level**: bucket and public domain are edge secrets (`R2_BUCKET`, `R2_PUBLIC_DOMAIN`); object keys are prefixed `{client_id}/`. Credentials are minted per run by `r2-grant` (see [R2 CDN](/desktop/cdn)). Deploy migrations before UI that depends on them; regenerate types with `npm run db:types` into `@dc-hub/database`.
+R2 storage is **environment-level**: bucket and public domain are edge secrets (`R2_BUCKET`, `R2_PUBLIC_DOMAIN`); object keys are prefixed `{client_id}/`. Credentials are minted per run by `r2-grant` (see [R2 CDN](/desktop/cdn)). Deploy migrations before UI that depends on them; regenerate types with `npm run db:types` into `@sotto/database`.
 
 ## Release artifacts
 

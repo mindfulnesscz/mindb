@@ -1,7 +1,7 @@
 /* Create / edit a client. Owns the form state and the save call. */
 
 import { useState, useEffect } from 'react'
-import { Client } from '@dc-hub/asset-library'
+import { Client } from '@sotto/asset-library'
 import { createClient, updateClient } from '../../services/clientService'
 import { uploadClientLogo } from '../../services/brandingService'
 import { importTaxonomyJsonFile, parseAndValidateTaxonomyJson } from '../../services/taxonomyImport'

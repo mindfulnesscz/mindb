@@ -9,7 +9,7 @@
  *   ./tags/LeafTable    the editable leaf table, used in both places leaves are listed
  */
 
-import type { Client } from '@dc-hub/asset-library'
+import type { Client } from '@sotto/asset-library'
 import type { Tag } from '../../services/tagService'
 import { buildDimensionTree, dimLabel } from './tags/tagTree'
 import { useTagAdmin } from './tags/useTagAdmin'

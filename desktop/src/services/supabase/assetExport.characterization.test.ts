@@ -26,8 +26,8 @@ vi.mock('./assetQueries', () => ({ fetchAssetStats: async () => new Map() }));
 const { vfs } = await import('../../test/vfs');
 const { restStub } = await import('../../test/restStub');
 const { exportAssetsToSupabase } = await import('./assetExport');
-const { groupAssets } = await import('@dc-hub/domain');
-import type { VocabularyData, VocabTag } from '@dc-hub/domain';
+const { groupAssets } = await import('@sotto/domain');
+import type { VocabularyData, VocabTag } from '@sotto/domain';
 
 const SRC = '/src';
 const CLIENT = 'client-1';

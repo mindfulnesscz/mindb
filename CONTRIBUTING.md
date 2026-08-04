@@ -1,4 +1,4 @@
-# Contributing to DC Hub
+# Contributing to Sotto
 
 This repo holds four things that ship together: a Tauri 2 desktop app, a React portal, a Nextra docs
 site, and the Supabase schema they share. The rules below are the ones that are expensive to

@@ -1,4 +1,4 @@
-# Project rules — DC Hub
+# Project rules — Sotto
 
 ## ⛔ NEVER RESET OR WIPE A DATABASE WITHOUT ASKING FIRST
 

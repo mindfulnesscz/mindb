@@ -16,7 +16,7 @@
 import '@testing-library/jest-dom/vitest'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
-import { ErrorBoundary } from '@dc-hub/asset-library'
+import { ErrorBoundary } from '@sotto/asset-library'
 
 function Boom({ shouldThrow }: { shouldThrow: boolean }) {
   if (shouldThrow) throw new Error('render exploded')

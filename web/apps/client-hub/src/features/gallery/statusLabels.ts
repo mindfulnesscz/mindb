@@ -3,7 +3,7 @@
  * Staff and clients see DIFFERENT keys: a client must never be offered `archived` or
  * `disconnected`, which are internal lifecycle states.
  */
-import type { Asset } from '@dc-hub/asset-library'
+import type { Asset } from '@sotto/asset-library'
 
 export const STATUS_LABELS: Record<string, string> = {
   draft:        'Draft',

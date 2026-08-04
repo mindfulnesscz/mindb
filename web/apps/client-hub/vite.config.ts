@@ -31,10 +31,18 @@ export default defineConfig({
   resolve: {
     // Prefer TypeScript sources — stale compiled .js files must not shadow .tsx.
     extensions: ['.tsx', '.ts', '.jsx', '.js', '.mjs', '.mts', '.json'],
+    /* Every workspace package is aliased straight to its source, and the list must stay COMPLETE —
+       it mirrors `paths` in tsconfig.json. `@sotto/database` was the one omission, so it alone
+       resolved through the node_modules symlink instead. That difference is invisible until the
+       symlink is briefly absent — during a scope rename, a fresh clone before `npm install`, or a
+       dev server started mid-install — and then it fails as
+       "Failed to resolve import @sotto/database", pointing at the importing component rather than at
+       the missing alias. tsconfig already listed all four; only Vite disagreed. */
     alias: {
-      '@dc-hub/asset-library': resolve(__dirname, '../../../packages/asset-library/src/index.ts'),
-      '@dc-hub/auth': resolve(__dirname, '../../../packages/auth/src/index.ts'),
-      '@dc-hub/domain': resolve(__dirname, '../../../packages/domain/src/index.ts'),
+      '@sotto/asset-library': resolve(__dirname, '../../../packages/asset-library/src/index.ts'),
+      '@sotto/auth': resolve(__dirname, '../../../packages/auth/src/index.ts'),
+      '@sotto/database': resolve(__dirname, '../../../packages/database/src/index.ts'),
+      '@sotto/domain': resolve(__dirname, '../../../packages/domain/src/index.ts'),
     },
   },
 })

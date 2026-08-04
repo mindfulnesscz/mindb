@@ -11,11 +11,11 @@ const fromHere = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 export default defineConfig({
   resolve: {
     alias: {
-      '@dc-hub/asset-library': fromHere('./packages/asset-library/src/index.ts'),
+      '@sotto/asset-library': fromHere('./packages/asset-library/src/index.ts'),
       // Subpath first — Vite matches aliases in order, and the bare entry would otherwise swallow
-      // `@dc-hub/domain/assetStorage` and resolve it to the barrel.
-      '@dc-hub/domain/assetStorage': fromHere('./packages/domain/src/assetStorage.ts'),
-      '@dc-hub/domain': fromHere('./packages/domain/src/index.ts'),
+      // `@sotto/domain/assetStorage` and resolve it to the barrel.
+      '@sotto/domain/assetStorage': fromHere('./packages/domain/src/assetStorage.ts'),
+      '@sotto/domain': fromHere('./packages/domain/src/index.ts'),
     },
   },
   test: {

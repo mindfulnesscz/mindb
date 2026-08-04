@@ -5,7 +5,7 @@
  */
 
 import { useState, useRef } from 'react'
-import {} from '@dc-hub/asset-library'
+import {} from '@sotto/asset-library'
 
 export function DomainInput({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
   const [draft, setDraft] = useState('')

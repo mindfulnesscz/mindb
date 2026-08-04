@@ -11,11 +11,11 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import type { Asset } from '@dc-hub/asset-library'
+import type { Asset } from '@sotto/asset-library'
 import {
   isStreamReady, streamStillUrl, streamFrameUrls, streamIframeUrl,
   effectiveLevel, tierFor, type StreamRef,
-} from '@dc-hub/domain'
+} from '@sotto/domain'
 import {
   ensureStreamTokens, cachedStreamToken, streamDomain, freshStreamStatus, freshStreamDuration,
 } from '../../../services/streamTokens'

@@ -97,7 +97,7 @@ fn uri_encode(s: &str, encode_slash: bool) -> String {
 fn sign(
     method:        &str,
     host:          &str,
-    canonical_uri: &str,  // e.g. "/dc-hub-ess/thumbnails/foo.webp"
+    canonical_uri: &str,  // e.g. "/sotto-ess/thumbnails/foo.webp"
     query:         &str,  // e.g. "list-type=2&max-keys=0"
     body_hash:     &str,
     extra_headers: &[(&str, &str)],
@@ -687,7 +687,7 @@ mod tests {
 
     #[test]
     fn sha256_hex_is_lowercase_hex_of_the_right_length() {
-        let h = sha256_hex(b"dc-hub");
+        let h = sha256_hex(b"sotto");
         assert_eq!(h.len(), 64);
         assert!(h.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
     }

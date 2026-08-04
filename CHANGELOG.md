@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to DC Hub are documented here.
+All notable changes to Sotto are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
@@ -107,7 +107,7 @@ magic-link round trip, and Back does what it should.
 - **`?focus=<uuid>` and `?lb=1`** on the detail route — the focused child or variant, and the
   lightbox. Ids, not indices: a position would point at a different picture the moment a sibling is
   added or disconnected. A link copied mid-scrub opens on the frame that was on screen.
-- **`filterUrl.ts`** in `@dc-hub/asset-library` — `filtersToSearchParams`, `searchParamsToFilters`,
+- **`filterUrl.ts`** in `@sotto/asset-library` — `filtersToSearchParams`, `searchParamsToFilters`,
   `filterCacheKey`. Canonical output, tolerant input: a value outside the allowed vocabulary is
   dropped rather than forwarded to PostgREST, which rejects the whole query on an unknown enum.
 - **`ASSET_STATUSES`, `ASSET_PERMS`, `ENTITY_TYPES`** — the three closed vocabularies as const

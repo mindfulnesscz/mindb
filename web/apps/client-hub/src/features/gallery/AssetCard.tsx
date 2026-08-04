@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from 'react'
 import { useReducedMotion } from 'motion/react'
-import { canDownload, canSeeStats, canReadComments, type Asset, type Role } from '@dc-hub/asset-library'
+import { canDownload, canSeeStats, canReadComments, type Asset, type Role } from '@sotto/asset-library'
 import { assetFacetLabels } from '../../services/assetService'
 import { webAssetActions } from '../../lib/assetActions'
 import { MultiAssetHoverGrid, useSiblingPreviews, useDelayedHover, type SiblingPreview } from './MultiAssetHover'

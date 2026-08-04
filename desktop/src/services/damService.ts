@@ -18,7 +18,7 @@ import { writeTextFile, readTextFile, copyFile, mkdir, rename, remove } from '@t
 import { join } from '@tauri-apps/api/path';
 import type { RunStats } from '../store/pipelineStore';
 import type { RunContext } from './pipeline/types';
-import { buildVocabMap, parseFilename, buildNoteName, translateExportName } from '@dc-hub/domain';
+import { buildVocabMap, parseFilename, buildNoteName, translateExportName } from '@sotto/domain';
 import { pathParts, safeName, isPublishable } from './dam/paths';
 import { listDir, fileExists, isUnchanged, shouldSkip } from './dam/fs';
 import { findPackageAnchors } from './dam/scope';

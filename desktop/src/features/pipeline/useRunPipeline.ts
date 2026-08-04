@@ -26,7 +26,7 @@ import {
 } from '../../services/supabaseService';
 import { loadVocabulary } from '../../services/vocabService';
 import { notifyRunComplete } from '../../services/notifyService';
-import { groupAssets, type VocabularyData } from '@dc-hub/domain';
+import { groupAssets, type VocabularyData } from '@sotto/domain';
 import { resolveRunPlan } from './runPlan';
 
 export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise<void> {
