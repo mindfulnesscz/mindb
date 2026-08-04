@@ -292,7 +292,7 @@ the URL — the leaked-URL case that re-keying cannot address anyway.
 Four programs must agree on the key shape: the pipeline writes keys, the reconciler and the re-key
 script move them, and the Worker parses them back to decide access. **All four import
 `assetStorage.ts`** — including the Worker, since `workers/cdn-gate` is an npm workspace member and
-wrangler resolves `@dc-hub/domain` through it at bundle time.
+wrangler resolves `@sotto/domain` through it at bundle time.
 
 That was not always true. The Worker carried its own copy of the parser on the assumption that a
 separate deployment could not share code, and `parseObjectPath` exists as one function because that

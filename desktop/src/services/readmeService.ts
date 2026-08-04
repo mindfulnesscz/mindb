@@ -1,5 +1,5 @@
 import { writeTextFile } from '@tauri-apps/plugin-fs';
-import { buildObsidianTags, type VocabTag } from '@dc-hub/domain';
+import { buildObsidianTags, type VocabTag } from '@sotto/domain';
 
 export const README_FILENAME = 'readme.md';
 

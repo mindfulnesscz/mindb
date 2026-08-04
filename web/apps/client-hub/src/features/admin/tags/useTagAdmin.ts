@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Client } from '@dc-hub/asset-library'
+import type { Client } from '@sotto/asset-library'
 import { createTag, deleteTag, fetchTags, updateTag, type Tag } from '../../../services/tagService'
 import { importTaxonomyJsonFile, buildTaxonomyDocument, downloadTaxonomyJson } from '../../../services/taxonomyImport'
 import { isGroup, defaultTagKey, clientFileSlug } from './tagTree'

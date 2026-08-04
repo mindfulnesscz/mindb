@@ -23,7 +23,7 @@ overlays. The full parameter table is in [Client Portals](/portals).
 Filters, the open asset, the focused child or variant, and the lightbox are all derived from the
 address — not from `useState`. So a view is something you can send to someone, and it survives a
 reload and a magic-link round trip. `useFilterParams` binds `FilterState` to the query string;
-`filterUrl.ts` in `@dc-hub/asset-library` does the encoding and is pure, so it is tested without a
+`filterUrl.ts` in `@sotto/asset-library` does the encoding and is pure, so it is tested without a
 browser.
 
 `filtersToSearchParams` produces a **canonical** string — fixed key order, arrays sorted and

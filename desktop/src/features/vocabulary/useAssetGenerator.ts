@@ -8,7 +8,7 @@
 import { useState } from 'react';
 import {
   buildFilenameCode, buildObsidianTags, type Slot, type VocabTag,
-} from '@dc-hub/domain';
+} from '@sotto/domain';
 import { useClientStore } from '../../store/clientStore';
 import { saveClients } from '../../services/clientService';
 import { reportError } from '../../services/reportError';

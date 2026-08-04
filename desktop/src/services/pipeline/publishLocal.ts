@@ -15,7 +15,7 @@ import { copyFile, mkdir, rename, remove } from '@tauri-apps/plugin-fs';
 import { join, dirname } from '@tauri-apps/api/path';
 import type { AppSettings } from '../../store/settingsStore';
 import type { LogType } from '../../store/pipelineStore';
-import { buildVocabMap, translateExportName, stripStableId } from '@dc-hub/domain';
+import { buildVocabMap, translateExportName, stripStableId } from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
 import type { DestExportLayout } from '../../domain/client';
 import { shouldSkip, isPackageFolder, isOutFolder, isPublishableFile } from './naming';

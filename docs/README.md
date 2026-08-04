@@ -1,6 +1,6 @@
-# DC Hub Documentation
+# Sotto Documentation
 
-Documentation site for DC Hub (see the [monorepo README](../README.md) for the product overview). These pages describe what the current source code actually does — including ordering, skip rules, failure boundaries, security implications, and known limitations.
+Documentation site for Sotto (see the [monorepo README](../README.md) for the product overview). These pages describe what the current source code actually does — including ordering, skip rules, failure boundaries, security implications, and known limitations.
 
 Built with [Nextra](https://nextra.site/) (Next.js).
 

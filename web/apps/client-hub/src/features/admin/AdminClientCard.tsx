@@ -1,6 +1,6 @@
 /* One client card on the admin landing grid. */
 
-import { Client } from '@dc-hub/asset-library'
+import { Client } from '@sotto/asset-library'
 import {} from './LogoField'
 
 export function AdminClientCard({ client, onNavigate, onEdit, canEdit }: {

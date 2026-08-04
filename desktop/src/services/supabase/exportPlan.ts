@@ -18,7 +18,7 @@
  * Reads and writes `.dchub.json` manifests, so this stage touches the filesystem.
  */
 
-import { stripStableId, filterHighestVersions, type VocabularyData } from '@dc-hub/domain';
+import { stripStableId, filterHighestVersions, type VocabularyData } from '@sotto/domain';
 import type { CloudUrlEntry } from '../pipeline/types';
 import { parseAssetForSupabase, unionStrings, intersectStrings } from './rowMapping';
 import {

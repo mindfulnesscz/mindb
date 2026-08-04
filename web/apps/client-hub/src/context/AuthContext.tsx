@@ -7,13 +7,13 @@ import {
   signOut as signOutCore,
   type EmailAuthType,
   type OAuthProvider,
-} from '@dc-hub/auth'
+} from '@sotto/auth'
 import { supabase, isConfigured, getConfig } from '../lib/supabase'
 import { configureErrorSink } from '../lib/reportError'
 import { useCdnCookie } from '../hooks/useCdnCookie'
-import type { ProfileRow } from '@dc-hub/database'
+import type { ProfileRow } from '@sotto/database'
 
-// Auth logic + types now live in the shared @dc-hub/auth package. Re-export the
+// Auth logic + types now live in the shared @sotto/auth package. Re-export the
 // types so existing importers (e.g. SignInModal) keep resolving them from here.
 export type { EmailAuthType, OAuthProvider }
 

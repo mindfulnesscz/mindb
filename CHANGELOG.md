@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to DC Hub are documented here.
+All notable changes to Sotto are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
@@ -10,6 +10,23 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 Thumbnails need nothing installed, and a document can be paged through in the portal. The rendering
 engines ship inside the app — no `brew install`, no missing-tool errors — and PDFs, decks and Word
 documents now publish a preview per page alongside the title thumbnail.
+
+### Changed — the app is now **Sotto**
+
+Every user-facing reference: app name, window title, `SOTTO` wordmark, npm scope (`@sotto/*`), crate
+and binary (`sotto-app`), docs. Three identifiers deliberately keep the old name because renaming each
+costs data or breaks identity, and none is ever shown to anyone:
+
+| Kept | Why |
+|---|---|
+| `com.disruptcollective.dc-hub` | The macOS bundle identifier **is** the app-data path. Renaming points the app at an empty directory — environments, settings, client configs, vocab caches, R2 upload cache. |
+| `.dchub.json` | Per-folder asset identity (183 manifests in the ESS library alone). Renaming re-mints `child_id`s, changes every R2 key, orphans published URLs and detaches comments. |
+| `dc-hub-*` R2 buckets | Cannot be renamed in place; would mean copying the library and repointing every stored URL. |
+
+Two stored keys are **migrated**, not just renamed, because a rename alone reads as data loss:
+`sotto-auth-<host>` carries an existing session across so nobody is signed out, and
+`sotto_supabase_*` falls back to the old keys so a manually configured browser is not left saying
+"not configured".
 
 ### Added
 
@@ -66,6 +83,13 @@ documents now publish a preview per page alongside the title thumbnail.
   page files are `001.webp` and carry no `-thumb`. Two walkers checked only files: `pipeline/fs.ts`
   would have packaged and uploaded the pages as assets, and `dam/scan.ts` would have given every
   previewed document a spurious vault note.
+- **An environment without the migration could not sync assets at all.** PostgREST rejects the whole
+  write when one column is unknown (`PGRST204`), so sending the new page-count fields to a database
+  that had not had the migration failed the **parent** row — and every child then skipped for want of
+  a `parent_id`. One additive metadata column stopped an entire package from syncing. The export now
+  probes once per run and withholds the two fields when they are absent, logging that it did; the same
+  over-reach in `CLIENT_IDENTITY_SELECT` broke client loading outright and is likewise fixed. Both have
+  regression tests.
 - **A page sweep jammed `cdn_move_queue`, which broke video.** The first version listed R2 with
   credentials scoped `object-read-write`, which does not permit `ListBucket`. Every asset was marked
   failed and nothing was dequeued — and because the same pass sets Cloudflare Stream's
@@ -107,7 +131,7 @@ magic-link round trip, and Back does what it should.
 - **`?focus=<uuid>` and `?lb=1`** on the detail route — the focused child or variant, and the
   lightbox. Ids, not indices: a position would point at a different picture the moment a sibling is
   added or disconnected. A link copied mid-scrub opens on the frame that was on screen.
-- **`filterUrl.ts`** in `@dc-hub/asset-library` — `filtersToSearchParams`, `searchParamsToFilters`,
+- **`filterUrl.ts`** in `@sotto/asset-library` — `filtersToSearchParams`, `searchParamsToFilters`,
   `filterCacheKey`. Canonical output, tolerant input: a value outside the allowed vocabulary is
   dropped rather than forwarded to PostgREST, which rejects the whole query on an unknown enum.
 - **`ASSET_STATUSES`, `ASSET_PERMS`, `ENTITY_TYPES`** — the three closed vocabularies as const

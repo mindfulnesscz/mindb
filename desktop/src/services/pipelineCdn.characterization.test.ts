@@ -93,7 +93,7 @@ describe('CDN — object key construction', () => {
       'client-abc/pages/a1000004/c1/001.webp',
       'client-abc/thumbnails/a1000004/c1.webp',
     ]);
-    expect(invokeStub.argsFor('upload_to_r2')[0].bucket).toBe('dchub-test');
+    expect(invokeStub.argsFor('upload_to_r2')[0].bucket).toBe('sotto-test');
   });
 
   it('never double-applies a prefix that a key already carries', async () => {
@@ -128,7 +128,7 @@ describe('CDN — object key construction', () => {
     const buckets = new Set(invokeStub.argsFor('upload_to_r2')
       .filter(a => (a.objectKey as string).includes('/pages/'))
       .map(a => a.bucket));
-    expect([...buckets]).toEqual(['dchub-test-gated']);
+    expect([...buckets]).toEqual(['sotto-test-gated']);
   });
 
   it('sends page previews to the public bucket only when the document is public', async () => {
@@ -140,7 +140,7 @@ describe('CDN — object key construction', () => {
     const pageUploads = invokeStub.argsFor('upload_to_r2')
       .filter(a => (a.objectKey as string).includes('/pages/'));
     expect(pageUploads.map(a => a.objectKey)).toEqual(['client-abc/pages/a5000002/c1/001.webp']);
-    expect(pageUploads.every(a => a.bucket === 'dchub-test')).toBe(true);
+    expect(pageUploads.every(a => a.bucket === 'sotto-test')).toBe(true);
   });
 
   /* A document that lost pages — edited, or the admin lowered the limit — leaves objects past the
@@ -212,7 +212,7 @@ describe('CDN — object key construction', () => {
 
     const del = invokeStub.argsFor('delete_r2_object')
       .find(a => a.objectKey === 'client-abc/pages/a5000007/c1/001.webp');
-    expect(del?.bucket).toBe('dchub-test');
+    expect(del?.bucket).toBe('sotto-test');
   });
 
   it('publishes no pages for an asset type that has none', async () => {

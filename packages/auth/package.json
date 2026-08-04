@@ -1,5 +1,5 @@
 {
-  "name": "@dc-hub/auth",
+  "name": "@sotto/auth",
   "version": "2.4.2",
   "private": false,
   "type": "module",
@@ -9,7 +9,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@dc-hub/database": "*"
+    "@sotto/database": "*"
   },
   "peerDependencies": {
     "@supabase/supabase-js": "^2.110.8"

@@ -12,8 +12,8 @@
  *     load and then fail with a 401 that looks like a dead video rather than a missing permission
  */
 
-import type { Asset } from '@dc-hub/asset-library'
-import { isStreamReady } from '@dc-hub/domain'
+import type { Asset } from '@sotto/asset-library'
+import { isStreamReady } from '@sotto/domain'
 import { useStreamMediaFor } from './hooks/useStreamMedia'
 import { freshStreamStatus } from '../../services/streamTokens'
 

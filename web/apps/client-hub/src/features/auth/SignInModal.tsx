@@ -185,7 +185,7 @@ export default function SignInModal({ redirectTo, clientId, onClose }: SignInMod
               <span className="text-clear-white text-[10px] font-bold font-sans leading-none">C</span>
             </div>
             <span className="font-sans text-xs font-bold tracking-[0.14em] uppercase text-cosmos-black">
-              DC HUB
+              SOTTO
             </span>
           </div>
           <h1 className="font-serif text-xl font-medium text-cosmos-black">

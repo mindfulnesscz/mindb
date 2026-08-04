@@ -1,6 +1,6 @@
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { appDataDir, join } from '@tauri-apps/api/path';
-import { type VocabularyData, type VocabTag, type Slot } from '@dc-hub/domain';
+import { type VocabularyData, type VocabTag, type Slot } from '@sotto/domain';
 import { activeEnvironment } from '../store/environmentStore';
 import { makeHeaders, sbFetch } from './supabase/rest';
 

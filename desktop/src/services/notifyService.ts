@@ -10,5 +10,5 @@ export async function notifyRunComplete(stats: RunStats, hasIssues: boolean) {
     ? `Finished with issues — ${stats.copied} copied · ${stats.errors} error(s) · ${stats.skipped} skipped`
     : `${stats.copied} copied · ${stats.published} published · ${stats.thumbnails} thumbnail(s)`;
 
-  sendNotification({ title: hasIssues ? 'DC Hub — run finished with issues' : 'DC Hub — run complete', body });
+  sendNotification({ title: hasIssues ? 'Sotto — run finished with issues' : 'Sotto — run complete', body });
 }

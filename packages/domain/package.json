@@ -1,5 +1,5 @@
 {
-  "name": "@dc-hub/domain",
+  "name": "@sotto/domain",
   "version": "3.0.0",
   "private": false,
   "type": "module",

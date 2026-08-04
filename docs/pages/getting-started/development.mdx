@@ -1,6 +1,6 @@
 # Daily developer routine
 
-This page is the fastest path from a fresh clone to a reviewable contribution. DC Hub is one Git monorepo with three runnable applications and one shared release version.
+This page is the fastest path from a fresh clone to a reviewable contribution. Sotto is one Git monorepo with three runnable applications and one shared release version.
 
 For who owns which fields, see [Platform division](/getting-started/platform-division). For Staging as the shared backend, see [Team staging setup](/getting-started/team-dev-setup).
 
@@ -129,7 +129,7 @@ Focused starts: `npm run dev:desktop`, `npm run dev:web`, `npm run dev:web:stagi
 | Native I/O | `desktop/src-tauri/src` | Tauri capabilities, `check:rust` |
 | Naming / filename tags | `desktop/src/domain` | Vocabulary for **filenames**; DB tags admin on web |
 | Portal UI / admin | `web/apps/client-hub/src/features` | Platform division, permissions |
-| Schema / RLS / RPC | `supabase/migrations` | `db:types` → `@dc-hub/database` |
+| Schema / RLS / RPC | `supabase/migrations` | `db:types` → `@sotto/database` |
 | Shared portal rules | `web/packages/asset-library` | Roles: public / member / editor / admin |
 
 Desktop is staff-session privileged under RLS; the web stays anon + session. UI helpers do not replace RLS.

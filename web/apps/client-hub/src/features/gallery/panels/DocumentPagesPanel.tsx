@@ -12,8 +12,8 @@
  */
 
 import { useState } from 'react'
-import { pageUrlsFromThumbnail } from '@dc-hub/domain'
-import type { Asset } from '@dc-hub/asset-library'
+import { pageUrlsFromThumbnail } from '@sotto/domain'
+import type { Asset } from '@sotto/asset-library'
 import { ImageLightbox, type LightboxItem } from '../ImageLightbox'
 
 export function DocumentPagesPanel({

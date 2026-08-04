@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import type { Asset } from '@dc-hub/asset-library'
+import type { Asset } from '@sotto/asset-library'
 import { fetchChildAssets, fetchVariants } from '../../services/assetService'
 
 export interface SiblingPreview {

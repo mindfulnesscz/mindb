@@ -11,10 +11,10 @@ import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-f
 import { appDataDir, join } from '@tauri-apps/api/path';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { makeClient, normalizeDestination } from '../domain/client';
-import { toClientIdentity, CLIENT_IDENTITY_SELECT } from '@dc-hub/database';
-import type { ClientRow } from '@dc-hub/database';
+import { toClientIdentity, CLIENT_IDENTITY_SELECT } from '@sotto/database';
+import type { ClientRow } from '@sotto/database';
 import type { Client, CloudDestination } from '../domain/client';
-import { type VocabularyData } from '@dc-hub/domain';
+import { type VocabularyData } from '@sotto/domain';
 import type { Environment } from './environmentService';
 import { useEnvironmentStore } from '../store/environmentStore';
 import { getAuthClient, withTimeout } from './authService';
@@ -140,7 +140,7 @@ async function fetchDbClients(role: string): Promise<DbClientRow[]> {
 
 /**
  * A client is the portal's identity plus this machine's own state. The identity half is projected by
- * @dc-hub/database exactly as the portal projects it — same column list, same label defaulting — so
+ * @sotto/database exactly as the portal projects it — same column list, same label defaulting — so
  * the two apps cannot disagree about what a client is. The local half is spread last: machine state
  * wins over anything the row happens to carry.
  */
@@ -307,10 +307,10 @@ export async function exportClientBundle(
     client: sanitizeForExport(client),
     vocabulary,
   };
-  const defaultName = `${client.name.trim().replace(/[^a-z0-9]/gi, '-').replace(/-+/g, '-')}-dc-hub.json`;
+  const defaultName = `${client.name.trim().replace(/[^a-z0-9]/gi, '-').replace(/-+/g, '-')}-sotto.json`;
   const path = await saveDialog({
     defaultPath: defaultName,
-    filters: [{ name: 'DC Hub Client', extensions: ['json'] }],
+    filters: [{ name: 'Sotto Client', extensions: ['json'] }],
   });
   if (!path) return;
   await writeTextFile(path as string, JSON.stringify(bundle, null, 2));
@@ -326,7 +326,7 @@ export async function importClientBundle(
 ): Promise<{ clientId: string; vocabulary: VocabularyData; containedSecrets: boolean } | null> {
   const selected = await openDialog({
     multiple: false,
-    filters: [{ name: 'DC Hub Client', extensions: ['json'] }],
+    filters: [{ name: 'Sotto Client', extensions: ['json'] }],
   });
   if (!selected) return null;
 
@@ -334,7 +334,7 @@ export async function importClientBundle(
   const bundle = JSON.parse(text) as Partial<ClientExport>;
 
   if (bundle._type !== 'dc-hub-client-export' || !bundle.client || !bundle.vocabulary) {
-    throw new Error('Not a valid DC Hub client export file.');
+    throw new Error('Not a valid Sotto client export file.');
   }
 
   const name = (bundle.client.name ?? '').trim().toLowerCase();

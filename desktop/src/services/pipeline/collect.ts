@@ -5,7 +5,7 @@
  */
 
 import { basename } from '@tauri-apps/api/path';
-import { buildVocabMap } from '@dc-hub/domain';
+import { buildVocabMap } from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
 import { findPackageFolders, syncPackageFromOut } from './packages';
 

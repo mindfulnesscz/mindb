@@ -19,7 +19,7 @@
  */
 
 import { useState } from 'react'
-import type { Asset } from '@dc-hub/asset-library'
+import type { Asset } from '@sotto/asset-library'
 import { StreamReleaseError } from '../../../services/streamRelease'
 import { useStreamMedia } from '../hooks/useStreamMedia'
 

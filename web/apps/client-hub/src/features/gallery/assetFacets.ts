@@ -6,7 +6,7 @@
  * identically.
  */
 
-import type { Asset } from '@dc-hub/asset-library'
+import type { Asset } from '@sotto/asset-library'
 
 /** Every taxonomy label on an asset, from whichever field carries it. */
 export function labelSet(a: Asset): Set<string> {

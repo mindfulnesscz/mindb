@@ -131,7 +131,29 @@ The web app reads Supabase URL/anon key from environment (Vercel env vars in pro
 
 Desktop workstations need filesystem permissions plus native dependencies for requested thumbnail formats. Port 7623 must be available for OAuth and sign-in callbacks. OneDrive device flow needs outbound HTTPS but no callback listener.
 
-R2 storage is **environment-level**: bucket and public domain are edge secrets (`R2_BUCKET`, `R2_PUBLIC_DOMAIN`); object keys are prefixed `{client_id}/`. Credentials are minted per run by `r2-grant` (see [R2 CDN](/desktop/cdn)). Deploy migrations before UI that depends on them; regenerate types with `npm run db:types` into `@dc-hub/database`.
+R2 storage is **environment-level**: bucket and public domain are edge secrets (`R2_BUCKET`, `R2_PUBLIC_DOMAIN`); object keys are prefixed `{client_id}/`. Credentials are minted per run by `r2-grant` (see [R2 CDN](/desktop/cdn)). Deploy migrations before UI that depends on them; regenerate types with `npm run db:types` into `@sotto/database`.
+
+### Adding a column: the desktop talks to every environment at once
+
+A migration reaches Production, Staging and Local at different times, but one desktop build talks to
+whichever the operator selects. PostgREST does not ignore a column it does not know — it rejects the
+**entire** request:
+
+| | Error | What the user sees |
+|---|---|---|
+| Reading it | `42703 column … does not exist` | "Could not load clients" — no client list at all |
+| Writing it | `PGRST204 Could not find the … column` | The parent row fails, then every child skips for want of a `parent_id` |
+
+Both happened when `preview_page_limit` and `preview_page_count` were added. So for any column that is
+not yet everywhere:
+
+- **Do not add it to a shared select list** such as `CLIENT_IDENTITY_SELECT` — that list is sent to
+  every environment, and one unknown name fails the whole query.
+- **Read it with its own query** that degrades to a default (`fetchPreviewPageLimit`).
+- **Probe before writing it**, once per run, and withhold the field if it is absent — withhold, not
+  send `null`, because a null still names the column.
+
+Add a column to a shared list only once every environment is guaranteed to have it.
 
 ## Release artifacts
 

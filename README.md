@@ -1,6 +1,6 @@
-# DC Hub
+# Sotto
 
-DC Hub is a monorepo for a local-to-cloud digital asset workflow:
+Sotto is a monorepo for a local-to-cloud digital asset workflow:
 
 - `desktop/` — Tauri 2 + React application that scans, transforms, distributes, and publishes assets;
 - `web/` — React/Vite client portal backed by Supabase;

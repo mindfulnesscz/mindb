@@ -41,7 +41,7 @@ export function AdminSignIn() {
 
     const type = await checkEmail(trimmed)
     if (type !== 'staff') {
-      setError('This area is restricted to DC Hub administrators.')
+      setError('This area is restricted to Sotto administrators.')
       setStep('error')
       return
     }
@@ -60,7 +60,7 @@ export function AdminSignIn() {
         <div className="flex justify-center mb-4">
           <DCMark size="lg" />
         </div>
-        <h1 className="font-serif text-3xl font-medium text-cosmos-black mb-1">DC Hub</h1>
+        <h1 className="font-serif text-3xl font-medium text-cosmos-black mb-1">Sotto</h1>
         <p className="font-sans text-sm text-text-muted">Admin access only</p>
       </div>
 

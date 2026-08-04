@@ -54,7 +54,7 @@ What is pinned, beyond the spec's list:
 
 ### Things learned writing it — do not re-derive
 
-- **`@dc-hub/database` needs no vitest alias.** The spec flagged this as unverified. It resolves
+- **`@sotto/database` needs no vitest alias.** The spec flagged this as unverified. It resolves
   through the workspace symlink to `./src/index.ts` and Vitest transforms it fine. Probed with a
   throwaway test; no config change needed.
 - **`AssetDetail` is stubbed to its props**, not booted with its eight service mocks. It has its own
