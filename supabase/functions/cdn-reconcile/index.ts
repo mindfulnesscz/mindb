@@ -19,9 +19,14 @@
 //          requireSignedURLs alongside the object key, since a video's level lives in that flag.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import {
-  effectiveLevel, tierFor, assetUrl, stripVersion, type AccessLevel,
+  effectiveLevel, tierFor, assetUrl, stripVersion, pagePrefix, type AccessLevel,
 } from '../../../packages/domain/src/assetStorage.ts';
-import { tempCredentials, copyObject, type TempCreds } from '../_shared/r2.ts';
+import { tempCredentials, copyObject, listKeys, s3, type TempCreds } from '../_shared/r2.ts';
+
+/* Every level a page object could be sitting under. After a level change the old objects are under a
+   DIFFERENT prefix, so a single-level search would miss them and leave a narrowed asset's pages
+   readable at its old, wider address. */
+const LEVELS: AccessLevel[] = ['public', 'guest', 'client', 'internal'];
 
 /** How many assets one invocation will move. Bounded so a large backlog cannot exceed the
  *  function's wall-clock limit; the queue keeps the rest for the next call. */
@@ -185,6 +190,61 @@ Deno.serve(async (req) => {
       }
       patch[column] = assetUrl(domainOf(targetTier), targetKey, result.sha256);
       moved++;
+    }
+
+    /* ── Per-page document previews ────────────────────────────────────────
+       Found by LISTING, because there is no page URL column: a document publishes one object per
+       rendered page and the portal derives each address from the asset's thumbnail URL. The loop
+       above only moves objects named by a column, so page objects are invisible to it — and this is
+       the function that runs when someone changes `perm` in the portal. Without this pass, narrowing
+       a deck from `client` to `internal` leaves its pages readable under the old `client/` prefix.
+
+       AND THE SOURCE IS DELETED HERE, unlike above. Leaving a superseded thumbnail behind is safe
+       because its URL column was repointed, so nothing references the old object. A page has no
+       column to repoint: the old object stays at a WIDER level, reachable by anyone holding a cookie
+       for that level. Orphaned is not the same as unreachable. */
+    for (const from of LEVELS) {
+      const prefix = pagePrefix(from, a.client_id, a.stable_id, a.child_id);
+      const fromTier = tierFor(from);
+      let keys: string[];
+      try {
+        keys = await listKeys(accountId, creds[fromTier], bucketOf(fromTier), prefix);
+      } catch (e) {
+        failed++; assetFailed = true;
+        console.error(`${a.id} pages: ${String(e)}`);
+        continue;
+      }
+      for (const key of keys) {
+        const bare = key.replace(/^(public|guest|client|internal)\//, '');
+        const targetTier = tierFor(level);
+        const targetKey = targetTier === 'public' ? bare : `${level}/${bare}`;
+        if (fromTier === targetTier && key === targetKey) { skipped++; continue; }
+        if (targetTier === 'gated' && !GATED_KEY_SHAPE.test(targetKey)) {
+          failed++; assetFailed = true;
+          console.error(`unservable page key refused: ${targetKey}`);
+          continue;
+        }
+
+        const result = await copyObject(
+          accountId,
+          { creds: creds[fromTier], bucket: bucketOf(fromTier), key },
+          { creds: creds[targetTier], bucket: bucketOf(targetTier), key: targetKey },
+        );
+        if (!result.ok) {
+          failed++; assetFailed = true;
+          console.error(`${a.id} page ${key}: ${result.reason}`);
+          continue;
+        }
+        moved++;
+
+        const del = await s3(accountId, creds[fromTier], bucketOf(fromTier), 'DELETE', key);
+        if (!del.ok && del.status !== 404) {
+          // The copy succeeded, so the portal is already correct; the stale wider copy surviving is
+          // the security problem, so it is a failure worth reporting and retrying.
+          failed++; assetFailed = true;
+          console.error(`${a.id} page ${key}: delete of superseded object failed ${del.status}`);
+        }
+      }
     }
 
     if (a.stream_uid && !(await reconcileStreamFlag(a.stream_uid, tierFor(level) !== 'public'))) {

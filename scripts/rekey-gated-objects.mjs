@@ -34,7 +34,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const { effectiveLevel, tierFor, assetUrl, stripVersion } =
+const { effectiveLevel, tierFor, assetUrl, stripVersion, pagePrefix } =
   await import(path.join(root, 'packages/domain/src/assetStorage.ts'));
 
 /* ── args ──────────────────────────────────────────────────────────────────── */
@@ -164,10 +164,14 @@ const rfc3986 = str => encodeURIComponent(str)
   .replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
 
 /** Minimal SigV4 for R2. Only the three verbs this script needs. */
-async function s3(creds, bucket, method, key, body = null, extraHeaders = {}) {
+async function s3(creds, bucket, method, key, body = null, extraHeaders = {}, query = {}) {
   const host = `${env.CF_ACCOUNT_ID}.r2.cloudflarestorage.com`;
   const payloadHash = sha256hex(body ?? Buffer.alloc(0));
   const canonicalUri = `/${bucket}/${key.split('/').map(rfc3986).join('/')}`;
+  /* SigV4 requires the query sorted by key and rfc3986-encoded. An empty query yields '', which is
+     exactly what the copy/delete paths signed before this parameter existed — so they are unchanged. */
+  const canonicalQuery = Object.keys(query).sort()
+    .map(k => `${rfc3986(k)}=${rfc3986(String(query[k]))}`).join('&');
 
   /* Signed INSIDE the retry loop, not once above it.
      A signature is stamped with the moment it was made, and R2 rejects anything more than a few
@@ -194,7 +198,7 @@ async function s3(creds, bucket, method, key, body = null, extraHeaders = {}) {
     const canonicalHeaders = signedNames.map(h => `${h}:${String(headers[h]).trim()}\n`).join('');
     const signedHeaders = signedNames.join(';');
 
-    const canonical = [method, canonicalUri, '', canonicalHeaders, signedHeaders, payloadHash].join('\n');
+    const canonical = [method, canonicalUri, canonicalQuery, canonicalHeaders, signedHeaders, payloadHash].join('\n');
     const scope = `${dateStamp}/auto/s3/aws4_request`;
     const toSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256hex(Buffer.from(canonical))].join('\n');
     const kDate = hmac(`AWS4${creds.secretAccessKey}`, dateStamp);
@@ -204,7 +208,8 @@ async function s3(creds, bucket, method, key, body = null, extraHeaders = {}) {
       `AWS4-HMAC-SHA256 Credential=${creds.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
 
     try {
-      return await fetch(`https://${host}${canonicalUri}`, { method, headers, body: body ?? undefined });
+      const url = `https://${host}${canonicalUri}${canonicalQuery ? `?${canonicalQuery}` : ''}`;
+      return await fetch(url, { method, headers, body: body ?? undefined });
     } catch (e) {
       lastErr = e;
       if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 1500));
@@ -363,6 +368,77 @@ async function main() {
     }
   }
 
+  /* ── Page previews ─────────────────────────────────────────────────────────
+     Found by LISTING, not by reading a URL column, because there is no page URL column: a document
+     publishes one object per rendered page, so the portal derives each address from the asset's
+     thumbnail URL instead of storing fifty of them.
+
+     That is exactly why this pass has to exist. Everything above moves objects named by
+     `thumbnail_url` / `download_url`; page objects are invisible to it. Without this, narrowing a
+     deck from `client` to `internal` would leave its pages readable under the old `client/` prefix —
+     a leak of the deck's content that nothing else heals. The desktop pipeline sweeps them on its
+     next run, but a perm change made in the portal must not depend on someone running a pipeline.
+
+     Unlike the URL columns there is no stored address to preserve, so the level prefix is swapped and
+     the tail kept — the same collision-free rule documented above. Nothing is written back to the
+     database: the portal recomputes page addresses from the thumbnail, which this pass has already
+     repointed. */
+  log('\n  page previews (listed, not column-driven)');
+  for (const a of assets) {
+    if (!a.stable_id || !a.child_id || !a.client_id) continue;
+    const level = effectiveLevel(a);
+    const targetTier = tierFor(level);
+
+    for (const from of LEVELS) {
+      const prefix = pagePrefix(from, a.client_id, a.stable_id, a.child_id);
+      const fromTier = tierFor(from);
+      let keys;
+      try {
+        keys = await listKeys(await freshCreds(), bucketFor(fromTier), prefix);
+      } catch (e) {
+        plan.failed++;
+        log(`  ✕  ${a.id} pages: list ${prefix} failed — ${e.message}`);
+        continue;
+      }
+      for (const key of keys) {
+        // Same tail, target level prefix. `pagePrefix` puts the level first for gated keys and
+        // omits it for public ones, so stripping a leading level is enough to get the bare tail.
+        const bare = key.replace(/^(public|guest|client|internal)\//, '');
+        const targetKey = targetTier === 'public' ? bare : `${level}/${bare}`;
+
+        if (from === level && key === targetKey) { plan.skip++; continue; }
+        if (targetTier === 'gated' && !GATED_KEY_SHAPE.test(targetKey)) {
+          plan.failed++;
+          log(`  ✕  ${a.id} pages: refusing unservable key ${targetKey}`);
+          continue;
+        }
+
+        log(`  ${EXECUTE ? '→' : '·'}  ${level.padEnd(8)} ${fromTier}:${key}`);
+        log(`     ${' '.repeat(9)}-> ${targetTier}:${targetKey}`);
+        if (!EXECUTE) { plan.copy++; continue; }
+
+        const moved = await copyObject(
+          await freshCreds(),
+          { bucket: bucketFor(fromTier), key },
+          { bucket: bucketFor(targetTier), key: targetKey },
+        );
+        if (moved === 'missing') { plan.missing++; continue; }
+        if (moved === 'failed') { plan.failed++; continue; }
+        plan.copy++;
+
+        /* Deleted HERE rather than in the --delete-source pass below, which decides what is
+           superseded by checking the URL columns — page objects appear in none of them, so it would
+           never delete one, and the stale copy at the old level is the leak. Guarded on the key
+           having actually changed, so this can never delete what was just written. */
+        if (key !== targetKey || fromTier !== targetTier) {
+          const c = await freshCreds();
+          const res = await s3(fromTier === 'public' ? c.public : c.gated, bucketFor(fromTier), 'DELETE', key);
+          if (res.ok || res.status === 404) plan.del++; else plan.failed++;
+        }
+      }
+    }
+  }
+
   /* Deletion is a SEPARATE pass on purpose. By the time it runs, every row already points at the
      new object, so a source delete cannot break a live URL — and until it runs, the whole move is
      undone by repointing the URLs back. */
@@ -391,6 +467,35 @@ async function main() {
     + `${plan.skip} already correct · ${plan.del} source deleted · ${plan.missing} source missing · ${plan.failed} failed`);
   if (!EXECUTE) log('  Nothing changed. Re-run with --execute.\n');
   if (plan.failed) process.exitCode = 1;
+}
+
+/** Every level an object could be sitting under, for the page sweep. */
+const LEVELS = ['public', 'guest', 'client', 'internal'];
+
+/**
+ * Every key under `prefix`, following continuation tokens.
+ *
+ * Paginated deliberately rather than trusting one response: R2 caps a listing at 1000 keys, and a
+ * 500-page document plus its siblings passes that. A truncated listing would silently leave objects
+ * behind at the old level, which is the exact failure this pass exists to prevent.
+ */
+async function listKeys(creds, bucket, prefix) {
+  const cred = bucket === env.R2_BUCKET ? creds.public : creds.gated;
+  const out = [];
+  let token;
+  do {
+    const query = { 'list-type': '2', prefix, 'max-keys': '1000', ...(token ? { 'continuation-token': token } : {}) };
+    const res = await s3(cred, bucket, 'GET', '', null, {}, query);
+    if (!res.ok) throw new Error(`list ${bucket}/${prefix} → ${res.status}`);
+    const xml = await res.text();
+    for (const m of xml.matchAll(/<Key>([^<]+)<\/Key>/g)) {
+      out.push(m[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>'));
+    }
+    token = /<IsTruncated>true<\/IsTruncated>/.test(xml)
+      ? xml.match(/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/)?.[1]
+      : undefined;
+  } while (token);
+  return out;
 }
 
 async function copyObject(creds, source, target) {

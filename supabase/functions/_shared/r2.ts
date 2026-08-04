@@ -59,10 +59,15 @@ const rfc3986 = (s: string) =>
 export async function s3(
   accountId: string, creds: TempCreds, bucket: string, method: string, key: string,
   body?: Uint8Array, extraHeaders: Record<string, string> = {},
+  query: Record<string, string> = {},
 ): Promise<Response> {
   const host = `${accountId}.r2.cloudflarestorage.com`;
   const payloadHash = await sha256hex(body ?? new Uint8Array());
   const canonicalUri = `/${bucket}/${key.split('/').map(rfc3986).join('/')}`;
+  /* SigV4 wants the query sorted by key and rfc3986-encoded. An empty query yields '', which is
+     byte-identical to what every existing caller signed before this parameter was added. */
+  const canonicalQuery = Object.keys(query).sort()
+    .map(k => `${rfc3986(k)}=${rfc3986(query[k])}`).join('&');
 
   // Signed inside the attempt loop: a signature carries the moment it was made, and R2 refuses one
   // more than a few minutes adrift with RequestTimeTooSkewed — which arrives as a 403 and reads
@@ -81,7 +86,7 @@ export async function s3(
     const names = Object.keys(headers).sort();
     const canonicalHeaders = names.map(h => `${h}:${String(headers[h]).trim()}\n`).join('');
     const signedHeaders = names.join(';');
-    const canonical = [method, canonicalUri, '', canonicalHeaders, signedHeaders, payloadHash].join('\n');
+    const canonical = [method, canonicalUri, canonicalQuery, canonicalHeaders, signedHeaders, payloadHash].join('\n');
     const scope = `${dateStamp}/auto/s3/aws4_request`;
     const toSign = ['AWS4-HMAC-SHA256', amzDate, scope, await sha256hex(enc.encode(canonical))].join('\n');
 
@@ -93,9 +98,8 @@ export async function s3(
       `AWS4-HMAC-SHA256 Credential=${creds.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
 
     try {
-      return await fetch(`https://${host}${canonicalUri}`, {
-        method, headers, body: body as BodyInit | undefined,
-      });
+      const url = `https://${host}${canonicalUri}${canonicalQuery ? `?${canonicalQuery}` : ''}`;
+      return await fetch(url, { method, headers, body: body as BodyInit | undefined });
     } catch (e) {
       lastErr = e;
       if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 1000));
@@ -159,6 +163,36 @@ export async function presignGet(
 }
 
 /** Copy one object between buckets, carrying the metadata the pipeline recognises. */
+/**
+ * Every key under `prefix`, following continuation tokens.
+ *
+ * Needed because per-page document previews have no URL column — one object per page — so the only
+ * way to find them is to list. Paginated rather than trusting one response: R2 caps a listing at
+ * 1000 keys, and a truncated listing would silently leave page objects behind at their old access
+ * level, which is the leak the caller is trying to close.
+ */
+export async function listKeys(
+  accountId: string, creds: TempCreds, bucket: string, prefix: string,
+): Promise<string[]> {
+  const out: string[] = [];
+  let token: string | undefined;
+  do {
+    const query: Record<string, string> = {
+      'list-type': '2', prefix, 'max-keys': '1000', ...(token ? { 'continuation-token': token } : {}),
+    };
+    const res = await s3(accountId, creds, bucket, 'GET', '', undefined, {}, query);
+    if (!res.ok) throw new Error(`list ${bucket}/${prefix} → ${res.status}`);
+    const xml = await res.text();
+    for (const m of xml.matchAll(/<Key>([^<]+)<\/Key>/g)) {
+      out.push(m[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>'));
+    }
+    token = /<IsTruncated>true<\/IsTruncated>/.test(xml)
+      ? xml.match(/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/)?.[1]
+      : undefined;
+  } while (token);
+  return out;
+}
+
 export async function copyObject(
   accountId: string,
   from: { creds: TempCreds; bucket: string; key: string },
