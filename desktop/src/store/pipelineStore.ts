@@ -25,6 +25,7 @@ export interface RunStats {
   pubFolders:   number;
   published:    number;
   thumbnails:   number;
+  pagePreviews: number; // per-page document previews written this run
   notes:        number;
   disconnected: number; // local target-folder files no longer in source (Publish step)
   // CDN — thumbnail uploads (runCdnUpload)
