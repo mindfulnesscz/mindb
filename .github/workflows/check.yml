@@ -19,6 +19,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      # Bundled render engines (PDFium today, LibreOffice next). `npm run setup` fetches them, and
+      # fetch-native-deps.mjs no-ops when the cached files are already in place. Keyed on that
+      # script because the pinned URLs and digests live in it — bump a version there and the cache
+      # key changes with it. This matters more than 7MB suggests: LibreOffice is ~400MB.
+      - name: Cache native engines
+        uses: actions/cache@v4
+        with:
+          path: desktop/src-tauri/resources/native
+          key: native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-native-deps.mjs') }}
       - run: npm run setup
       # Explicit step so a lint failure is obvious in the job summary; `npm run
       # check` runs it again as part of the composite gate used locally.

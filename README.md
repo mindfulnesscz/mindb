@@ -11,7 +11,10 @@ The repository shares one release version. Start with the [developer routine](do
 
 ## Quick start
 
-Prerequisites: Node.js 22, npm, Rust stable, and the platform dependencies required by Tauri 2. Thumbnail development additionally needs LibreOffice, Poppler (`pdftoppm`), and WebP (`cwebp`).
+Prerequisites: Node.js 22, npm, Rust stable, and the platform dependencies required by Tauri 2. WebP
+encoding and PDF rasterisation are built into the app — `npm run setup` fetches the bundled engines
+(`npm run deps:native` on its own). Thumbnails for Office documents additionally need LibreOffice
+installed until it too is bundled.
 
 ```bash
 git clone <repository-url> dc-hub

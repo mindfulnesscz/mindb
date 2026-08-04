@@ -12,7 +12,7 @@ Version history lives in the root [CHANGELOG.md](../CHANGELOG.md); the version w
 2. **Distribute** — copies assets from source → internal and client-facing destinations (local folders, Dropbox, OneDrive, Google Drive)
 3. **Publish to CDN** — uploads to Cloudflare R2, returns public CDN URLs
 4. **Sync to DAM** — upserts asset metadata and version history into Supabase; powers the web portal
-5. **Generate thumbnails** — PPTX and PDF → WebP sidecars via LibreOffice + pdftoppm + cwebp
+5. **Generate thumbnails** — Office and PDF → WebP sidecars, rendered in-process by bundled PDFium + statically-linked libwebp (LibreOffice converts Office documents to PDF first)
 6. **Build Obsidian vault** — generates markdown notes with inherited taxonomy tags for the DAM
 
 ---
@@ -94,7 +94,9 @@ Step-by-step destination setup: [CLOUD_DESTINATIONS.md](CLOUD_DESTINATIONS.md). 
 
 ## Development
 
-**Prerequisites:** Node.js 18+, Rust (stable), `cargo install tauri-cli`. For thumbnails: LibreOffice, poppler (`pdftoppm`), `cwebp`.
+**Prerequisites:** Node.js 18+, Rust (stable), `cargo install tauri-cli`, and `npm run deps:native`
+from the repo root to fetch the bundled render engines (PDFium). For Office-document thumbnails:
+LibreOffice, until it is bundled too.
 
 ```bash
 npm install

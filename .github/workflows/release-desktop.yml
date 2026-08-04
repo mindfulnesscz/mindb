@@ -26,6 +26,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
+      # Bundled render engines — see the same step in check.yml. These are nested executable code:
+      # once signing is turned on they must be fetched and placed BEFORE the app is signed, and the
+      # bundle must not be modified afterwards.
+      - name: Cache native engines
+        uses: actions/cache@v4
+        with:
+          path: desktop/src-tauri/resources/native
+          key: native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-native-deps.mjs') }}
       # Must install the whole workspace at the repo root. A desktop-only `npm ci`
       # leaves root `.bin` empty, so `eslint` / other check scripts exit 127.
       - run: npm run setup

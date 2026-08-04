@@ -1,89 +1,38 @@
 use std::path::Path;
-use std::process::Command;
 
 mod r2;
 mod cloud;
 mod supabase;
 mod reveal;
+mod native;
+mod render;
 
-fn which_soffice() -> Option<String> {
-    if let Ok(out) = Command::new("which").arg("soffice").output() {
-        if out.status.success() {
-            let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !p.is_empty() { return Some(p); }
-        }
-    }
-    let mac = "/Applications/LibreOffice.app/Contents/MacOS/soffice";
-    if Path::new(mac).exists() { return Some(mac.to_string()); }
-    None
-}
+/// Extensions routed through LibreOffice → PDF → PDFium.
+///
+/// Word and Excel are here as well as PowerPoint: all four are one conversion path, and the caller
+/// (`THUMB_EXTS` in the pipeline) decides what it actually offers up.
+const OFFICE_EXTS: &[&str] = &[
+    "pptx", "pptm", "ppt", // presentations
+    "docx", "docm", "doc", // documents
+    "xlsx", "xlsm", "xls", // spreadsheets
+];
 
-fn encode_webp(src: &str, dest: &str, width: u32, quality: u32) -> Result<(), String> {
-    let out = Command::new("cwebp")
-        .args([
-            "-quiet",
-            "-resize", &width.to_string(), "0",
-            "-q", &quality.to_string(),
-            src, "-o", dest,
-        ])
-        .output()
-        .map_err(|_| "cwebp not found — install: brew install webp".to_string())?;
-
-    if out.status.success() { Ok(()) }
-    else { Err(format!("cwebp: {}", String::from_utf8_lossy(&out.stderr).trim())) }
-}
-
-fn pdf_to_thumb(pdf: &str, dest: &str, width: u32, quality: u32) -> Result<(), String> {
-    let tmp = std::env::temp_dir().join(format!("dchub-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-    let png_base = tmp.join("page");
-
-    let out = Command::new("pdftoppm")
-        .args(["-png", "-f", "1", "-singlefile", pdf, &png_base.to_string_lossy()])
-        .output()
-        .map_err(|_| "pdftoppm not found — install: brew install poppler".to_string())?;
-
-    let png = png_base.with_extension("png");
-    if !out.status.success() || !png.exists() {
-        let _ = std::fs::remove_dir_all(&tmp);
-        return Err(format!("pdftoppm failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
-    }
-
-    let result = encode_webp(&png.to_string_lossy(), dest, width, quality);
-    let _ = std::fs::remove_dir_all(&tmp);
-    result
-}
-
-fn pptx_to_thumb(pptx: &str, dest: &str, width: u32, quality: u32) -> Result<(), String> {
-    let soffice = which_soffice()
-        .ok_or_else(|| "LibreOffice not found — install from libreoffice.org or: brew install --cask libreoffice".to_string())?;
-
-    let tmp = std::env::temp_dir().join(format!("dchub-pptx-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-
-    let out = Command::new(&soffice)
-        .args(["--headless", "--convert-to", "pdf", "--outdir", &tmp.to_string_lossy(), pptx])
-        .output()
-        .map_err(|e| format!("soffice launch failed: {}", e))?;
-
-    let stem = Path::new(pptx).file_stem()
-        .and_then(|s| s.to_str()).unwrap_or("output");
-    let pdf = tmp.join(format!("{}.pdf", stem));
-
-    if !out.status.success() || !pdf.exists() {
-        let _ = std::fs::remove_dir_all(&tmp);
-        return Err(format!("LibreOffice conversion failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
-    }
-
-    let result = pdf_to_thumb(&pdf.to_string_lossy(), dest, width, quality);
-    let _ = std::fs::remove_dir_all(&tmp);
-    result
-}
+/// Extensions decoded directly by the `image` crate.
+const RASTER_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "bmp"];
 
 /// Generate a WebP thumbnail for a given source file.
 /// Returns Ok(true) if created, Ok(false) if skipped (already exists), Err(msg) on failure.
+///
+/// Rendering is in-process — see `render`. Nothing here shells out to a tool the user had to
+/// install, except LibreOffice until it is bundled.
 #[tauri::command]
-fn generate_thumbnail(src: String, dest: String, width: u32, quality: u32) -> Result<bool, String> {
+fn generate_thumbnail(
+    app: tauri::AppHandle,
+    src: String,
+    dest: String,
+    width: u32,
+    quality: u32,
+) -> Result<bool, String> {
     if Path::new(&dest).exists() { return Ok(false); }
 
     if let Some(parent) = Path::new(&dest).parent() {
@@ -93,12 +42,14 @@ fn generate_thumbnail(src: String, dest: String, width: u32, quality: u32) -> Re
     let ext = Path::new(&src).extension()
         .and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
 
-    match ext.as_str() {
-        "pdf"                         => pdf_to_thumb(&src, &dest, width, quality).map(|_| true),
-        "pptx" | "pptm" | "ppt"      => pptx_to_thumb(&src, &dest, width, quality).map(|_| true),
-        "png" | "jpg" | "jpeg" | "webp" | "gif" | "tif" | "tiff"
-                                      => encode_webp(&src, &dest, width, quality).map(|_| true),
-        _ => Err(format!("Unsupported thumbnail format: {}", ext)),
+    if ext == "pdf" {
+        render::pdf_to_thumb(&app, &src, &dest, width, quality).map(|_| true)
+    } else if OFFICE_EXTS.contains(&ext.as_str()) {
+        render::office_to_thumb(&app, &src, &dest, width, quality).map(|_| true)
+    } else if RASTER_EXTS.contains(&ext.as_str()) {
+        render::image_to_thumb(&src, &dest, width, quality).map(|_| true)
+    } else {
+        Err(format!("Unsupported thumbnail format: {ext}"))
     }
 }
 

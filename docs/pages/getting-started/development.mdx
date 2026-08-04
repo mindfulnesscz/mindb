@@ -14,7 +14,9 @@ For who owns which fields, see [Platform division](/getting-started/platform-div
 | Git | Source control and Nextra edit metadata |
 | Docker | Local Supabase for migration work only |
 
-Optional for thumbnail conversion: LibreOffice, Poppler (`pdftoppm`), WebP (`cwebp`).
+Thumbnail rendering is built into the app; `npm run setup` fetches the bundled engines (or
+`npm run deps:native` on its own). Office-document thumbnails additionally need LibreOffice installed
+until it is bundled — see [Thumbnails](/desktop/thumbnails).
 
 ## 2. Clone and install
 

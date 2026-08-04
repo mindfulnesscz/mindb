@@ -33,4 +33,13 @@ sha2 = "0.10"
 hmac = "0.12"
 hex = "0.4"
 tokio = { version = "1", features = ["net", "io-util", "time", "fs"] }
+# Thumbnail rendering, all in-process. `image` decodes rasters; `webp` is libwebp built from
+# vendored C and STATICALLY linked (verified: no libwebp in `otool -L`), replacing the `cwebp`
+# binary. `pdfium-render` binds the bundled PDFium dynamic library, replacing `pdftoppm`.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "tiff", "webp", "bmp"] }
+webp = "0.3"
+# `thread_safe` serialises calls into PDFium, which is NOT thread-safe and keeps process-global
+# state (FPDF_InitLibrary/FPDF_DestroyLibrary). The pipeline renders 8 files at once, so without
+# this — plus the single process-wide instance in `render` — concurrent thumbnails segfault.
+pdfium-render = { version = "0.9", features = ["thread_safe"] }
 

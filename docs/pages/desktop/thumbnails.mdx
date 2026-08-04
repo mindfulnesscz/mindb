@@ -12,11 +12,55 @@ Therefore a wall of green lines means local sidecar thumbnails were absent—not
 
 | Source | Native conversion |
 |---|---|
-| PDF | First page via `pdftoppm`, then `cwebp` |
-| PPT/PPTX/PPTM | Headless LibreOffice to temporary PDF, first page via Poppler, then `cwebp` |
-| Raster image | Direct `cwebp` resize/encode |
+| PDF | Page 1 rasterised by bundled PDFium, encoded by statically-linked libwebp |
+| PPT/PPTX/PPTM · DOC/DOCX · XLS/XLSX | Headless LibreOffice to a temporary PDF, then the PDF path above |
+| Raster image | Decoded by `image`, resized, encoded by libwebp |
 
-Width and quality are parsed from settings, with fallbacks of 320 and 70 in service code. Height preserves aspect ratio. Temporary directories are removed after conversion. Required executables are `cwebp`, `pdftoppm`, and LibreOffice for presentations.
+Width and quality are parsed from settings, with fallbacks of 320 and 70 in service code. Height
+preserves aspect ratio, matching the `cwebp -resize <width> 0` behaviour this replaced. Temporary
+directories are tied to a guard value and removed when it drops, on every exit path.
+
+### Rendering happens in-process
+
+`cwebp` and `pdftoppm` are gone. They were external binaries resolved from `PATH`, and a packaged
+app launched from Finder/Dock/Explorer inherits the OS's minimal `PATH` — so both were invisible to
+the shipped build even when installed, producing a misleading "cwebp not found" on every asset.
+They are now libraries compiled into the app:
+
+| Engine | How it links | Replaces |
+|---|---|---|
+| libwebp (`webp` crate) | built from vendored C, **statically linked** | `cwebp` |
+| PDFium (`pdfium-render`) | **bundled dynamic library**, loaded from the resource dir | `pdftoppm` |
+
+PDFium is a dynamic library because the upstream builds
+([bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries)) ship shared libraries
+only — there is no static archive to link. It is fetched per-platform by
+`scripts/fetch-native-deps.mjs` (`npm run deps:native`) into
+`desktop/src-tauri/resources/native/pdfium/`, and is never committed.
+
+`desktop/src-tauri/src/native.rs` is the only module that knows where engines live. It resolves the
+packaged resource dir first, then falls back to the source tree so `tauri dev` works without a
+packaged build. Add engines there — never as a bare command name.
+
+### PDFium is single-instance and not thread-safe
+
+PDFium keeps process-global state (`FPDF_InitLibrary` / `FPDF_DestroyLibrary`) and is not
+thread-safe. Binding it per call therefore tears the library down underneath any concurrent user.
+The pipeline renders **eight** thumbnails at a time, and that combination crashes: a parallel run
+segfaulted, and even a serial one failed on whichever render came second.
+
+So `render.rs` binds PDFium **once** into a `OnceLock` that is never dropped, and the crate's
+`thread_safe` feature serialises calls into it. A test renders from eight threads and asserts the
+outputs are byte-identical; do not replace it with a single-threaded one, because single-threaded is
+exactly the case that passed while the bug was live.
+
+### LibreOffice, for now
+
+LibreOffice is still resolved from the host (`native::system_tool`, plus the macOS
+`/Applications/LibreOffice.app` path, which its installer does not add to `PATH`). Bundling it is
+the next step, after which nothing about thumbnails depends on what the user installed. Each
+conversion gets a private profile via `-env:UserInstallation` — not optional, because LibreOffice
+locks a single shared profile and eight concurrent conversions would otherwise serialise or fail.
 
 ## Video is not handled here
 
