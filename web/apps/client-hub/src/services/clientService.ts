@@ -37,6 +37,7 @@ export async function createClient(input: Omit<Client, 'id'>): Promise<Client> {
       portal_bg:        input.portalBg ?? null,
       domain_whitelist: input.domainWhitelist ?? [],
       dimension_labels: dimensionLabelsToJson(input.dimensionLabels ?? DEFAULT_DIMENSION_LABELS),
+      preview_page_limit: input.previewPageLimit,
     })
     .select()
     .single()
@@ -58,6 +59,7 @@ export async function updateClient(id: string, input: Partial<Omit<Client, 'id'>
   if (input.portalBg  !== undefined) patch.portal_bg        = input.portalBg || null
   if (input.domainWhitelist !== undefined) patch.domain_whitelist = input.domainWhitelist
   if (input.dimensionLabels !== undefined) patch.dimension_labels = dimensionLabelsToJson(input.dimensionLabels)
+  if (input.previewPageLimit !== undefined) patch.preview_page_limit = input.previewPageLimit
 
   const { data, error } = await supabase
     .from('clients')

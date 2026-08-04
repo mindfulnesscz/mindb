@@ -26,8 +26,12 @@ class InvokeStub {
   listFails = false;
   /** Make `upload_to_r2` report a content-hash match (no bytes transferred). */
   uploadSkipped = false;
-  /** Make `generate_thumbnail` fail. */
+  /** Make `generate_thumbnail` / `generate_document_previews` fail. */
   thumbnailFails = false;
+  /** Page count `generate_document_previews` reports. Above a job's `limit`, rendering is capped
+   *  while `total` still reports this — the difference is what the portal shows as "download for
+   *  the rest". */
+  documentPages = 1;
   sha256 = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
   /**
    * Canned replies for commands with no built-in behaviour — the cloud bridge
@@ -42,6 +46,7 @@ class InvokeStub {
     this.listFails = false;
     this.uploadSkipped = false;
     this.thumbnailFails = false;
+    this.documentPages = 1;
     this.replies = new Map();
   }
 
@@ -66,6 +71,28 @@ class InvokeStub {
         if (this.thumbnailFails) throw new Error('thumbnail generation failed');
         vfs.put(args.dest as string, 'webp-bytes');
         return true;
+      }
+      /* Documents take this path instead: ONE call produces the title thumbnail and the page
+         previews, because Rust reuses a single LibreOffice conversion (see render.rs). The fake
+         mirrors that contract — it writes the thumbnail AND the page files, so tests that only care
+         about the thumbnail behave as they did before this command existed. */
+      case 'generate_document_previews': {
+        if (this.thumbnailFails) throw new Error('thumbnail generation failed');
+        vfs.put(args.thumb as string, 'webp-bytes');
+        const rendered = Math.min(this.documentPages, (args.limit as number) ?? 0);
+        const pagesDir = args.pagesDir as string;
+        for (let p = 1; p <= rendered; p++) {
+          vfs.put(`${pagesDir}/${String(p).padStart(3, '0')}.webp`, 'webp-bytes');
+        }
+        /* pages.json last, as Rust does — it is what marks the set complete, and the upload stage
+           reads it rather than listing the directory, so a fake without it publishes nothing. */
+        vfs.put(`${pagesDir}/pages.json`, JSON.stringify({
+          version: 1, srcMtimeMs: 0, srcSize: 0,
+          total: this.documentPages, rendered,
+          limit: args.limit, width: args.width, quality: args.quality,
+        }));
+        // `total` is the document's real page count even when `rendered` is capped below it.
+        return { total: this.documentPages, rendered, cached: false };
       }
       case 'list_r2_keys': {
         if (this.listFails) throw new Error('list failed');

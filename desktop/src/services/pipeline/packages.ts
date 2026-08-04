@@ -14,7 +14,7 @@ import { copyFile, mkdir, remove, exists } from '@tauri-apps/plugin-fs';
 import { join, dirname } from '@tauri-apps/api/path';
 import type { AppSettings } from '../../store/settingsStore';
 import type { LogType } from '../../store/pipelineStore';
-import { filterHighestVersions, buildVocabMap, translateExportName } from '@dc-hub/domain';
+import { filterHighestVersions, buildVocabMap, translateExportName, isPreviewArtifact } from '@dc-hub/domain';
 import { shouldSkip, isPackageFolder, isOutFolder, isPublishableFile } from './naming';
 import { listDir, collectFiles, isUnchanged } from './fs';
 
@@ -114,6 +114,12 @@ export async function purgePackageMirror(
       const childRel = rel ? `${rel}/${e.name}` : e.name;
       const childPath = await join(dir, e.name);
       if (e.isDirectory) {
+        /* A previews folder has no business in a package mirror. Purging it as a unit also removes
+           the now-empty directory, which a file-by-file purge would leave behind. */
+        if (isPreviewArtifact(e.name)) {
+          purgeRels.add(childRel);
+          continue;
+        }
         await collectPurge(childPath, childRel);
         continue;
       }

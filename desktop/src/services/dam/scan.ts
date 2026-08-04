@@ -10,7 +10,7 @@ import {
 import { join } from '@tauri-apps/api/path';
 import type { AppSettings } from '../../store/settingsStore';
 import {
-  parseFilename, isVideoFile, type VocabMap,
+  parseFilename, isVideoFile, isPreviewArtifact, type VocabMap,
 } from '@dc-hub/domain';
 import {
   relativeTo, pathParts, isPublishable,
@@ -94,7 +94,12 @@ export async function collectOutDirInfos(
       });
     }
     for (const e of entries) {
-      if (e.isDirectory && !shouldSkip(e.name, s) && !isPackageFolder(e.name, s)) {
+      /* isPreviewArtifact excludes the `<stem>-thumb/` previews folder. Without it the walk
+         descends into one, finds `001.webp` (publishable, and deliberately without `-thumb` in its
+         name), and registers the folder as an ORPHAN asset folder — giving every previewed document
+         a spurious vault note. */
+      if (e.isDirectory && !shouldSkip(e.name, s) && !isPackageFolder(e.name, s)
+          && !isPreviewArtifact(e.name)) {
         await walk(await join(dir, e.name));
       }
     }

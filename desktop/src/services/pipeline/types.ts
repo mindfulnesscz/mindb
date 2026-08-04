@@ -62,6 +62,12 @@ export interface RunContext {
    *  The level is part of the object key and picks the bucket, and `perm` is portal-owned, so
    *  the database is the only place that knows it. Absent key ⇒ a new asset. */
   assetLevels?:      Map<string, string>;
+  /** Per-client page-preview cap, read from `clients.preview_page_limit`. Portal-owned. */
+  previewPageLimit?: number;
+  /** absPath → page counts from the render step, for the Supabase sync to write onto the asset row.
+   *  `total` can exceed `rendered`: that difference is what the portal turns into "download the
+   *  asset to see the rest". */
+  pageCounts?:       Map<string, { total: number; rendered: number }>;
 }
 
 

@@ -109,6 +109,34 @@ export async function fetchAssetLevels(
   return out;
 }
 
+/**
+ * The client's cap on how many document pages get previewed.
+ *
+ * Portal-owned, like `perm`: an admin sets it in the client admin, so the database is the only place
+ * that knows it. Returns null when the read fails or the column is absent, and the caller falls back
+ * to `DEFAULT_PREVIEW_PAGE_LIMIT` — a failed read must not silently mean "render every page of every
+ * document", which on a large library is minutes of work and hundreds of objects per asset.
+ */
+export async function fetchPreviewPageLimit(
+  clientId: string,
+  config:   SupabaseConfig,
+): Promise<number | null> {
+  const base    = `${config.url}/rest/v1`;
+  const headers = await makeHeaders(config.anonKey);
+  try {
+    const res = await fetch(
+      `${base}/clients?id=eq.${encodeURIComponent(clientId)}&select=preview_page_limit`,
+      { headers },
+    );
+    if (!res.ok) return null;
+    const rows = await res.json() as Array<{ preview_page_limit?: number | null }>;
+    const value = rows[0]?.preview_page_limit;
+    return typeof value === 'number' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 /* fetch helpers live in supabase/rest.ts */
 
 /* ── Version history pagination ──────────────────────────────────────────── */

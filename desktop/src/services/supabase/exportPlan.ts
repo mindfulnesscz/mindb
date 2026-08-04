@@ -52,6 +52,7 @@ export interface PlanInput {
   vocab: VocabularyData;
   existingByStableId: Map<string, StableRow[]>;
   cdnUrls?: Map<string, string>;
+  pageCounts?: Map<string, { total: number; rendered: number }>;
   originalUrls?: Map<string, string>;
   cloudUrls?: Map<string, CloudUrlEntry[]>;
   appendLog: (type: string, msg: string) => void;
@@ -60,7 +61,7 @@ export interface PlanInput {
 export async function planExport(input: PlanInput): Promise<ExportPlan> {
   const {
     identified: { stableSingles, stableGalleries },
-    clientId, vocab, existingByStableId, cdnUrls, originalUrls, cloudUrls, appendLog,
+    clientId, vocab, existingByStableId, cdnUrls, originalUrls, cloudUrls, pageCounts, appendLog,
   } = input;
 
   // `stem` drives taxonomy parsing (display text); `absPath` keys the CDN URL maps, which must
@@ -81,6 +82,11 @@ export async function planExport(input: PlanInput): Promise<ExportPlan> {
       perm:          PIPELINE_DEFAULT_PERM,
       thumbnail_url: cdnUrls?.get(absPath) ?? null,
       download_url:  originalUrls?.get(absPath) ?? null,
+      /* Page-preview counts for documents. Null for everything else, and stripped before an UPDATE
+         (see stripAbsentUrls) so a run with thumbnails disabled cannot blank a count the portal is
+         already rendering from. */
+      preview_page_count: pageCounts?.get(absPath)?.rendered ?? null,
+      preview_page_total: pageCounts?.get(absPath)?.total ?? null,
       // cloudUrls carries its own composite destId:stem key — see runCloudExport.
       download_urls: cloudUrls?.get(stem) ?? [],
       ...extra,

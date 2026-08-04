@@ -1,13 +1,19 @@
-/* THUMBNAILS stage — generate the -thumb.webp beside each thumbnable asset.
+/* THUMBNAILS stage — the -thumb.webp beside each thumbnable asset, plus per-page previews.
  *
- * Generation itself is a Rust command (generate_thumbnail); this stage only decides which files
- * need one. Existing thumbnails are detected by a stat and skipped, so re-runs are cheap.
+ * Rendering itself is in Rust; this stage only decides what needs doing. Two paths:
+ *
+ *   rasters    `generate_thumbnail`. A stat decides — existence is the whole cache, so re-runs are
+ *              cheap and a present thumbnail is never questioned.
+ *   documents  `generate_document_previews`. Title thumbnail AND page previews from ONE LibreOffice
+ *              conversion. Deliberately NOT pre-filtered by a stat: currency depends on the
+ *              source's mtime/size, the page limit and the output settings, and a directory listing
+ *              sees none of those. Rust owns that call via pages.json and reports `cached` back.
  */
 
 import { stat } from '@tauri-apps/plugin-fs';
 import { invoke } from '@tauri-apps/api/core';
 import type { RunContext, RunStats } from './types';
-import { THUMB_EXTS } from './naming';
+import { THUMB_EXTS, PAGE_PREVIEW_EXTS, extensionOf, DEFAULT_PREVIEW_PAGE_LIMIT } from './naming';
 
 /* ── Thumbnail generation ───────────────────────────────────────────────── */
 
@@ -23,6 +29,10 @@ export async function runThumbnails(ctx: RunContext, stats: RunStats): Promise<v
   appendLog('section', '━━━ THUMBNAILS ━━━');
   const width   = parseInt(String(thumbWidth),  10) || 320;
   const quality = parseInt(String(thumbQuality), 10) || 70;
+  /* Per-client cap on how many pages get previewed, owned by the portal admin. Absent means the
+     client row has not been read yet (or predates the column), so fall back to the documented
+     default rather than rendering an unbounded number of pages. */
+  const pageLimit = ctx.previewPageLimit ?? DEFAULT_PREVIEW_PAGE_LIMIT;
 
   // Use pre-scanned asset list (already collected at pipeline start), filter to thumbnable exts
   const files = (ctx.collectedAssets ?? [])
@@ -35,8 +45,17 @@ export async function runThumbnails(ctx: RunContext, stats: RunStats): Promise<v
 
   appendLog('info', `  Found ${files.length} file(s) — checking for existing thumbnails…`);
 
-  type FileJob = { srcFile: string; fileName: string; destFile: string };
+  /* Documents get per-page previews as well as a title thumbnail, and BOTH come out of one Rust
+     call — `generate_document_previews` reuses a single LibreOffice conversion, which costs ~6.4s
+     per deck against ~28ms per rasterised page. Splitting them across two calls would nearly double
+     the cost of every document in the library.
+
+     They are also not pre-filtered by a stat here: whether previews are current depends on the
+     source's mtime/size, the page limit and the output settings, none of which a directory listing
+     can see. Rust owns that decision via pages.json and reports `cached` back. */
+  type FileJob = { srcFile: string; fileName: string; destFile: string; pagesDir?: string };
   const needsRegen: FileJob[] = [];
+  const docJobs: FileJob[] = [];
   let preSkipped = 0;
 
   const STAT_CONCURRENCY = 16;
@@ -48,6 +67,13 @@ export async function runThumbnails(ctx: RunContext, stats: RunStats): Promise<v
       const stem     = dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName;
       const dir      = srcFile.slice(0, srcFile.lastIndexOf('/') + 1);
       const destFile = dir + stem + '-thumb.webp';
+
+      if (PAGE_PREVIEW_EXTS.has(extensionOf(fileName))) {
+        // The previews folder shares the thumbnail's `-thumb` stem, which is what keeps it out of
+        // every walker and every package (see isPreviewArtifact).
+        docJobs.push({ srcFile, fileName, destFile, pagesDir: dir + stem + '-thumb' });
+        return;
+      }
       try {
         await stat(destFile);   // throws if not found → goes to needsRegen
         preSkipped += 1;
@@ -65,7 +91,8 @@ export async function runThumbnails(ctx: RunContext, stats: RunStats): Promise<v
     appendLog('dim', `  src[0]:  ${s0}`);
     appendLog('dim', `  dest[0]: ${d0}`);
   }
-  appendLog('dim', `  Pre-filter: ${preSkipped} exist · ${needsRegen.length} to generate`);
+  appendLog('dim',
+    `  Pre-filter: ${preSkipped} exist · ${needsRegen.length} to generate · ${docJobs.length} document(s)`);
 
   const total = files.length;
   let done    = preSkipped;
@@ -92,7 +119,39 @@ export async function runThumbnails(ctx: RunContext, stats: RunStats): Promise<v
     }));
   }
 
-  appendLog('section', `━━━ THUMBNAILS DONE — ${stats.thumbnails} created · ${stats.errors} errors ━━━`);
+  /* Documents: title thumbnail + page previews, one Rust call each. Concurrency stays at 8 to match
+     the rest of the pipeline — each call spawns exactly one render worker, and PDFium is only safe
+     one-per-process (see render.rs). */
+  for (let i = 0; i < docJobs.length; i += CONCURRENCY) {
+    const batch = docJobs.slice(i, i + CONCURRENCY);
+    await Promise.all(batch.map(async ({ srcFile, fileName, destFile, pagesDir }) => {
+      try {
+        const r = await invoke<{ total: number; rendered: number; cached: boolean }>(
+          'generate_document_previews',
+          { src: srcFile, thumb: destFile, pagesDir, width, quality, limit: pageLimit },
+        );
+        if (r.cached) {
+          appendLog('dim', `  ↷  previews current: ${fileName} (${r.rendered}/${r.total})`);
+          stats.skipped += 1;
+        } else {
+          // `total` beyond `rendered` is not an error — it is what the portal turns into "download
+          // the asset to see the rest", so surface it rather than hiding the cap.
+          const capped = r.total > r.rendered ? ` of ${r.total}` : '';
+          appendLog('success', `  ✓  ${fileName} — ${r.rendered} page${r.rendered === 1 ? '' : 's'}${capped}`);
+          stats.thumbnails += 1;
+          stats.pagePreviews += r.rendered;
+        }
+        if (ctx.pageCounts) ctx.pageCounts.set(srcFile, { total: r.total, rendered: r.rendered });
+      } catch (e) {
+        appendLog('error', `  ✕  ${fileName} — ${e}`);
+        stats.errors += 1;
+      }
+      ctx.setProgress(Math.round((++done / total) * 100));
+    }));
+  }
+
+  appendLog('section',
+    `━━━ THUMBNAILS DONE — ${stats.thumbnails} created · ${stats.pagePreviews} page preview(s) · ${stats.errors} errors ━━━`);
 }
 
 /* Scan all publishable files in OUT folders. Parallel walk — all sibling dirs listed concurrently. */

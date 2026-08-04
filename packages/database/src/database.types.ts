@@ -213,6 +213,8 @@ export type Database = {
           name: string
           parent_id: string | null
           perm: string
+          preview_page_count: number | null
+          preview_page_total: number | null
           primary_angle_id: string | null
           primary_entity_id: string | null
           primary_format_id: string | null
@@ -247,6 +249,8 @@ export type Database = {
           name?: string
           parent_id?: string | null
           perm?: string
+          preview_page_count?: number | null
+          preview_page_total?: number | null
           primary_angle_id?: string | null
           primary_entity_id?: string | null
           primary_format_id?: string | null
@@ -281,6 +285,8 @@ export type Database = {
           name?: string
           parent_id?: string | null
           perm?: string
+          preview_page_count?: number | null
+          preview_page_total?: number | null
           primary_angle_id?: string | null
           primary_entity_id?: string | null
           primary_format_id?: string | null
@@ -435,6 +441,7 @@ export type Database = {
           logo_url: string | null
           name: string
           portal_bg: string | null
+          preview_page_limit: number
           slug: string | null
           website: string | null
         }
@@ -449,6 +456,7 @@ export type Database = {
           logo_url?: string | null
           name: string
           portal_bg?: string | null
+          preview_page_limit?: number
           slug?: string | null
           website?: string | null
         }
@@ -463,6 +471,7 @@ export type Database = {
           logo_url?: string | null
           name?: string
           portal_bg?: string | null
+          preview_page_limit?: number
           slug?: string | null
           website?: string | null
         }

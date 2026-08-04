@@ -87,13 +87,37 @@ Do **not** paste Access Key / Secret into desktop Settings. The desktop never st
 
 When thumbnails are enabled and the grant succeeds, the pipeline uploads via native Rust (`upload_to_r2`): SHA-256 content check, skip if unchanged, set `Cache-Control: public, max-age=31536000, immutable`. Public URLs stored in Supabase include `?v=<content-hash>` so version bumps that overwrite a stable object key still change the gallery URL and bust browser cache. Originals have a separate toggle. Local mtime/size cache and content-hash dedupe skip unnecessary PUTs; a DB inventory URL alone does **not** skip re-verification.
 
+### Per-page document previews
+
+A third stage runs after the thumbnail upload, on the same **Generate thumbnails** toggle: the page
+previews of every PDF, deck and Word document (see [Thumbnails](/desktop/thumbnails)). R2 is the only
+place they are published — they are deliberately excluded from packages and target destinations — so
+without this stage the portal's page viewer has nothing to read.
+
+Two things it does that the thumbnail stage does not:
+
+**It reads `pages.json` from disk** rather than trusting the render step, so the upload is correct on
+a run where thumbnails were skipped but previews already exist.
+
+**It prunes across all four levels.** Any page object for the asset that this run did not just write is
+deleted — pages a shrunken document no longer has, and pages left at a *wider* level after the asset
+was narrowed. The second is the security half: page objects appear in no URL column, so the re-key
+paths could not see them, and a leftover page at the old level stays readable to anyone holding a
+cookie for it. Each stale object is deleted from the bucket its own level implies; a public-tier object
+deleted against the gated bucket is a silent no-op.
+
 ## Object keys
 
 Keys always start with the client UUID (or `branding/{client_id}/` for logos):
 
-| Thumbnail | Original |
+| Kind | Key |
 |---|---|
-| `{client_id}/thumbnails/<stableId>/<childId>.webp` | `{client_id}/originals/<stableId>/<childId><ext>` |
+| Thumbnail | `{client_id}/thumbnails/<stableId>/<childId>.webp` |
+| Original | `{client_id}/originals/<stableId>/<childId><ext>` |
+| Document page | `{client_id}/pages/<stableId>/<childId>/001.webp` |
+
+Gated keys carry a level prefix ahead of the client UUID — see
+[Access levels](/cloud-storage/access-levels).
 
 Keys come from folder identity only, so a rename never strands an object. A file outside a
 hashed package folder has no key and is reported and skipped instead of uploaded.

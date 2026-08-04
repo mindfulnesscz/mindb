@@ -8,6 +8,8 @@
  *   - a key that is BOTH a primary and a child keeps the primary, or the child write would PATCH a
  *     relation onto the primary's own row.
  * 
+ * stripAbsentUrls covers the page-preview counts too, for the same reason.
+ *
  * stripAbsentUrls matters because PATCH leaves omitted fields untouched in Postgres: sending
  * `thumbnail_url: null` from a run where the upload phase was cached or disabled would BLANK the
  * image the portal is already serving. Absent means "no opinion", not "clear it".
@@ -39,6 +41,11 @@ export function stripAbsentUrls(record: Record<string, unknown>): Record<string,
   if (out.thumbnail_url == null) delete out.thumbnail_url;
   if (out.download_url == null) delete out.download_url;
   if (Array.isArray(out.download_urls) && out.download_urls.length === 0) delete out.download_urls;
+  /* Same reasoning for the page counts: a run with thumbnails disabled, or one where this asset was
+     not re-rendered, has NO OPINION about them. Sending null would blank the count the portal reads
+     to decide how many pages to show. */
+  if (out.preview_page_count == null) delete out.preview_page_count;
+  if (out.preview_page_total == null) delete out.preview_page_total;
   return out;
 }
 

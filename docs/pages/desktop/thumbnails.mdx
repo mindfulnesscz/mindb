@@ -154,6 +154,69 @@ or fail outright.
 Rendering cost is ~6.4s per deck, which dominates the Office path completely — PDFium's ~28ms per
 page is under half a percent of it.
 
+## Per-page previews
+
+A document gets a **title thumbnail** (unchanged, and the only one that reaches packages and target
+destinations) plus a folder of per-page previews for the web portal:
+
+```text
+(PRD)(SlD) Deck v2.pptx
+(PRD)(SlD) Deck v2-thumb.webp     ← title page — packages, target destinations, R2 thumbnails
+(PRD)(SlD) Deck v2-thumb/         ← per-page previews, web preview only
+    001.webp  002.webp  …
+    pages.json
+```
+
+The folder name ends in `-thumb`, which is load-bearing rather than cosmetic: `name.includes('-thumb')`
+is already the exclusion filter across the pipeline's walkers, and `scan.ts` applies it *before*
+branching on file-vs-directory, so the folder is invisible to OUT collection and packaging with no new
+rules. Page files are named zero-padded so lexical order is page order in shells, R2 listings and the
+portal alike.
+
+Eligible types are PDF, PowerPoint and Word. **Spreadsheets are capped at one page** — a wide sheet
+printed to PDF paginates into dozens of near-empty slices, so the full allowance would spend real time
+producing useless images and then show them to a client.
+
+### One conversion, one worker, per document
+
+`generate_document_previews` produces the thumbnail *and* the pages from a **single** LibreOffice
+conversion. That conversion is ~6.4s per deck against ~28ms per rasterised page, so doing it once for
+the thumbnail and again for the pages would nearly double the cost of every document in the library.
+Page 1 is rasterised once and reused as both the thumbnail and `001.webp`.
+
+One worker process per **document**, not per page — spawn plus PDFium init is ~12ms, which would
+double the cost of a 28ms page but disappears when amortised across a document's pages. Measured: a
+20-page PDF renders in 0.93s end to end, including spawn.
+
+### `pages.json` decides what is current
+
+Existence checking — how the plain `-thumb.webp` cache works — cannot see the three things that
+invalidate previews: the source changed, an administrator changed the page limit, or the width/quality
+settings changed. So the manifest records its inputs:
+
+```json
+{ "version": 1, "srcMtimeMs": …, "srcSize": …,
+  "total": 7, "rendered": 5, "limit": 5, "width": 320, "quality": 70 }
+```
+
+The source is fingerprinted by **mtime + size, not a content hash** — hashing would mean reading every
+document in the library on every run, some 20MB+, for a check whose whole purpose is to make re-runs
+cheap. This matches how `r2Cache` already decides whether an upload can be skipped.
+
+Two ordering rules that are easy to break:
+
+**The manifest is written last**, after every page is on disk. It is what marks the set complete, so
+writing it earlier would let an interrupted run leave a directory that passes the currency check while
+missing files. `previews_current` also verifies that every page the manifest promises actually exists.
+
+**The page folder is cleared before re-rendering.** A shrinking page count — an edited deck, or a
+lowered limit — would otherwise leave orphans, and orphans past `rendered` are invisible locally and
+visible to a client.
+
+`total` is always the document's real page count, even when `rendered` is lower. That difference is
+what lets the portal show the rendered pages and then tell the viewer to download the asset for the
+rest.
+
 ## Video is not handled here
 
 `THUMB_EXTS` deliberately excludes video, and adding it would not produce thumbnails — it would

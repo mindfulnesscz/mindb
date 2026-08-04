@@ -74,6 +74,26 @@ Two consequences, and both are load-bearing:
 Public keys are unchanged from what the pipeline has always written, so an asset that is genuinely
 public keeps the address it already had and never has to move.
 
+### Three namespaces
+
+```text
+{level}/{client_id}/thumbnails/{stable_id}/{child_id}.webp        one per asset
+{level}/{client_id}/originals/{stable_id}/{child_id}{ext}         one per asset
+{level}/{client_id}/pages/{stable_id}/{child_id}/001.webp         one per PAGE of a document
+```
+
+`pages` holds per-page previews of PDFs, decks and Word documents for the portal's page viewer. They
+are **derived** bytes and carry the level of the document they came from — a `client` deck whose pages
+sat under a public key would publish the deck's content just as surely as the deck itself would.
+
+A directory per asset, not a flat `{child_id}-001.webp`, so every page of one document shares a prefix.
+That is what makes "remove the pages this document no longer has" a prefix listing rather than a guess.
+
+**There is no page URL column.** One object per page makes fifty URLs per asset absurd, so the portal
+derives each address from the asset's `thumbnail_url` — same domain, same level, one segment different
+(`pageUrlsFromThumbnail`). The pages therefore inherit whatever tier and level the thumbnail resolved
+to and cannot disagree with it.
+
 ## Keeping keys and levels in step
 
 This is the part that is easy to underestimate. Changing `perm` or `status` updates a row instantly
@@ -92,6 +112,20 @@ perm/status change            portal edit · gallery cascade · pipeline · hand
         ▼
   bytes moved to the key the level requires
 ```
+
+### Page previews are moved by LISTING, and their source is deleted
+
+Both movers — `cdn-reconcile` and `scripts/rekey-gated-objects.mjs` — find objects by reading the
+`thumbnail_url` and `download_url` **columns**. Page objects appear in no column, so they were
+invisible to both: narrowing a deck from `client` to `internal` moved its thumbnail and left its pages
+readable under the old `client/` prefix. Both now additionally LIST each of the four level prefixes for
+the asset's page directory.
+
+One deliberate asymmetry. For a thumbnail the source object is **left in place** — its URL column has
+been repointed, so nothing references the old object and leaving it is recoverable. For a page the
+source is **deleted as part of the move**, because there is no column to repoint: the old object would
+sit at a wider level, reachable by anyone holding a cookie for that level. Orphaned is not the same as
+unreachable.
 
 **A trigger, not a call from the portal**, because the portal is not the only writer — and the two
 it cannot see are the ones most easily forgotten: the gallery-inheritance cascade rewrites

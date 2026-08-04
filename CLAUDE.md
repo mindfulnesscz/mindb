@@ -1,5 +1,27 @@
 # Project rules — DC Hub
 
+## ⛔ NEVER RESET OR WIPE A DATABASE WITHOUT ASKING FIRST
+
+**Applies to every environment, including local.** Ask, and wait for an answer, before running anything
+that destroys data:
+
+- `npm run db:reset` / `supabase db reset` — drops and reseeds; **wipes local data**
+- `supabase stop --no-backup`, `supabase db push` against a shared project, destructive SQL
+  (`truncate`, `delete` without a narrow filter, `drop`)
+
+Local is NOT scratch space. It holds hours of set-up that the seed does not recreate: `stream_uid`
+values for provisioned Cloudflare Stream videos, generated thumbnails and page previews, R2 upload
+caches, vocabulary, and a tenant configured by hand. A reset looks harmless and then presents as a
+feature being broken — this has already happened twice, most recently wiping every `stream_uid` so
+video playback and animated thumbnails stopped working locally, which read as a code regression and
+cost a long hunt in the wrong place.
+
+To apply a new migration WITHOUT destroying data, use `supabase migration up` (applies pending
+migrations only). Reach for `db:reset` only when the user has asked for a clean slate.
+
+The release path is **local → staging → production**, verified at each step. Never suggest deploying
+to a shared environment to "see if it works".
+
 - **This folder IS the project.** Project root: `/Users/petrmucha/Sites/localhost/dc-hub`.
 - Always ensure filesystem access to this folder at the start of a session (request it if not already connected). There is no relevant content in the Obsidian vault — the project lives here.
 - Architecture reference: `docs/pages/` (see `desktop/cdn.mdx`, `cloud-storage/security.mdx`, `getting-started/architecture.mdx`).
@@ -20,4 +42,5 @@
 - **Access = `perm` AND `status`.** `assets.effective_level` is a generated column: `(status in ('approved','published')) ? perm : 'internal'`. A `public` asset still in `draft` is staff-only.
 - **The level is encoded in the object key**, so changing `perm`/`status` MOVES the bytes. The pipeline writes each asset at its current level; `.github/workflows/reconcile-cdn-keys.yml` heals drift. Key rules live in `packages/domain/src/assetStorage.ts` — use that module, never a fourth copy of the rules.
 - A gallery's images **inherit the parent's level** (DB trigger). Variants follow by default, with an opt-out.
+- **Three object namespaces**: `thumbnails/` and `originals/` (one object per asset) and `pages/` (one object per rendered page of a document, for the portal's page viewer). Page objects are derived bytes and carry the document's level. They have **no URL column** — the portal derives each address from `thumbnail_url` via `pageUrlsFromThumbnail`, so they cannot drift from the thumbnail's level. Both re-key paths find them by LISTING and **delete the source**, unlike thumbnails: with no column to repoint, a leftover page sits readable at the old, wider level.
 - See `docs/pages/cloud-storage/access-levels.mdx`.
