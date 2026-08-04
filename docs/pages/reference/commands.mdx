@@ -37,6 +37,15 @@ one. `build:app` fetches the engines, builds the app, places LibreOffice with `d
 symlinks and signature Tauri's resource copy destroys), and regenerates the DMG. See
 [Third-party engines](/reference/third-party-engines).
 
+## Native engines and edge functions
+
+| Command | Effect |
+|---|---|
+| `npm run deps:native` | Fetches the bundled render engines (PDFium, LibreOffice) for this platform. Run by `npm run setup`; idempotent. ~290MB download, ~800MB on disk. |
+| `npm run smoke:functions` | Asserts every Supabase edge function boots. Add `--fresh` to recreate the local runtime first — it caches a module on first import and ignores later edits, so a green run after an edit otherwise proves nothing. |
+
+See [Third-party engines](/reference/third-party-engines) and [Testing](/reference/testing).
+
 ## Versioning
 
 | Command | Effect |
