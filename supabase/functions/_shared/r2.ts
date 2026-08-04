@@ -162,7 +162,6 @@ export async function presignGet(
   return `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
 }
 
-/** Copy one object between buckets, carrying the metadata the pipeline recognises. */
 /**
  * Every key under `prefix`, following continuation tokens.
  *
@@ -193,6 +192,7 @@ export async function listKeys(
   return out;
 }
 
+/** Copy one object between buckets, carrying the metadata the pipeline recognises. */
 export async function copyObject(
   accountId: string,
   from: { creds: TempCreds; bucket: string; key: string },

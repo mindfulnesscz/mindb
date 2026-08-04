@@ -19,9 +19,9 @@
 //          requireSignedURLs alongside the object key, since a video's level lives in that flag.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import {
-  effectiveLevel, tierFor, assetUrl, stripVersion, pagePrefix, type AccessLevel,
+  effectiveLevel, tierFor, assetUrl, stripVersion, pageTarget, type AccessLevel,
 } from '../../../packages/domain/src/assetStorage.ts';
-import { tempCredentials, copyObject, listKeys, s3, type TempCreds } from '../_shared/r2.ts';
+import { tempCredentials, copyObject, s3, type TempCreds } from '../_shared/r2.ts';
 
 /* Every level a page object could be sitting under. After a level change the old objects are under a
    DIFFERENT prefix, so a single-level search would miss them and leave a narrowed asset's pages
@@ -87,7 +87,7 @@ Deno.serve(async (req) => {
   if (!queued.length) return json(200, { moved: 0, skipped: 0, failed: 0, remaining: 0 });
 
   const { data: assets } = await db.from('assets')
-    .select('id,client_id,stable_id,child_id,perm,status,thumbnail_url,download_url,stream_uid')
+    .select('id,client_id,stable_id,child_id,perm,status,thumbnail_url,download_url,stream_uid,preview_page_count')
     .in('id', queued.map(q => q.asset_id));
 
   const accountId = env('CF_ACCOUNT_ID');
@@ -192,63 +192,77 @@ Deno.serve(async (req) => {
       moved++;
     }
 
-    /* ── Per-page document previews ────────────────────────────────────────
-       Found by LISTING, because there is no page URL column: a document publishes one object per
-       rendered page and the portal derives each address from the asset's thumbnail URL. The loop
-       above only moves objects named by a column, so page objects are invisible to it — and this is
-       the function that runs when someone changes `perm` in the portal. Without this pass, narrowing
-       a deck from `client` to `internal` leaves its pages readable under the old `client/` prefix.
-
-       AND THE SOURCE IS DELETED HERE, unlike above. Leaving a superseded thumbnail behind is safe
-       because its URL column was repointed, so nothing references the old object. A page has no
-       column to repoint: the old object stays at a WIDER level, reachable by anyone holding a cookie
-       for that level. Orphaned is not the same as unreachable. */
-    for (const from of LEVELS) {
-      const prefix = pagePrefix(from, a.client_id, a.stable_id, a.child_id);
-      const fromTier = tierFor(from);
-      let keys: string[];
-      try {
-        keys = await listKeys(accountId, creds[fromTier], bucketOf(fromTier), prefix);
-      } catch (e) {
-        failed++; assetFailed = true;
-        console.error(`${a.id} pages: ${String(e)}`);
-        continue;
-      }
-      for (const key of keys) {
-        const bare = key.replace(/^(public|guest|client|internal)\//, '');
-        const targetTier = tierFor(level);
-        const targetKey = targetTier === 'public' ? bare : `${level}/${bare}`;
-        if (fromTier === targetTier && key === targetKey) { skipped++; continue; }
-        if (targetTier === 'gated' && !GATED_KEY_SHAPE.test(targetKey)) {
-          failed++; assetFailed = true;
-          console.error(`unservable page key refused: ${targetKey}`);
-          continue;
-        }
-
-        const result = await copyObject(
-          accountId,
-          { creds: creds[fromTier], bucket: bucketOf(fromTier), key },
-          { creds: creds[targetTier], bucket: bucketOf(targetTier), key: targetKey },
-        );
-        if (!result.ok) {
-          failed++; assetFailed = true;
-          console.error(`${a.id} page ${key}: ${result.reason}`);
-          continue;
-        }
-        moved++;
-
-        const del = await s3(accountId, creds[fromTier], bucketOf(fromTier), 'DELETE', key);
-        if (!del.ok && del.status !== 404) {
-          // The copy succeeded, so the portal is already correct; the stale wider copy surviving is
-          // the security problem, so it is a failure worth reporting and retrying.
-          failed++; assetFailed = true;
-          console.error(`${a.id} page ${key}: delete of superseded object failed ${del.status}`);
-        }
-      }
-    }
-
+    /* Video protection first: it is one cheap API call and it is the security-critical half. Putting
+       it after the page work meant a page failure could keep the asset queued forever while its
+       video kept serving at the wrong protection — see the note below. */
     if (a.stream_uid && !(await reconcileStreamFlag(a.stream_uid, tierFor(level) !== 'public'))) {
       failed++; assetFailed = true;
+    }
+
+    /* ── Per-page document previews ────────────────────────────────────────
+       Page objects appear in no URL column — a document publishes one object per rendered page and
+       the portal derives each address from the thumbnail — so the column loop above cannot see them.
+       Without this, narrowing a deck from `client` to `internal` moves its thumbnail and leaves its
+       pages readable under the old `client/` prefix.
+
+       ADDRESSED FROM `preview_page_count`, NOT BY LISTING. An earlier version listed each level
+       prefix, which cannot work here: `tempCredentials` requests `object-read-write`, which grants
+       Get/Put/Delete on objects but NOT ListBucket. Every list returned 403, every asset was marked
+       failed, and nothing was ever dequeued — so `cdn_move_queue` stopped draining and videos queued
+       behind the jam never had `requireSignedURLs` reconciled. A list here would need bucket-wide
+       read credentials in an edge function, which is a worse trade than the residue below.
+
+       RESIDUE, deliberately accepted: if the page COUNT also shrank (an edited document, or a lowered
+       client limit) the objects past the new count at an old level are not addressable from the row,
+       and are left for the desktop pipeline's own sweep, which lists all four levels with credentials
+       that permit it. That sweep runs on every pipeline run; this one closes the common case — a level
+       change with a stable page count — immediately.
+
+       SOURCE IS DELETED HERE, unlike the column path above. A superseded thumbnail is safe to leave
+       because its column was repointed, so nothing references the old object. A page has no column to
+       repoint: the old object stays at a WIDER level, reachable by anyone holding a cookie for it.
+       Orphaned is not unreachable. */
+    const pageCount = a.preview_page_count ?? 0;
+    if (pageCount > 0) {
+      const targetTier = tierFor(level);
+      for (const from of LEVELS) {
+        if (from === level) continue; // already where it belongs
+        const fromTier = tierFor(from);
+        for (let page = 1; page <= pageCount; page++) {
+          const key = pageTarget(from, a.client_id, a.stable_id, a.child_id, page).key;
+          const targetKey = pageTarget(level, a.client_id, a.stable_id, a.child_id, page).key;
+          if (targetTier === 'gated' && !GATED_KEY_SHAPE.test(targetKey)) {
+            failed++; assetFailed = true;
+            console.error(`unservable page key refused: ${targetKey}`);
+            continue;
+          }
+
+          const result = await copyObject(
+            accountId,
+            { creds: creds[fromTier], bucket: bucketOf(fromTier), key },
+            { creds: creds[targetTier], bucket: bucketOf(targetTier), key: targetKey },
+          );
+          /* A page that is not at this level is the NORMAL case — only one of the four levels holds
+             it — so a missing source is silence, not a failure. Marking it failed is what jammed the
+             queue before. */
+          if (!result.ok) {
+            if (result.reason !== 'source missing') {
+              failed++; assetFailed = true;
+              console.error(`${a.id} page ${key}: ${result.reason}`);
+            }
+            continue;
+          }
+          moved++;
+
+          const del = await s3(accountId, creds[fromTier], bucketOf(fromTier), 'DELETE', key);
+          if (!del.ok && del.status !== 404) {
+            // The copy succeeded so the portal is already correct; the stale WIDER copy surviving is
+            // the security problem, so it is worth reporting and retrying.
+            failed++; assetFailed = true;
+            console.error(`${a.id} page ${key}: delete of superseded object failed ${del.status}`);
+          }
+        }
+      }
     }
 
     if (Object.keys(patch).length) {
