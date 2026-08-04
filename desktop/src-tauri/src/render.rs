@@ -144,8 +144,75 @@ pub const WORKER_FLAG: &str = "--dchub-render-worker";
 /// measured 86 pages/s at 8-way for single-page documents against ~35 pages/s for a correct
 /// single-threaded in-process implementation.
 ///
-/// Concurrency stays where it already is: the pipeline's own 8-at-a-time batching. Nothing here
-/// spawns more than the one worker it needs.
+/// One unit of rendering work, handed to a worker process as a single JSON argv item.
+///
+/// JSON rather than positional arguments because the job grew past what positions carry readably,
+/// and because the next engine (3D) will add fields. Adding an `Option` field here is backwards
+/// compatible; adding a seventh positional argument was not.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderJob {
+    /// Directory holding the PDFium dynamic library.
+    pub lib_dir: String,
+    /// The PDF to render. Office documents are converted to one of these first.
+    pub src: String,
+    /// Where page 1 goes — the thumbnail the pipeline and R2 already know about.
+    pub thumb: String,
+    /// Where per-page previews go, or None for thumbnail-only work.
+    pub pages_dir: Option<String>,
+    pub width: u32,
+    pub quality: u32,
+    /// Maximum pages to render. Ignored when `pages_dir` is None.
+    pub limit: u32,
+}
+
+/// What a worker reports back on stdout.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderOutcome {
+    /// Pages the document actually has — may exceed `rendered`, which is what the portal needs in
+    /// order to say "download the asset to see the rest".
+    pub total: u32,
+    /// Pages written to `pages_dir`.
+    pub rendered: u32,
+}
+
+/// Render a PDF in a short-lived WORKER PROCESS: page 1 to `thumb`, and optionally N pages.
+///
+/// PDFium cannot be used concurrently. Not "is slower when threaded" — it FAILS: with the crate's
+/// `thread_safe` feature enabled and eight threads rendering eight DIFFERENT documents, all 160
+/// renders returned `FormatError`; at four threads, 76 of 80 failed. Its state is process-global, so
+/// the unit of isolation has to be a process.
+///
+/// ONE WORKER PER DOCUMENT, not per page. Spawn plus PDFium init is ~12ms, which would double the
+/// cost of a 28ms page; amortised across a document's pages it disappears. Measured at 8-way:
+/// 86 pages/s for single-page documents, 233 pages/s for multi-page ones.
+///
+/// Concurrency stays where it already is — the pipeline's 8-at-a-time batching.
+fn run_worker(job: &RenderJob) -> Result<RenderOutcome, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("locate own executable: {e}"))?;
+    let payload = serde_json::to_string(job).map_err(|e| format!("encode render job: {e}"))?;
+
+    let out = Command::new(&exe)
+        .arg(WORKER_FLAG)
+        .arg(&payload)
+        .output()
+        .map_err(|e| format!("spawn render worker: {e}"))?;
+
+    if !out.status.success() {
+        // The worker prints one diagnostic line; surface it rather than an exit code.
+        let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if msg.is_empty() {
+            format!("render worker failed (exit {:?}) for {}", out.status.code(), job.src)
+        } else {
+            msg
+        });
+    }
+    serde_json::from_slice(&out.stdout)
+        .map_err(|e| format!("render worker returned unreadable output for {}: {e}", job.src))
+}
+
+/// Render page 1 of a PDF to a WebP thumbnail.
 pub fn pdf_to_thumb(
     app: &tauri::AppHandle,
     src: &str,
@@ -153,47 +220,46 @@ pub fn pdf_to_thumb(
     width: u32,
     quality: u32,
 ) -> Result<(), String> {
-    let lib_dir = pdfium_dir(app)?;
-    let exe = std::env::current_exe().map_err(|e| format!("locate own executable: {e}"))?;
-
-    let out = Command::new(&exe)
-        .arg(WORKER_FLAG)
-        .arg(&lib_dir)
-        .arg(src)
-        .arg(dest)
-        .arg(width.to_string())
-        .arg(quality.to_string())
-        .output()
-        .map_err(|e| format!("spawn render worker: {e}"))?;
-
-    if out.status.success() {
-        return Ok(());
-    }
-    // The worker prints a single diagnostic line; surface it rather than an exit code.
-    let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    Err(if msg.is_empty() {
-        format!("render worker failed (exit {:?}) for {src}", out.status.code())
-    } else {
-        msg
+    run_worker(&RenderJob {
+        lib_dir: pdfium_dir(app)?.to_string_lossy().into_owned(),
+        src: src.to_string(),
+        thumb: dest.to_string(),
+        pages_dir: None,
+        width,
+        quality,
+        limit: 0,
     })
+    .map(|_| ())
 }
 
 /// Worker entry point. Returns the process exit code; `run()` calls this before Tauri starts.
 ///
-/// Kept deliberately dumb: arguments in, file out, one line of diagnostics on stderr. No IPC, no
-/// serialisation format, nothing to keep in sync with the parent beyond this argument order.
+/// Deliberately dumb: one JSON job in, files out, one JSON outcome on stdout and one diagnostic line
+/// on stderr. The job struct is the entire contract with the parent.
 pub fn worker_main(args: &[String]) -> i32 {
-    // WORKER_FLAG, lib_dir, src, dest, width, quality
-    if args.len() < 6 {
-        eprintln!("render worker: expected 5 arguments, got {}", args.len().saturating_sub(1));
+    let Some(payload) = args.get(1) else {
+        eprintln!("render worker: missing job payload");
         return 2;
-    }
-    let (lib_dir, src, dest) = (Path::new(&args[1]), args[2].as_str(), args[3].as_str());
-    let width = args[4].parse::<u32>().unwrap_or(320);
-    let quality = args[5].parse::<u32>().unwrap_or(70);
+    };
+    let job: RenderJob = match serde_json::from_str(payload) {
+        Ok(j) => j,
+        Err(e) => {
+            eprintln!("render worker: unreadable job: {e}");
+            return 2;
+        }
+    };
 
-    match pdf_to_thumb_in(lib_dir, src, dest, width, quality) {
-        Ok(()) => 0,
+    match render_pdf(&job) {
+        Ok(outcome) => {
+            match serde_json::to_string(&outcome) {
+                Ok(s) => println!("{s}"),
+                Err(e) => {
+                    eprintln!("render worker: could not encode outcome: {e}");
+                    return 1;
+                }
+            }
+            0
+        }
         Err(e) => {
             eprintln!("{e}");
             1
@@ -201,32 +267,74 @@ pub fn worker_main(args: &[String]) -> i32 {
     }
 }
 
-/// `pdf_to_thumb` without the process hop — what the worker itself runs.
+/// Execute a job without the process hop — what the worker itself runs.
 ///
 /// Never call this from the app process for pipeline work: it is only safe when the caller can
 /// guarantee no other PDFium use is in flight, which in practice means "inside a worker" or "inside
 /// a single-threaded test".
-fn pdf_to_thumb_in(
-    lib_dir: &Path,
-    src: &str,
-    dest: &str,
-    width: u32,
-    quality: u32,
-) -> Result<(), String> {
-    let pdfium = pdfium_in(lib_dir)?;
-    let doc = pdfium.load_pdf_from_file(src, None).map_err(|e| format!("open {src}: {e}"))?;
-    let page = doc.pages().first().map_err(|e| format!("{src} has no first page: {e}"))?;
+///
+/// Page 1 is rendered ONCE and written to `thumb`; when `pages_dir` is set the same bitmap is reused
+/// as `001.webp` rather than rasterised again.
+fn render_pdf(job: &RenderJob) -> Result<RenderOutcome, String> {
+    let pdfium = pdfium_in(Path::new(&job.lib_dir))?;
+    let doc = pdfium
+        .load_pdf_from_file(&job.src, None)
+        .map_err(|e| format!("open {}: {e}", job.src))?;
 
-    // Render at the final width directly — PDFium rasterises at the requested size rather than
+    let total = doc.pages().len() as u32;
+    if total == 0 {
+        return Err(format!("{} has no pages", job.src));
+    }
+
+    // Render straight to the target width — PDFium rasterises at the requested size rather than
     // producing a full-resolution bitmap we would then downscale.
-    let cfg = PdfRenderConfig::new().set_target_width(width as i32);
-    let img = page
-        .render_with_config(&cfg)
-        .map_err(|e| format!("render {src} page 1: {e}"))?
-        .as_image()
-        .map_err(|e| format!("convert {src} page 1: {e}"))?;
+    let cfg = PdfRenderConfig::new().set_target_width(job.width as i32);
+    let render_one = |index: u32| -> Result<image::DynamicImage, String> {
+        doc.pages()
+            .get(index as i32)
+            .map_err(|e| format!("{} page {}: {e}", job.src, index + 1))?
+            .render_with_config(&cfg)
+            .map_err(|e| format!("render {} page {}: {e}", job.src, index + 1))?
+            .as_image()
+            .map_err(|e| format!("convert {} page {}: {e}", job.src, index + 1))
+    };
 
-    write_webp(&img, Path::new(dest), width, quality)
+    let first = render_one(0)?;
+    write_webp(&first, Path::new(&job.thumb), job.width, job.quality)?;
+
+    let Some(pages_dir) = job.pages_dir.as_deref() else {
+        return Ok(RenderOutcome { total, rendered: 0 });
+    };
+
+    let dir = Path::new(pages_dir);
+    /* Clear the directory first. A shrinking page count (an edited deck, or a lowered limit) would
+       otherwise leave orphaned pages behind, and those get uploaded and shown — the portal trusts
+       the manifest's count, so stale files past it are invisible here and visible there. */
+    if dir.exists() {
+        std::fs::remove_dir_all(dir).map_err(|e| format!("clear {}: {e}", dir.display()))?;
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+
+    let wanted = total.min(job.limit);
+    if wanted == 0 {
+        // Nothing to render. Page 1 must NOT be written here: `rendered` is what the manifest
+        // promises and what the portal reads, so a file past that count is an orphan by definition.
+        return Ok(RenderOutcome { total, rendered: 0 });
+    }
+    // Page 1 is already rasterised for the thumbnail — reuse the bitmap rather than render twice.
+    write_webp(&first, &page_path(dir, 1), job.width, job.quality)?;
+    for index in 1..wanted {
+        let img = render_one(index)?;
+        write_webp(&img, &page_path(dir, index + 1), job.width, job.quality)?;
+    }
+
+    Ok(RenderOutcome { total, rendered: wanted })
+}
+
+/// `001.webp`, `002.webp`, … — zero-padded so lexical order is page order everywhere (shell, R2
+/// listings, the portal). `page` is 1-based.
+fn page_path(dir: &Path, page: u32) -> PathBuf {
+    dir.join(format!("{page:03}.webp"))
 }
 
 /* ── Office documents ───────────────────────────────────────────────────── */
@@ -331,9 +439,171 @@ pub fn office_to_thumb(
     width: u32,
     quality: u32,
 ) -> Result<(), String> {
+    office_previews(app, src, dest, None, width, quality, 0).map(|_| ())
+}
+
+/// Thumbnail **and** per-page previews for an Office document, from ONE conversion.
+///
+/// The conversion is the expensive half — ~6.4s per deck against ~28ms per rasterised page — so
+/// doing it once for the thumbnail and again for the pages would roughly double the cost of every
+/// document in the library. The temporary PDF is shared and dropped with `work`.
+pub fn office_previews(
+    app: &tauri::AppHandle,
+    src: &str,
+    thumb: &str,
+    pages_dir: Option<&str>,
+    width: u32,
+    quality: u32,
+    limit: u32,
+) -> Result<RenderOutcome, String> {
     let work = TempDir::new("dchub-office")?;
     let pdf = office_to_pdf(app, src, work.path())?;
-    pdf_to_thumb(app, &pdf.to_string_lossy(), dest, width, quality)
+    run_worker(&RenderJob {
+        lib_dir: pdfium_dir(app)?.to_string_lossy().into_owned(),
+        src: pdf.to_string_lossy().into_owned(),
+        thumb: thumb.to_string(),
+        pages_dir: pages_dir.map(str::to_string),
+        width,
+        quality,
+        limit,
+    })
+}
+
+/// Thumbnail **and** per-page previews for a PDF.
+pub fn pdf_previews(
+    app: &tauri::AppHandle,
+    src: &str,
+    thumb: &str,
+    pages_dir: Option<&str>,
+    width: u32,
+    quality: u32,
+    limit: u32,
+) -> Result<RenderOutcome, String> {
+    run_worker(&RenderJob {
+        lib_dir: pdfium_dir(app)?.to_string_lossy().into_owned(),
+        src: src.to_string(),
+        thumb: thumb.to_string(),
+        pages_dir: pages_dir.map(str::to_string),
+        width,
+        quality,
+        limit,
+    })
+}
+
+/// How many pages a document type is worth previewing.
+///
+/// Spreadsheets are capped at 1 deliberately. A print-to-PDF of one wide sheet can paginate into
+/// dozens of near-empty slices, so a 50-page allowance would spend real time producing 50 useless
+/// images and then show them to a client. Presentations and text documents paginate meaningfully.
+pub fn page_budget(ext: &str, limit: u32) -> u32 {
+    match ext {
+        "xlsx" | "xlsm" | "xls" => 1,
+        _ => limit,
+    }
+}
+
+/* ── The pages manifest ─────────────────────────────────────────────────── */
+
+/// `pages.json`, written beside the rendered pages.
+///
+/// Existence alone cannot decide whether previews are current, which is how the plain `-thumb.webp`
+/// check works. Three things invalidate them and none are visible from a directory listing: the
+/// source document changed, an administrator changed the page limit, or the configured width/quality
+/// changed. So the inputs are recorded and compared.
+///
+/// The source is fingerprinted by **mtime + size, not a content hash**. Hashing would mean reading
+/// every document in the library on every run — these reach 20MB+ — for a check that exists to make
+/// re-runs cheap. This matches how `r2Cache` already decides whether an upload can be skipped.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PagesManifest {
+    /// Bumped when the fields or the page-naming scheme change, so old manifests re-render.
+    pub version: u32,
+    pub src_mtime_ms: i64,
+    pub src_size: u64,
+    /// Pages the document has, which may exceed `rendered`.
+    pub total: u32,
+    pub rendered: u32,
+    pub limit: u32,
+    pub width: u32,
+    pub quality: u32,
+}
+
+/// Current manifest format. Bump to force regeneration across the library.
+pub const PAGES_MANIFEST_VERSION: u32 = 1;
+
+pub fn manifest_path(pages_dir: &Path) -> PathBuf {
+    pages_dir.join("pages.json")
+}
+
+/// mtime (ms since epoch) and size of a file — the cheap fingerprint.
+fn fingerprint(src: &Path) -> Result<(i64, u64), String> {
+    let meta = std::fs::metadata(src).map_err(|e| format!("stat {}: {e}", src.display()))?;
+    let mtime_ms = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(-1);
+    Ok((mtime_ms, meta.len()))
+}
+
+/// Are the previews in `pages_dir` still valid for `src` under these settings?
+///
+/// Returns the existing manifest when everything matches, so the caller can report the page count
+/// without re-rendering. Any mismatch — or an unreadable manifest — means regenerate.
+pub fn previews_current(
+    src: &Path,
+    pages_dir: &Path,
+    limit: u32,
+    width: u32,
+    quality: u32,
+) -> Option<PagesManifest> {
+    let manifest: PagesManifest =
+        serde_json::from_slice(&std::fs::read(manifest_path(pages_dir)).ok()?).ok()?;
+    let (mtime_ms, size) = fingerprint(src).ok()?;
+
+    let matches = manifest.version == PAGES_MANIFEST_VERSION
+        && manifest.src_mtime_ms == mtime_ms
+        && manifest.src_size == size
+        && manifest.limit == limit
+        && manifest.width == width
+        && manifest.quality == quality;
+
+    // A manifest claiming pages that are not on disk is stale, whatever it says about its inputs.
+    let complete = (1..=manifest.rendered).all(|p| page_path(pages_dir, p).is_file());
+
+    (matches && complete).then_some(manifest)
+}
+
+/// Write `pages.json` last, once every page is on disk.
+///
+/// Ordering matters: the manifest is what marks the set complete, so writing it before the pages
+/// would let an interrupted run leave a directory that passes `previews_current` while missing files.
+pub fn write_manifest(
+    src: &Path,
+    pages_dir: &Path,
+    outcome: &RenderOutcome,
+    limit: u32,
+    width: u32,
+    quality: u32,
+) -> Result<PagesManifest, String> {
+    let (src_mtime_ms, src_size) = fingerprint(src)?;
+    let manifest = PagesManifest {
+        version: PAGES_MANIFEST_VERSION,
+        src_mtime_ms,
+        src_size,
+        total: outcome.total,
+        rendered: outcome.rendered,
+        limit,
+        width,
+        quality,
+    };
+    let json = serde_json::to_string_pretty(&manifest)
+        .map_err(|e| format!("encode pages manifest: {e}"))?;
+    std::fs::write(manifest_path(pages_dir), json + "\n")
+        .map_err(|e| format!("write {}: {e}", manifest_path(pages_dir).display()))?;
+    Ok(manifest)
 }
 
 /* ── Temp dir with cleanup on every exit path ───────────────────────────── */
@@ -406,6 +676,81 @@ mod tests {
     /* Precedence is the load-bearing part of engine resolution: the BUNDLED LibreOffice is the
        version whose deck rendering was reviewed and accepted, so a different one installed on the
        host must never take priority. */
+    /* The manifest is what makes re-runs cheap AND what makes a limit change take effect. Existence
+       checking alone cannot see either, which is why `pages.json` exists at all. */
+    #[test]
+    fn previews_are_current_only_while_every_input_matches() {
+        let work = TempDir::new("dchub-manifest").unwrap();
+        let src = work.path().join("doc.pdf");
+        let pages = work.path().join("doc-thumb");
+        std::fs::write(&src, b"pretend document").unwrap();
+        std::fs::create_dir_all(&pages).unwrap();
+        std::fs::write(pages.join("001.webp"), b"page").unwrap();
+
+        let outcome = RenderOutcome { total: 3, rendered: 1 };
+        write_manifest(&src, &pages, &outcome, 50, 320, 70).unwrap();
+
+        assert!(
+            previews_current(&src, &pages, 50, 320, 70).is_some(),
+            "unchanged inputs must be treated as current",
+        );
+        // An administrator raising the per-client limit has to force a re-render.
+        assert!(previews_current(&src, &pages, 20, 320, 70).is_none(), "a limit change must invalidate");
+        assert!(previews_current(&src, &pages, 50, 640, 70).is_none(), "a width change must invalidate");
+        assert!(previews_current(&src, &pages, 50, 320, 90).is_none(), "a quality change must invalidate");
+
+        // An edited document changes size, so the fingerprint stops matching.
+        std::fs::write(&src, b"pretend document, now edited and longer").unwrap();
+        assert!(previews_current(&src, &pages, 50, 320, 70).is_none(), "an edited source must invalidate");
+    }
+
+    /* A manifest that claims more pages than exist is stale regardless of its inputs — an
+       interrupted run must not look complete. This is why the manifest is written last. */
+    #[test]
+    fn a_manifest_promising_missing_pages_is_not_current() {
+        let work = TempDir::new("dchub-manifest-gap").unwrap();
+        let src = work.path().join("doc.pdf");
+        let pages = work.path().join("doc-thumb");
+        std::fs::write(&src, b"doc").unwrap();
+        std::fs::create_dir_all(&pages).unwrap();
+        std::fs::write(pages.join("001.webp"), b"page").unwrap();
+
+        // Claims 3 rendered pages; only 001 is on disk.
+        write_manifest(&src, &pages, &RenderOutcome { total: 3, rendered: 3 }, 50, 320, 70).unwrap();
+
+        assert!(
+            previews_current(&src, &pages, 50, 320, 70).is_none(),
+            "a manifest must not certify pages that are missing",
+        );
+    }
+
+    #[test]
+    fn a_missing_or_unreadable_manifest_means_regenerate() {
+        let work = TempDir::new("dchub-manifest-none").unwrap();
+        let src = work.path().join("doc.pdf");
+        let pages = work.path().join("doc-thumb");
+        std::fs::write(&src, b"doc").unwrap();
+        std::fs::create_dir_all(&pages).unwrap();
+
+        assert!(previews_current(&src, &pages, 50, 320, 70).is_none(), "no manifest → regenerate");
+
+        std::fs::write(manifest_path(&pages), b"{ truncated").unwrap();
+        assert!(previews_current(&src, &pages, 50, 320, 70).is_none(), "bad manifest → regenerate");
+    }
+
+    /* Spreadsheets are capped at one page on purpose: a wide sheet printed to PDF paginates into
+       many near-empty slices, so the full allowance would render dozens of useless images. */
+    #[test]
+    fn spreadsheets_get_one_page_and_other_documents_get_the_full_budget() {
+        for ext in ["xlsx", "xlsm", "xls"] {
+            assert_eq!(page_budget(ext, 50), 1, ".{ext} must be capped at one page");
+        }
+        for ext in ["pdf", "pptx", "docx", "ppt", "doc"] {
+            assert_eq!(page_budget(ext, 50), 50, ".{ext} must get the configured budget");
+        }
+        assert_eq!(page_budget("pdf", 0), 0, "a zero budget stays zero");
+    }
+
     #[test]
     fn bundled_libreoffice_wins_over_anything_on_the_host() {
         let bundled = PathBuf::from("/app/Resources/resources/native/libreoffice/soffice");
@@ -464,6 +809,19 @@ mod tests {
         pdf.into_bytes()
     }
 
+    /// A RenderJob for tests — the one place the field defaults live.
+    fn job(lib_dir: &Path, src: &Path, thumb: &Path, pages_dir: Option<&Path>, limit: u32) -> RenderJob {
+        RenderJob {
+            lib_dir: lib_dir.to_string_lossy().into_owned(),
+            src: src.to_string_lossy().into_owned(),
+            thumb: thumb.to_string_lossy().into_owned(),
+            pages_dir: pages_dir.map(|p| p.to_string_lossy().into_owned()),
+            width: 320,
+            quality: 70,
+            limit,
+        }
+    }
+
     /// The bundled PDFium, or None when `npm run deps:native` has not been run.
     fn pdfium_lib_dir() -> Option<PathBuf> {
         let dir = native::native_dir_from(Path::new(env!("CARGO_MANIFEST_DIR")), PDFIUM_ENGINE);
@@ -475,7 +833,7 @@ mod tests {
        `npm run deps:native` still has a green test run. CI runs the fetch, so CI does execute it. */
     #[test]
     fn renders_a_pdf_page_to_a_webp_at_the_requested_width() {
-        let _serial = PDFIUM_TEST_LOCK.lock().unwrap();
+        let _serial = pdfium_serial();
         let Some(lib_dir) = pdfium_lib_dir() else {
             eprintln!("skipping: no bundled PDFium — run `npm run deps:native`");
             return;
@@ -485,8 +843,7 @@ mod tests {
         let dest = work.path().join("out.webp");
         std::fs::write(&src, minimal_pdf()).unwrap();
 
-        pdf_to_thumb_in(&lib_dir, &src.to_string_lossy(), &dest.to_string_lossy(), 320, 70)
-            .expect("render should succeed");
+        render_pdf(&job(&lib_dir, &src, &dest, None, 0)).expect("render should succeed");
 
         let bytes = std::fs::read(&dest).unwrap();
         assert!(bytes.len() > 32, "thumbnail is suspiciously small: {} bytes", bytes.len());
@@ -514,11 +871,19 @@ mod tests {
        that has nothing to do with what either test is checking. */
     static PDFIUM_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /* Poison-tolerant: a panicking test would otherwise poison the mutex and every later PDFium
+       test would fail with PoisonError instead of its own result — one real failure reported as
+       five, with the actual cause buried. The lock guards nothing but ordering, so a previous
+       panic does not make it unsafe to take. */
+    fn pdfium_serial() -> std::sync::MutexGuard<'static, ()> {
+        PDFIUM_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /* The actual guarantee: one render, one worker process. Pins the argument order the parent and
        `worker_main` have to agree on — the only coupling between them. */
     #[test]
     fn worker_main_renders_a_pdf_and_reports_failure_by_exit_code() {
-        let _serial = PDFIUM_TEST_LOCK.lock().unwrap();
+        let _serial = pdfium_serial();
         let Some(lib_dir) = pdfium_lib_dir() else { return };
         let work = TempDir::new("dchub-worker").unwrap();
         let good = work.path().join("good.pdf");
@@ -529,11 +894,7 @@ mod tests {
         let argv = |src: &Path, dest: &Path| {
             vec![
                 WORKER_FLAG.to_string(),
-                lib_dir.to_string_lossy().into_owned(),
-                src.to_string_lossy().into_owned(),
-                dest.to_string_lossy().into_owned(),
-                "320".to_string(),
-                "70".to_string(),
+                serde_json::to_string(&job(&lib_dir, src, dest, None, 0)).unwrap(),
             ]
         };
 
@@ -545,20 +906,88 @@ mod tests {
         assert_eq!(worker_main(&argv(&bad, &out_bad)), 1, "invalid PDF must exit non-zero");
         assert!(!out_bad.exists(), "failed render must leave no file behind");
 
-        assert_eq!(worker_main(&[WORKER_FLAG.to_string()]), 2, "missing arguments must exit 2");
+        // Both malformed-input shapes exit 2, distinct from a render failure's 1.
+        assert_eq!(worker_main(&[WORKER_FLAG.to_string()]), 2, "missing payload must exit 2");
+        assert_eq!(
+            worker_main(&[WORKER_FLAG.to_string(), "{not json".to_string()]),
+            2,
+            "unreadable payload must exit 2",
+        );
+    }
+
+    /* Multi-page rendering, including the cap. The synthetic PDF has one page, so the interesting
+       assertions are the numbering, the reuse of page 1 as the thumbnail, and `total` vs `rendered`. */
+    #[test]
+    fn renders_pages_into_the_preview_folder_with_padded_names() {
+        let _serial = pdfium_serial();
+        let Some(lib_dir) = pdfium_lib_dir() else { return };
+        let work = TempDir::new("dchub-pages").unwrap();
+        let src = work.path().join("in.pdf");
+        let thumb = work.path().join("in-thumb.webp");
+        let pages = work.path().join("in-thumb");
+        std::fs::write(&src, minimal_pdf()).unwrap();
+
+        let outcome = render_pdf(&job(&lib_dir, &src, &thumb, Some(&pages), 50)).unwrap();
+
+        assert_eq!(outcome.total, 1);
+        assert_eq!(outcome.rendered, 1);
+        assert!(thumb.is_file(), "the title thumbnail must still be written");
+        // Zero-padded so lexical order is page order in shells, R2 listings and the portal.
+        assert!(pages.join("001.webp").is_file(), "page 1 must be 001.webp");
+        assert!(!pages.join("1.webp").exists(), "unpadded names must not be used");
+    }
+
+    /// `limit` caps what is rendered but must NOT change the reported page count.
+    #[test]
+    fn a_page_limit_caps_rendering_but_still_reports_the_real_total() {
+        let _serial = pdfium_serial();
+        let Some(lib_dir) = pdfium_lib_dir() else { return };
+        let work = TempDir::new("dchub-pages-cap").unwrap();
+        let src = work.path().join("in.pdf");
+        let thumb = work.path().join("t.webp");
+        let pages = work.path().join("p");
+        std::fs::write(&src, minimal_pdf()).unwrap();
+
+        // limit 0 renders nothing, yet `total` must still describe the document — that difference is
+        // what lets the portal say "download the asset to see the rest".
+        let outcome = render_pdf(&job(&lib_dir, &src, &thumb, Some(&pages), 0)).unwrap();
+        assert_eq!(outcome.total, 1, "total is the document's page count, not the cap");
+        assert_eq!(outcome.rendered, 0);
+        assert!(!pages.join("001.webp").exists());
+    }
+
+    /* A shrinking page set must not leave orphans. The portal renders `rendered` pages from the
+       manifest, so a leftover file past that count is invisible locally and visible to a client. */
+    #[test]
+    fn re_rendering_clears_pages_left_by_a_previous_run() {
+        let _serial = pdfium_serial();
+        let Some(lib_dir) = pdfium_lib_dir() else { return };
+        let work = TempDir::new("dchub-pages-stale").unwrap();
+        let src = work.path().join("in.pdf");
+        let thumb = work.path().join("t.webp");
+        let pages = work.path().join("p");
+        std::fs::write(&src, minimal_pdf()).unwrap();
+        std::fs::create_dir_all(&pages).unwrap();
+        let orphan = pages.join("007.webp");
+        std::fs::write(&orphan, b"stale page from an earlier, longer document").unwrap();
+
+        render_pdf(&job(&lib_dir, &src, &thumb, Some(&pages), 50)).unwrap();
+
+        assert!(!orphan.exists(), "a page beyond the new count must be removed");
+        assert!(pages.join("001.webp").is_file());
     }
 
     /// A corrupt PDF must surface an error, never a zero-byte thumbnail the pipeline would cache.
     #[test]
     fn a_corrupt_pdf_errors_instead_of_writing_a_broken_thumbnail() {
-        let _serial = PDFIUM_TEST_LOCK.lock().unwrap();
+        let _serial = pdfium_serial();
         let Some(lib_dir) = pdfium_lib_dir() else { return };
         let work = TempDir::new("dchub-render-bad").unwrap();
         let src = work.path().join("bad.pdf");
         let dest = work.path().join("bad.webp");
         std::fs::write(&src, b"%PDF-1.4\nthis is not a pdf").unwrap();
 
-        let result = pdf_to_thumb_in(&lib_dir, &src.to_string_lossy(), &dest.to_string_lossy(), 320, 70);
+        let result = render_pdf(&job(&lib_dir, &src, &dest, None, 0));
         assert!(result.is_err(), "corrupt input must error");
         assert!(!dest.exists(), "no thumbnail should be left behind");
     }

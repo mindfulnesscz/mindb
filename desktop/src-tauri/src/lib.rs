@@ -53,6 +53,83 @@ fn generate_thumbnail(
     }
 }
 
+/// Extensions that get per-page previews at all. Images are a single page by definition.
+fn supports_pages(ext: &str) -> bool {
+    ext == "pdf" || OFFICE_EXTS.contains(&ext)
+}
+
+/// What `generate_document_previews` reports back to the pipeline.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewReport {
+    /// Pages the document has. May exceed `rendered` — the portal uses the difference to tell the
+    /// viewer to download the asset for the rest.
+    total: u32,
+    /// Pages written to the preview folder.
+    rendered: u32,
+    /// True when nothing was re-rendered because the existing previews were already current.
+    cached: bool,
+}
+
+/// Generate the title thumbnail and per-page previews for one document.
+///
+/// Separate from `generate_thumbnail` because it does BOTH from a single LibreOffice conversion —
+/// that conversion is ~6.4s against ~28ms per rasterised page, so producing the thumbnail and the
+/// pages in two passes would nearly double the cost of every document in the library.
+///
+/// `limit` is the administrator's per-client page cap; spreadsheets are capped at 1 regardless (see
+/// `render::page_budget`). A document with more pages than the cap renders the first `limit` and
+/// still reports its real `total`.
+#[tauri::command]
+fn generate_document_previews(
+    app: tauri::AppHandle,
+    src: String,
+    thumb: String,
+    pages_dir: String,
+    width: u32,
+    quality: u32,
+    limit: u32,
+) -> Result<PreviewReport, String> {
+    let ext = Path::new(&src)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    if !supports_pages(&ext) {
+        return Err(format!("Per-page previews are not supported for .{ext}"));
+    }
+
+    let budget = render::page_budget(&ext, limit);
+    let src_path = Path::new(&src);
+    let pages_path = Path::new(&pages_dir);
+
+    // Cheap check first: unchanged source, same limit and same output settings means the previews on
+    // disk are still the right ones. Re-runs over a processed library do no rendering at all.
+    if let Some(existing) = render::previews_current(src_path, pages_path, budget, width, quality) {
+        if Path::new(&thumb).is_file() {
+            return Ok(PreviewReport {
+                total: existing.total,
+                rendered: existing.rendered,
+                cached: true,
+            });
+        }
+    }
+
+    let outcome = if ext == "pdf" {
+        render::pdf_previews(&app, &src, &thumb, Some(&pages_dir), width, quality, budget)?
+    } else {
+        render::office_previews(&app, &src, &thumb, Some(&pages_dir), width, quality, budget)?
+    };
+
+    let manifest = render::write_manifest(src_path, pages_path, &outcome, budget, width, quality)?;
+    Ok(PreviewReport {
+        total: manifest.total,
+        rendered: manifest.rendered,
+        cached: false,
+    })
+}
+
 /// Bind localhost:7623, wait for one OAuth redirect request, reply with a
 /// success page, and return the raw request path (e.g. "/cb?code=…&state=…").
 /// Times out after 10 minutes (hosted-email delivery can lag). Async so it
@@ -136,6 +213,7 @@ pub fn run() {
            this line. */
         .invoke_handler(tauri::generate_handler![
             generate_thumbnail,
+            generate_document_previews,
             wait_for_oauth_redirect,
             reveal::start_reveal_bridge,
             reveal::set_reveal_client_root,
