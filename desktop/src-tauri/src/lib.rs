@@ -106,6 +106,16 @@ async fn wait_for_oauth_redirect() -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    /* Render-worker mode, checked before anything Tauri touches.
+       PDFium cannot be used concurrently in one process (measured: 8 threads on 8 distinct
+       documents failed every render), so each PDF rasterisation happens in a short-lived child
+       process — this same executable, re-invoked with a hidden flag. It must not build a webview,
+       show a window, or touch the store, so it returns before the builder runs. */
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == render::WORKER_FLAG) {
+        std::process::exit(render::worker_main(&args));
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_notification::init())

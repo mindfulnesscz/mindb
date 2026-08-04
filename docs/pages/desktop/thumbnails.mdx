@@ -42,17 +42,51 @@ only — there is no static archive to link. It is fetched per-platform by
 packaged resource dir first, then falls back to the source tree so `tauri dev` works without a
 packaged build. Add engines there — never as a bare command name.
 
-### PDFium is single-instance and not thread-safe
+### One render, one process — PDFium cannot be threaded
 
-PDFium keeps process-global state (`FPDF_InitLibrary` / `FPDF_DestroyLibrary`) and is not
-thread-safe. Binding it per call therefore tears the library down underneath any concurrent user.
-The pipeline renders **eight** thumbnails at a time, and that combination crashes: a parallel run
-segfaulted, and even a serial one failed on whichever render came second.
+PDFium keeps process-global state (`FPDF_InitLibrary` / `FPDF_DestroyLibrary`) and **cannot be used
+concurrently within one process**. This is not a performance caveat, it is a hard failure. Measured
+with the `pdfium-render` crate's `thread_safe` feature enabled, eight threads rendering eight
+*different* documents:
 
-So `render.rs` binds PDFium **once** into a `OnceLock` that is never dropped, and the crate's
-`thread_safe` feature serialises calls into it. A test renders from eight threads and asserts the
-outputs are byte-identical; do not replace it with a single-threaded one, because single-threaded is
-exactly the case that passed while the bug was live.
+| Threads | Renders OK | Failed (`FormatError`) |
+|---|---|---|
+| 1 | 20 | 0 |
+| 4 | 4 | 76 |
+| 8 | 0 | 160 |
+
+A single shared `OnceLock` instance plus `thread_safe` is **not** sufficient — that was tried and it
+still fails, because the crate's mutex guards the bindings, not PDFium's cross-call internal state.
+Pushed harder, the process segfaults.
+
+So the unit of isolation is a **process**. `render::pdf_to_thumb` re-invokes this same executable
+with a hidden `--dchub-render-worker` flag (see `WORKER_FLAG`), which `run()` intercepts before Tauri
+builds a webview. One render, one short-lived worker, no IPC beyond argv and an exit code.
+
+This is not a regression in shape: the code it replaced spawned `pdftoppm` **and** `cwebp` per file,
+eight at a time — two processes plus a PNG intermediate.
+
+### Throughput
+
+Measured on an M-series Mac, 320px WebP output:
+
+| Workload | Serialised in one process | Worker pool, 8-way |
+|---|---|---|
+| Single-page documents | ~35 pages/s | **86 pages/s** |
+| Multi-page documents | ~35 pages/s | **233 pages/s** |
+
+Multi-page scales better because one worker per *document* amortises process spawn and PDFium init
+across all its pages. Concurrency is not managed here — it comes from the pipeline's existing
+8-at-a-time batching.
+
+For Office documents none of this dominates: LibreOffice's conversion is ~6.4s per deck against
+PDFium's ~28ms per page, so the rasterising step is under half a percent of the work.
+
+There is deliberately **no test** that renders concurrently in-process — one was written and it
+segfaulted the whole test binary. A weaker earlier version rendered a single shared file from eight
+threads and *passed while the code was broken*, so do not reintroduce that as reassurance. Tests
+that touch PDFium hold a shared mutex, because cargo runs tests on parallel threads and two of them
+entering PDFium at once reproduces the crash.
 
 ### LibreOffice, for now
 

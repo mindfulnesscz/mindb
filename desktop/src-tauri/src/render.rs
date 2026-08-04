@@ -101,7 +101,25 @@ fn pdfium_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     native::library_dir(app, PDFIUM_ENGINE, PDFIUM_LIB_STEM)
 }
 
-/// Render page 1 of a PDF to a WebP thumbnail.
+/* ── Worker processes: the only way to render PDFs in parallel ───────────── */
+
+/// Hidden argv flag that turns this executable into a one-shot render worker.
+pub const WORKER_FLAG: &str = "--dchub-render-worker";
+
+/// Render page 1 of a PDF to a WebP thumbnail, in a short-lived WORKER PROCESS.
+///
+/// PDFium cannot be used concurrently. Not "is slower when threaded" — it FAILS: with the crate's
+/// `thread_safe` feature enabled and eight threads rendering eight DIFFERENT documents, all 160
+/// renders returned `FormatError`; at four threads, 76 of 80 failed. Its state is process-global, so
+/// the unit of isolation has to be a process.
+///
+/// This is not a regression in shape. The code this replaced spawned `pdftoppm` AND `cwebp` per
+/// file, eight at a time — two processes and a PNG intermediate. One worker per file is cheaper, and
+/// measured 86 pages/s at 8-way for single-page documents against ~35 pages/s for a correct
+/// single-threaded in-process implementation.
+///
+/// Concurrency stays where it already is: the pipeline's own 8-at-a-time batching. Nothing here
+/// spawns more than the one worker it needs.
 pub fn pdf_to_thumb(
     app: &tauri::AppHandle,
     src: &str,
@@ -109,10 +127,59 @@ pub fn pdf_to_thumb(
     width: u32,
     quality: u32,
 ) -> Result<(), String> {
-    pdf_to_thumb_in(&pdfium_dir(app)?, src, dest, width, quality)
+    let lib_dir = pdfium_dir(app)?;
+    let exe = std::env::current_exe().map_err(|e| format!("locate own executable: {e}"))?;
+
+    let out = Command::new(&exe)
+        .arg(WORKER_FLAG)
+        .arg(&lib_dir)
+        .arg(src)
+        .arg(dest)
+        .arg(width.to_string())
+        .arg(quality.to_string())
+        .output()
+        .map_err(|e| format!("spawn render worker: {e}"))?;
+
+    if out.status.success() {
+        return Ok(());
+    }
+    // The worker prints a single diagnostic line; surface it rather than an exit code.
+    let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    Err(if msg.is_empty() {
+        format!("render worker failed (exit {:?}) for {src}", out.status.code())
+    } else {
+        msg
+    })
 }
 
-/// `pdf_to_thumb` with the PDFium location supplied — the testable core.
+/// Worker entry point. Returns the process exit code; `run()` calls this before Tauri starts.
+///
+/// Kept deliberately dumb: arguments in, file out, one line of diagnostics on stderr. No IPC, no
+/// serialisation format, nothing to keep in sync with the parent beyond this argument order.
+pub fn worker_main(args: &[String]) -> i32 {
+    // WORKER_FLAG, lib_dir, src, dest, width, quality
+    if args.len() < 6 {
+        eprintln!("render worker: expected 5 arguments, got {}", args.len().saturating_sub(1));
+        return 2;
+    }
+    let (lib_dir, src, dest) = (Path::new(&args[1]), args[2].as_str(), args[3].as_str());
+    let width = args[4].parse::<u32>().unwrap_or(320);
+    let quality = args[5].parse::<u32>().unwrap_or(70);
+
+    match pdf_to_thumb_in(lib_dir, src, dest, width, quality) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("{e}");
+            1
+        }
+    }
+}
+
+/// `pdf_to_thumb` without the process hop — what the worker itself runs.
+///
+/// Never call this from the app process for pipeline work: it is only safe when the caller can
+/// guarantee no other PDFium use is in flight, which in practice means "inside a worker" or "inside
+/// a single-threaded test".
 fn pdf_to_thumb_in(
     lib_dir: &Path,
     src: &str,
@@ -310,6 +377,7 @@ mod tests {
        `npm run deps:native` still has a green test run. CI runs the fetch, so CI does execute it. */
     #[test]
     fn renders_a_pdf_page_to_a_webp_at_the_requested_width() {
+        let _serial = PDFIUM_TEST_LOCK.lock().unwrap();
         let Some(lib_dir) = pdfium_lib_dir() else {
             eprintln!("skipping: no bundled PDFium — run `npm run deps:native`");
             return;
@@ -332,44 +400,60 @@ mod tests {
         assert_eq!((decoded.width(), decoded.height()), (320, 160));
     }
 
-    /* Regression guard for the crash this module's PDFIUM singleton exists to prevent.
-       The pipeline renders 8 thumbnails concurrently; binding PDFium per call segfaulted under
-       exactly that load. Eight threads is the real concurrency, not an arbitrary number. */
+    /* There is deliberately NO test that renders concurrently in-process.
+       One was written, and it segfaulted the whole test binary — which is precisely the finding:
+       PDFium cannot be used concurrently in one process. With 8 threads on 8 DISTINCT documents,
+       160/160 renders failed with FormatError (76/80 at 4 threads) before crashing. An earlier,
+       weaker version of that test used ONE shared file from 8 threads and PASSED while the code was
+       broken, which is why the shared-file variant must not be reintroduced as reassurance.
+
+       The guarantee is structural instead: `pdf_to_thumb` spawns a worker process per render, and
+       `worker_main` below is tested directly. Serialising these tests via PDFIUM_TEST_LOCK is what
+       lets them share one process at all. */
+
+    /* Every PDFium-touching test holds this. cargo runs tests on parallel threads by default, and
+       two of them entering PDFium at once is the crash described above — a flaky, confusing failure
+       that has nothing to do with what either test is checking. */
+    static PDFIUM_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /* The actual guarantee: one render, one worker process. Pins the argument order the parent and
+       `worker_main` have to agree on — the only coupling between them. */
     #[test]
-    fn concurrent_renders_do_not_crash_or_corrupt_each_other() {
+    fn worker_main_renders_a_pdf_and_reports_failure_by_exit_code() {
+        let _serial = PDFIUM_TEST_LOCK.lock().unwrap();
         let Some(lib_dir) = pdfium_lib_dir() else { return };
-        let work = TempDir::new("dchub-render-concurrent").unwrap();
-        let src = work.path().join("in.pdf");
-        std::fs::write(&src, minimal_pdf()).unwrap();
-        let src = src.to_string_lossy().into_owned();
+        let work = TempDir::new("dchub-worker").unwrap();
+        let good = work.path().join("good.pdf");
+        let bad = work.path().join("bad.pdf");
+        std::fs::write(&good, minimal_pdf()).unwrap();
+        std::fs::write(&bad, b"not a pdf at all").unwrap();
 
-        let handles: Vec<_> = (0..8)
-            .map(|i| {
-                let (lib_dir, src) = (lib_dir.clone(), src.clone());
-                let dest = work.path().join(format!("out-{i}.webp"));
-                std::thread::spawn(move || {
-                    pdf_to_thumb_in(&lib_dir, &src, &dest.to_string_lossy(), 320, 70)
-                        .map(|_| std::fs::read(&dest).unwrap())
-                })
-            })
-            .collect();
+        let argv = |src: &Path, dest: &Path| {
+            vec![
+                WORKER_FLAG.to_string(),
+                lib_dir.to_string_lossy().into_owned(),
+                src.to_string_lossy().into_owned(),
+                dest.to_string_lossy().into_owned(),
+                "320".to_string(),
+                "70".to_string(),
+            ]
+        };
 
-        let outputs: Vec<Vec<u8>> = handles
-            .into_iter()
-            .map(|h| h.join().expect("thread must not panic").expect("render must succeed"))
-            .collect();
+        let out_good = work.path().join("good.webp");
+        assert_eq!(worker_main(&argv(&good, &out_good)), 0, "valid PDF must exit 0");
+        assert!(out_good.is_file(), "worker must have written the thumbnail");
 
-        // Identical input under concurrency must give identical output — proves no cross-talk
-        // between threads sharing the one PDFium instance.
-        assert!(
-            outputs.windows(2).all(|w| w[0] == w[1]),
-            "concurrent renders of one input produced differing bytes"
-        );
+        let out_bad = work.path().join("bad.webp");
+        assert_eq!(worker_main(&argv(&bad, &out_bad)), 1, "invalid PDF must exit non-zero");
+        assert!(!out_bad.exists(), "failed render must leave no file behind");
+
+        assert_eq!(worker_main(&[WORKER_FLAG.to_string()]), 2, "missing arguments must exit 2");
     }
 
     /// A corrupt PDF must surface an error, never a zero-byte thumbnail the pipeline would cache.
     #[test]
     fn a_corrupt_pdf_errors_instead_of_writing_a_broken_thumbnail() {
+        let _serial = PDFIUM_TEST_LOCK.lock().unwrap();
         let Some(lib_dir) = pdfium_lib_dir() else { return };
         let work = TempDir::new("dchub-render-bad").unwrap();
         let src = work.path().join("bad.pdf");
