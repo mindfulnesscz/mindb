@@ -66,6 +66,45 @@ builds a webview. One render, one short-lived worker, no IPC beyond argv and an 
 This is not a regression in shape: the code it replaced spawned `pdftoppm` **and** `cwebp` per file,
 eight at a time — two processes plus a PNG intermediate.
 
+### Scaling strategy, and why not Lanczos3 all the way
+
+Running Lanczos3 across a large reduction is the most expensive thing in the image path and buys
+nothing at 320px. `render::downscale` therefore box-averages down to 2× the target first (`thumbnail`)
+and applies Lanczos3 only for the final hop, whenever the source is ≥4× the target width. Below that
+ratio it filters directly, because box averaging would start to show and Lanczos3 is cheap on a small
+image. Measured on a real 8000×4500 asset: 280ms direct versus 62ms prescaled, visually
+indistinguishable (14418 B vs 14082 B, against `cwebp`'s 13900 B).
+
+The contract is unchanged from `cwebp -resize <width> 0`: fit to width, preserve aspect ratio, never
+upscale. Sources already at the target width pass through unfiltered.
+
+### Build profile is load-bearing for thumbnail speed
+
+`cwebp` was an optimised binary, so the app's build profile never affected thumbnail speed. Now that
+decode/resize/encode happen in Rust, an unoptimised build is catastrophic — an 8000×4500 JPEG took
+**21s** in a stock debug build against 0.28s for `cwebp`, which made `tauri dev` unusable for real
+runs. `Cargo.toml` sets `[profile.dev.package."*"] opt-level = 3`, optimising dependencies while
+leaving our own crate unoptimised and debuggable. Do not remove it.
+
+With that in place, **release beats `cwebp` on every asset measured**:
+
+| Source | `cwebp` | Release | Debug |
+|---|---|---|---|
+| 1920×1080 PNG | 50ms | **28ms** | 30ms |
+| 8000×4500 JPEG | 280ms | **247ms** | 885ms |
+| 8256×5504 JPEG | 450ms | **336ms** | 1126ms |
+| 16000×9000 JPEG | 850ms | **535ms** | 3078ms |
+
+A gap remains in debug for large **JPEG decode** specifically — PNG decode and the whole
+scale-plus-encode stage sit at release parity, but `zune-jpeg` stays ~4× slower. It is not the build
+profile: `debug-assertions = false`, `overflow-checks = false` and `codegen-units = 1` were each
+tested on a genuinely fresh build and none moved the number. For perf-sensitive local runs use
+`npm --prefix desktop run tauri dev -- --release`.
+
+DCT-domain scale-on-decode (via `jpeg-decoder`) was evaluated as a fix and **rejected**: only
+1.2–2.0× on JPEGs, while adding a second decoder, a CMYK fallback path, and off-by-one output
+dimensions (320×213 vs 320×214). Release already beats `cwebp`; the complexity was not worth it.
+
 ### Throughput
 
 Measured on an M-series Mac, 320px WebP output:

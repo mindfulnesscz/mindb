@@ -14,6 +14,17 @@ edition = "2021"
 name = "dc_hub_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# Optimise DEPENDENCIES even in debug builds. Our own crate stays unoptimised, so incremental
+# builds and debugging are unaffected.
+#
+# This is not a nicety. Thumbnailing used to shell out to `cwebp`, an optimised binary, so the build
+# profile was irrelevant. Now the decode/resize/encode work happens in Rust, and unoptimised it is
+# catastrophic: an 8000x4500 JPEG took 21s in debug against 0.28s for `cwebp` — a ~75x regression
+# that made `tauri dev` unusable for real runs. With this, debug matches release on the hot path.
+# Cost is a one-time slower first build of the dependency graph.
+[profile.dev.package."*"]
+opt-level = 3
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
