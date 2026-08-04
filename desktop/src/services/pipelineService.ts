@@ -9,6 +9,7 @@
  *   publishLocal  mirror OUT into the client target, then reconcile (🚫 vs hard delete)
  *   thumbnails    generate the -thumb.webp beside each thumbnable asset
  *   cdnUpload     publish thumbnails + originals to R2 under identity-derived keys
+ *   pagesUpload   publish per-page document previews (portal page viewer only)
  *   cdnCleanup    remove R2 objects with no live asset behind them
  *   cloudExport   push to Dropbox / OneDrive / Google Drive
  *
@@ -27,7 +28,7 @@ import { scanAllAssets } from './pipeline/scan';
 import { runDistribute } from './pipeline/collect';
 import { runPublish } from './pipeline/publishLocal';
 import { runThumbnails } from './pipeline/thumbnails';
-import { runCdnUpload, runOriginalUpload } from './pipeline/cdnUpload';
+import { runCdnUpload, runPagesUpload, runOriginalUpload } from './pipeline/cdnUpload';
 import { runCloudExport } from './pipeline/cloudExport';
 
 /* ── Public surface ───────────────────────────────────────────────────────────
@@ -74,6 +75,10 @@ export async function runPipeline(ctx: RunContext): Promise<RunStats> {
 
     if (settings.doThumbnails) await runThumbnails(ctx, stats);
     if (settings.doThumbnails && ctx.r2) await runCdnUpload(ctx, stats);
+    /* After the thumbnail upload, and gated on the same setting that produced the previews. R2 is
+       the ONLY place page previews are published — they are deliberately excluded from packages and
+       target destinations — so without this the portal's page viewer has nothing to read. */
+    if (settings.doThumbnails && ctx.r2) await runPagesUpload(ctx, stats);
     if (settings.doCdnOriginals && ctx.r2) await runOriginalUpload(ctx, stats);
     if (settings.doDistribute) await runDistribute(ctx, stats);
     if (settings.doPublish)    await runPublish(ctx, stats);

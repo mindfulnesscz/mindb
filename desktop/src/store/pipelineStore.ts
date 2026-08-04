@@ -32,6 +32,10 @@ export interface RunStats {
   cdnThumbUploaded:  number;
   cdnThumbCached:    number; // local mtime/size match — skipped without hashing or a network call
   cdnThumbUnchanged: number; // content-hash matched what's already on R2
+  // CDN — per-page document previews (runPagesUpload)
+  cdnPagesUploaded:  number;
+  cdnPagesCached:    number;
+  cdnPagesUnchanged: number;
   // CDN — original file uploads (runOriginalUpload)
   cdnOrigUploaded:   number;
   cdnOrigCached:     number;
@@ -70,8 +74,9 @@ interface PipelineStore {
 
 const EMPTY_STATS: RunStats = {
   packages: 0, copied: 0, skipped: 0, errors: 0,
-  pubFolders: 0, published: 0, thumbnails: 0, notes: 0, disconnected: 0,
+  pubFolders: 0, published: 0, thumbnails: 0, pagePreviews: 0, notes: 0, disconnected: 0,
   cdnThumbUploaded: 0, cdnThumbCached: 0, cdnThumbUnchanged: 0,
+  cdnPagesUploaded: 0, cdnPagesCached: 0, cdnPagesUnchanged: 0,
   cdnOrigUploaded: 0, cdnOrigCached: 0, cdnOrigUnchanged: 0,
 };
 

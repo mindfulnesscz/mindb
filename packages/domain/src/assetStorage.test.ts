@@ -9,7 +9,8 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  effectiveLevel, tierFor, storageTarget, assetUrl, stripVersion, type AccessLevel,
+  effectiveLevel, tierFor, storageTarget, assetUrl, stripVersion,
+  pageTarget, pagePrefix, pageObjectName, isServableGatedKey, parseObjectPath, type AccessLevel,
 } from './assetStorage';
 
 const CLIENT = '8f3e1c2a-0000-4000-8000-000000000001';
@@ -81,6 +82,63 @@ describe('storageTarget — the key shape, written out', () => {
   it('handles an extensionless original without a trailing dot', () => {
     expect(storageTarget('client', CLIENT, 'originals', 'a1', 'c1').key)
       .toBe(`client/${CLIENT}/originals/a1/c1`);
+  });
+});
+
+describe('pageTarget — per-page document previews', () => {
+  it('writes a page under a per-asset directory on both tiers', () => {
+    expect(pageTarget('public', CLIENT, 'a1000001', 'c1', 1)).toEqual({
+      tier: 'public',
+      key: `${CLIENT}/pages/a1000001/c1/001.webp`,
+    });
+    expect(pageTarget('client', CLIENT, 'a1000001', 'c1', 1)).toEqual({
+      tier: 'gated',
+      key: `client/${CLIENT}/pages/a1000001/c1/001.webp`,
+    });
+  });
+
+  /* Page previews are DERIVED from the document, so they must carry the document's level. A `client`
+     deck whose pages landed under a public key would publish the deck's content. */
+  it('carries the level of the document it was rendered from', () => {
+    for (const level of ['guest', 'client', 'internal'] as AccessLevel[]) {
+      expect(pageTarget(level, CLIENT, 'a1', 'c1', 3).key)
+        .toBe(`${level}/${CLIENT}/pages/a1/c1/003.webp`);
+    }
+  });
+
+  /* THE security assertion: the Worker is the only door to gated bytes, and a key it cannot parse is
+     a 404 on a file the portal is offering. `pages` is a new namespace, so prove the gate reads it. */
+  it('produces gated keys the cdn-gate Worker can parse and authorize', () => {
+    for (const level of ['guest', 'client', 'internal'] as AccessLevel[]) {
+      const { key } = pageTarget(level, CLIENT, 'a1000001', 'c1', 12);
+      expect(isServableGatedKey(key)).toBe(true);
+
+      const parsed = parseObjectPath(`/${key}`);
+      expect(parsed?.level).toBe(level);
+      expect(parsed?.clientId).toBe(CLIENT);
+      expect(parsed?.rest).toBe('pages/a1000001/c1/012.webp');
+    }
+  });
+
+  it('zero-pads so lexical order is page order', () => {
+    // '10.webp' < '2.webp' as strings, which would silently reorder a deck in any listing.
+    expect(pageObjectName(1)).toBe('001.webp');
+    expect(pageObjectName(9)).toBe('009.webp');
+    expect(pageObjectName(10)).toBe('010.webp');
+    expect(pageObjectName(100)).toBe('100.webp');
+
+    const names = [1, 2, 10, 20].map(pageObjectName);
+    expect([...names].sort()).toEqual(names);
+  });
+
+  /* The prefix is what makes pruning a shrunken document a listing rather than a guess. It must
+     cover every page of THIS asset and nothing else — a missing trailing slash would also match a
+     sibling child id like `c10`. */
+  it('gives a prefix that scopes to exactly one asset', () => {
+    const prefix = pagePrefix('client', CLIENT, 'a1', 'c1');
+    expect(prefix).toBe(`client/${CLIENT}/pages/a1/c1/`);
+    expect(pageTarget('client', CLIENT, 'a1', 'c1', 7).key.startsWith(prefix)).toBe(true);
+    expect(pageTarget('client', CLIENT, 'a1', 'c10', 7).key.startsWith(prefix)).toBe(false);
   });
 });
 

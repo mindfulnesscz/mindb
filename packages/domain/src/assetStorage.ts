@@ -58,12 +58,34 @@ export function tierFor(level: AccessLevel): 'public' | 'gated' {
   return level === 'public' ? 'public' : 'gated';
 }
 
-export type ObjectKind = 'thumbnails' | 'originals';
+/**
+ * The three namespaces an asset's bytes live in.
+ *
+ * `pages` holds per-page document previews — one object per rendered page, for the portal's page
+ * viewer. They are DERIVED bytes and carry the same level as the document they came from: a
+ * `client` deck whose pages landed under a public key would be a leak of the deck's content, so the
+ * level is resolved from the asset row exactly as it is for thumbnails, and `cdn-reconcile` moves
+ * them when it changes.
+ */
+export type ObjectKind = 'thumbnails' | 'originals' | 'pages';
 
 export interface StorageTarget {
   tier: 'public' | 'gated';
   /** Full object key within that tier's bucket. */
   key: string;
+}
+
+/**
+ * The level → tier/prefix rule, in ONE place.
+ *
+ * Both key builders below route through this. Four components have to agree on the key shape (see
+ * the module header), and the level prefix is the part the Worker authorizes from — so it must not
+ * be spelled out twice.
+ */
+function targetForTail(level: AccessLevel, tail: string): StorageTarget {
+  return level === 'public'
+    ? { tier: 'public', key: tail }
+    : { tier: 'gated', key: `${level}/${tail}` };
 }
 
 /**
@@ -87,10 +109,52 @@ export function storageTarget(
   childId: string,
   ext = '',
 ): StorageTarget {
-  const tail = `${clientId}/${kind}/${stableId}/${childId}${ext}`;
-  return level === 'public'
-    ? { tier: 'public', key: tail }
-    : { tier: 'gated', key: `${level}/${tail}` };
+  return targetForTail(level, `${clientId}/${kind}/${stableId}/${childId}${ext}`);
+}
+
+/**
+ * File name for one page of a document's previews. 1-based.
+ *
+ * Zero-padded to three digits so lexical order is page order everywhere it is listed — a shell, an
+ * R2 prefix listing, the portal. `10.webp` sorting before `2.webp` would silently reorder a deck.
+ * Matches what the renderer writes locally (`render::page_path`).
+ */
+export function pageObjectName(page: number): string {
+  return `${String(page).padStart(3, '0')}.webp`;
+}
+
+/**
+ * The object key for ONE page of a document's per-page previews.
+ *
+ *   public tier   {client_id}/pages/{stable_id}/{child_id}/001.webp
+ *   gated tier    {level}/{client_id}/pages/{stable_id}/{child_id}/001.webp
+ *
+ * A directory per asset rather than a flat `{child_id}-001.webp`, so every page of one document
+ * shares a prefix. That is what makes "delete the pages beyond page N" a prefix listing instead of a
+ * guess — needed when a document shrinks or an administrator lowers the page limit, because pages
+ * left behind in R2 are invisible locally and visible to a client.
+ */
+export function pageTarget(
+  level: AccessLevel,
+  clientId: string,
+  stableId: string,
+  childId: string,
+  page: number,
+): StorageTarget {
+  return targetForTail(
+    level,
+    `${clientId}/pages/${stableId}/${childId}/${pageObjectName(page)}`,
+  );
+}
+
+/** Key prefix holding every page of one document — for listing and pruning. */
+export function pagePrefix(
+  level: AccessLevel,
+  clientId: string,
+  stableId: string,
+  childId: string,
+): string {
+  return targetForTail(level, `${clientId}/pages/${stableId}/${childId}/`).key;
 }
 
 /**
