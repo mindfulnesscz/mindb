@@ -26,6 +26,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
+      # Bundled render engines — see the same step in check.yml. These are nested executable code:
+      # once signing is turned on they must be fetched and placed BEFORE the app is signed, and the
+      # bundle must not be modified afterwards.
+      - name: Cache native engines
+        uses: actions/cache@v4
+        with:
+          path: desktop/src-tauri/resources/native
+          key: native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-native-deps.mjs') }}
       # Must install the whole workspace at the repo root. A desktop-only `npm ci`
       # leaves root `.bin` empty, so `eslint` / other check scripts exit 127.
       - run: npm run setup
@@ -46,8 +54,13 @@ jobs:
       #   2. restore `plugins.updater` (pubkey + endpoints) in tauri.conf.json
       #   3. restore the `tauri_plugin_updater` registration in src-tauri/src/lib.rs
       #   4. emit and upload the updater artifacts, so the endpoint actually resolves
-      - run: npm run tauri build
-        working-directory: desktop
+      # MUST be `build:app`, not `tauri build`. Tauri's bundle.resources dereferences symlinks, which
+      # inflates LibreOffice.app from ~800MB to 1.5GB and breaks its sealed signature, so LibreOffice
+      # is excluded from bundle.resources and placed with `ditto` by this script — after the app is
+      # built, before anything is signed. A bare `tauri build` produces a bundle with NO LibreOffice,
+      # which silently falls back to a host install on the runner and fails on a user's machine.
+      # See docs/pages/reference/third-party-engines.mdx.
+      - run: npm run build:app
       - name: Publish release with artifacts
         uses: softprops/action-gh-release@v3
         with:

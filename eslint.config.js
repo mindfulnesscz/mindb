@@ -28,6 +28,10 @@ export default tseslint.config(
       // is a gate people learn to skip.
       '**/.temp/**',
       '**/.wrangler/**',
+      // Same shape, same reason: bundled render engines fetched by `npm run deps:native`. The
+      // extracted LibreOffice tree ships its own JavaScript, which produced 575 lint errors in
+      // vendor code on any machine that had fetched it while CI stayed green.
+      'desktop/src-tauri/resources/native/**',
       '**/*.d.ts',
       'packages/database/src/database.types.ts',
       'web/apps/client-hub/src/lib/database.types.ts',

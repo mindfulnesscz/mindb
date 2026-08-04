@@ -10,7 +10,9 @@
     "workers/*"
   ],
   "scripts": {
-    "setup": "npm ci && npm ci --prefix docs",
+    "setup": "npm ci && npm ci --prefix docs && npm run deps:native",
+    "deps:native": "node scripts/fetch-native-deps.mjs",
+    "build:app": "node scripts/package-desktop.mjs",
     "dev": "node scripts/dev.mjs",
     "dev:desktop": "npm --prefix desktop run tauri dev",
     "dev:web": "npm run dev --workspace=web/apps/client-hub",

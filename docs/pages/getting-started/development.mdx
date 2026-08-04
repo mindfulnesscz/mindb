@@ -14,7 +14,9 @@ For who owns which fields, see [Platform division](/getting-started/platform-div
 | Git | Source control and Nextra edit metadata |
 | Docker | Local Supabase for migration work only |
 
-Optional for thumbnail conversion: LibreOffice, Poppler (`pdftoppm`), WebP (`cwebp`).
+Thumbnail rendering needs no separately installed tools. `npm run setup` fetches the bundled engines
+(or `npm run deps:native` on its own) — PDFium and LibreOffice, ~290MB download and ~800MB on disk.
+See [Thumbnails](/desktop/thumbnails) and [Third-party engines](/reference/third-party-engines).
 
 ## 2. Clone and install
 

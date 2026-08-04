@@ -1,0 +1,104 @@
+# Third-party engines and licences
+
+The desktop app ships three native engines so that thumbnail rendering works on a clean machine with
+no install step. All three are fetched by `scripts/fetch-native-deps.mjs` (`npm run deps:native`) and
+land under `desktop/src-tauri/resources/native/`. None are committed to the repository.
+
+| Engine | Version | Licence | How it ships |
+|---|---|---|---|
+| [libwebp](https://chromium.googlesource.com/webm/libwebp) (`webp` crate) | 0.3.x bindings | BSD-3-Clause | Built from vendored C, **statically linked** |
+| [PDFium](https://pdfium.googlesource.com/pdfium/) via [pdfium-binaries](https://github.com/bblanchon/pdfium-binaries) | `chromium/7988` | BSD-3-Clause (PDFium), MIT (packaging) | Bundled dynamic library, ~7MB |
+| [LibreOffice](https://www.libreoffice.org/) | 26.2.5 | **MPL-2.0** | Bundled app tree on macOS/Windows, ~800MB; package dependency on Linux |
+
+## Why LibreOffice is bundled
+
+Rendering fidelity. macOS QuickLook was evaluated as a zero-dependency alternative and rejected: it
+renders most decks indistinguishably but dropped the text highlights on a real client deck. Since
+these thumbnails are published to the client portal, LibreOffice's rendering is the requirement, and
+requiring users to install it separately is not acceptable. See
+[Thumbnails](/desktop/thumbnails).
+
+The version is pinned to the 26.2.x line — the line whose deck rendering was reviewed and accepted.
+**Treat a major-version bump as a visual change**, not a routine dependency update: layout and font
+substitution can shift. Re-render a corpus of real decks and compare before shipping one.
+
+## MPL-2.0 obligations
+
+MPL-2.0 is file-level copyleft and explicitly permits distributing the covered work alongside
+proprietary code — it is **not** GPL-style viral, so bundling LibreOffice inside a closed-source app
+is allowed. Two obligations come with it:
+
+**Retain notices.** The upstream `LICENSE`/notice files ship inside the bundled tree and must not be
+stripped. The DMG also carries a `LICENSEs` directory; the extraction copies `LibreOffice.app`
+wholesale, so its embedded notices travel with it.
+
+**Offer source.** Recipients must be able to obtain source for the MPL-covered files. Pointing at the
+upstream release for the exact pinned version satisfies this, which is why the version is pinned
+rather than floating:
+
+```
+https://download.documentfoundation.org/libreoffice/src/26.2.5/
+```
+
+If the bundle is ever slimmed (see
+[Slimming the bundled LibreOffice](/ideas/slimming-the-bundled-libreoffice)), the removed files change
+what is being distributed — re-check that notices for everything still shipped remain present.
+
+## Signing order — macOS
+
+Everything under `resources/native/` is **nested executable code**. On macOS it must be signed
+inside-out *before* the outer app is signed, and the bundle must not be modified afterwards.
+
+### Tauri's `bundle.resources` cannot carry LibreOffice
+
+This was measured, not assumed. `bundle.resources` copies files by **dereferencing symlinks**. For a
+single dynamic library that is harmless, so PDFium stays in `bundle.resources`. For an application
+bundle it is fatal — LibreOffice.app holds ~25 symlinks and a sealed signature, and letting Tauri
+copy it:
+
+- inflated the app from ~800MB to **1.5GB** and the DMG to **511MB**, by duplicating symlink targets;
+- **broke the signature** — `codesign --verify --deep --strict` reported
+  `a sealed resource is missing or invalid` in `LibreOfficePython.framework`.
+
+The bundle still *ran*, so this would have passed a functional smoke test and only surfaced at the
+first notarisation attempt. A dereferenced framework cannot be validly signed.
+
+So LibreOffice is excluded from `bundle.resources` and placed by `scripts/package-desktop.mjs`
+(`npm run build:app`) using `ditto`, which preserves symlinks and signatures.
+
+### The pipeline
+
+`npm run build:app` performs, in order:
+
+1. `npm run deps:native` — fetch engines.
+2. `tauri build` — produces the `.app` (with PDFium) and a DMG without the placed engines.
+3. `ditto` each placed engine into `Contents/Resources/resources/native/`, removing any stale copy
+   first so a previous LibreOffice version cannot linger.
+4. **Signing slot** — currently a no-op. Sign inside-out here: every nested Mach-O, then each placed
+   engine's bundle, then the outer `.app`. Developer ID, hardened runtime, timestamped. Then
+   `codesign --verify --deep --strict` and `spctl -a -vvv`.
+5. Regenerate the DMG from the completed bundle via Tauri's own `bundle_dmg.sh`, so the volume icon,
+   window geometry and `/Applications` drop link are preserved.
+
+Nothing may modify the bundle after step 4. Notarisation and stapling attach after step 5.
+
+Use `npm run build:app` rather than `npm run tauri build` for anything you intend to distribute —
+a bare `tauri build` produces an app with **no LibreOffice at all**, which silently falls back to a
+host install on the build machine and fails on a clean one.
+
+Expect to need entitlements that LibreOffice requires under hardened runtime — `allow-jit`,
+`allow-unsigned-executable-memory`, and `disable-library-validation` for its dlopen'd plugins. Budget
+this as its own task with a real notarisation run; it is not a config guess.
+
+On Windows, LibreOffice's binaries are already Authenticode-signed by The Document Foundation. Sign
+our own executable and installer, and do not re-sign theirs.
+
+## Linux is a package dependency, not a bundle
+
+Putting ~800MB inside a `.deb` fights every packaging convention, so `tauri.conf.json` declares
+`libreoffice-impress`, `libreoffice-writer` and `libreoffice-calc` under `bundle.linux.deb.depends`
+(and the rpm equivalent). The package manager installs them, so there is still no terminal work for
+the user — `apt install ./dc-hub.deb` pulls them in.
+
+The consequence is that on Linux the LibreOffice version is whatever the distro ships, so rendering
+may differ slightly from the pinned macOS/Windows build.
