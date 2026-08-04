@@ -95,8 +95,8 @@ Step-by-step destination setup: [CLOUD_DESTINATIONS.md](CLOUD_DESTINATIONS.md). 
 ## Development
 
 **Prerequisites:** Node.js 18+, Rust (stable), `cargo install tauri-cli`, and `npm run deps:native`
-from the repo root to fetch the bundled render engines (PDFium). For Office-document thumbnails:
-LibreOffice, until it is bundled too.
+from the repo root to fetch the bundled render engines (PDFium + LibreOffice, ~290MB download). No
+separately installed thumbnail tools are required.
 
 ```bash
 npm install

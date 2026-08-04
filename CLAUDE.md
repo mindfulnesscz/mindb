@@ -5,6 +5,13 @@
 - Architecture reference: `docs/pages/` (see `desktop/cdn.mdx`, `cloud-storage/security.mdx`, `getting-started/architecture.mdx`).
 - Identity is `stable_id` + `child_id` (v3.0.0). Never reintroduce filename-keyed lookups.
 
+## Native render engines (2026-08-04)
+
+- **Never shell out to a helper binary by bare name.** A packaged app inherits the OS's minimal PATH, so anything resolved from PATH is invisible to it even when installed — that shipped once as `cwebp not found` on every asset. Engines are bundled and resolved by absolute path through `desktop/src-tauri/src/native.rs`, which is the only module that knows where they live. Add new engines to `scripts/fetch-native-deps.mjs` + `native.rs`.
+- **PDFium cannot be used concurrently in one process.** Not slow — it fails (8 threads on 8 distinct documents: 160/160 `FormatError`, then segfaults). Every PDF rasterisation runs in a one-shot worker process (`render::WORKER_FLAG`). Do not "simplify" this back into threads.
+- **Thumbnail speed depends on the build profile**, now that rendering is Rust rather than `cwebp`. `[profile.dev.package."*"] opt-level = 3` in `desktop/src-tauri/Cargo.toml` is load-bearing — without it a large JPEG takes 21s instead of 0.25s. Do not remove it.
+- LibreOffice is bundled (MPL-2.0, ~800MB) on macOS/Windows and a package dependency on Linux. Bundled resolution must win over any host install: the shipped version is the one whose deck rendering was reviewed. See `docs/pages/reference/third-party-engines.mdx` for licence obligations and the macOS signing order.
+
 ## Storage / delivery model (as of 2026-07-31)
 
 - **R2** = source-of-truth originals for the whole asset library (download) + CDN for thumbnails. **Two buckets.** `R2_BUCKET` on `R2_PUBLIC_DOMAIN` holds only `public`-level objects and they ARE bearer links — anyone with the URL can fetch them, and a published URL can never be un-published. `R2_GATED_BUCKET` has no public access at all and is reachable only through the `cdn-gate` Worker on `R2_GATED_DOMAIN`. `?v=<hash>` is cache-busting on both, never auth.

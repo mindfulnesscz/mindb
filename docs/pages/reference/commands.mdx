@@ -24,11 +24,18 @@ Run these commands from the monorepo root unless a directory is explicitly shown
 | `npm run check:rust` | Runs locked Cargo checking for the Tauri application |
 | `npm run check` | Runs version check, frontend/docs checks, and Rust check |
 
-`build:desktop` does not create platform installers. Use this from `desktop/` when a bundle is required:
+`build:desktop` does not create platform installers — it only runs `tsc && vite build`. For a
+distributable bundle, use this from the repo root:
 
 ```bash
-npm run tauri build
+npm run build:app
 ```
+
+Do **not** use `npm run tauri build` for anything you intend to distribute. It produces an app with
+no LibreOffice, which silently falls back to a host install on the build machine and fails on a clean
+one. `build:app` fetches the engines, builds the app, places LibreOffice with `ditto` (preserving the
+symlinks and signature Tauri's resource copy destroys), and regenerates the DMG. See
+[Third-party engines](/reference/third-party-engines).
 
 ## Versioning
 

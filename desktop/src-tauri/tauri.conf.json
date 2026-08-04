@@ -27,7 +27,15 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": ["resources/native/**/*"],
+    "resources": ["resources/native/pdfium/**/*"],
+    "linux": {
+      "deb": {
+        "depends": ["libreoffice-impress", "libreoffice-writer", "libreoffice-calc"]
+      },
+      "rpm": {
+        "depends": ["libreoffice-impress", "libreoffice-writer", "libreoffice-calc"]
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

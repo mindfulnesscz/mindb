@@ -127,13 +127,32 @@ threads and *passed while the code was broken*, so do not reintroduce that as re
 that touch PDFium hold a shared mutex, because cargo runs tests on parallel threads and two of them
 entering PDFium at once reproduces the crash.
 
-### LibreOffice, for now
+### LibreOffice is bundled
 
-LibreOffice is still resolved from the host (`native::system_tool`, plus the macOS
-`/Applications/LibreOffice.app` path, which its installer does not add to `PATH`). Bundling it is
-the next step, after which nothing about thumbnails depends on what the user installed. Each
-conversion gets a private profile via `-env:UserInstallation` — not optional, because LibreOffice
-locks a single shared profile and eight concurrent conversions would otherwise serialise or fail.
+Office documents (PowerPoint, Word, Excel) are converted to PDF by LibreOffice, after which the
+PDFium path above rasterises them. It ships **inside the app** on macOS and Windows — ~284MB
+download, ~800MB on disk — so a clean machine needs no install step. On Linux it is a declared
+package dependency instead; see [Third-party engines](/reference/third-party-engines) for the
+licensing and signing consequences.
+
+Resolution precedence, in `render::soffice_from`:
+
+1. **Bundled** engine under `resources/native/libreoffice/`
+2. `soffice` on `PATH`
+3. The vendor's own install location (`/Applications/LibreOffice.app/...`, `C:\Program Files\...`),
+   which its installer does not add to `PATH`
+
+Bundled must win, and a test pins that. The shipped copy is the version whose deck rendering was
+reviewed and accepted; a different version installed on the host would silently change how client
+decks look. The host fallbacks exist for `tauri dev` before `npm run deps:native` has run, and for
+Linux.
+
+Each conversion gets a private profile via `-env:UserInstallation`. This is **not optional**:
+LibreOffice locks a single shared profile, so eight concurrent conversions would otherwise serialise
+or fail outright.
+
+Rendering cost is ~6.4s per deck, which dominates the Office path completely — PDFium's ~28ms per
+page is under half a percent of it.
 
 ## Video is not handled here
 

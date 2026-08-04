@@ -29,6 +29,8 @@ use crate::native;
 /// Engine directory name under `resources/native/`, and the library stem inside it.
 const PDFIUM_ENGINE: &str = "pdfium";
 const PDFIUM_LIB_STEM: &str = "pdfium";
+/// Engine directory name for the bundled LibreOffice.
+const LIBREOFFICE_ENGINE: &str = "libreoffice";
 
 /// Lanczos3 matches `cwebp -resize`'s quality class; nearest/triangle visibly softens text at
 /// thumbnail sizes, which is most of what a deck thumbnail contains.
@@ -234,20 +236,38 @@ fn pdf_to_thumb_in(
 /// The macOS app-bundle path is checked explicitly because a GUI app's PATH does not include
 /// Homebrew's prefix and LibreOffice's own installer does not add itself to PATH at all.
 fn soffice(app: &tauri::AppHandle) -> Option<PathBuf> {
-    if let Some(bundled) = native::tool_path(app, "libreoffice", &libreoffice_rel()) {
-        return Some(bundled);
-    }
-    if let Some(found) = native::system_tool("soffice") {
-        return Some(found);
-    }
+    soffice_from(
+        native::tool_path(app, LIBREOFFICE_ENGINE, &libreoffice_rel()),
+        native::system_tool("soffice"),
+        host_install(),
+    )
+}
+
+/// Precedence: BUNDLED beats anything installed on the host.
+///
+/// Order is the whole point, so it lives in a function that can be tested without an AppHandle.
+/// Bundled must win: the shipped copy is the version whose deck rendering was reviewed, and a
+/// host install of some other version would silently change how client decks look. The host
+/// fallbacks exist for `tauri dev` on a machine that has not run `npm run deps:native`, and for
+/// Linux, where LibreOffice is a declared package dependency rather than a bundled engine.
+fn soffice_from(
+    bundled: Option<PathBuf>,
+    on_path: Option<PathBuf>,
+    host: Option<PathBuf>,
+) -> Option<PathBuf> {
+    bundled.or(on_path).or(host)
+}
+
+/// Well-known install location that the vendor's own installer does not add to `PATH`.
+fn host_install() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
-    {
-        let app_bundle = Path::new("/Applications/LibreOffice.app/Contents/MacOS/soffice");
-        if app_bundle.is_file() {
-            return Some(app_bundle.to_path_buf());
-        }
-    }
-    None
+    let candidate = Path::new("/Applications/LibreOffice.app/Contents/MacOS/soffice");
+    #[cfg(target_os = "windows")]
+    let candidate = Path::new(r"C:\Program Files\LibreOffice\program\soffice.exe");
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let candidate = Path::new("/usr/lib/libreoffice/program/soffice");
+
+    candidate.is_file().then(|| candidate.to_path_buf())
 }
 
 /// Path of the LibreOffice executable *within* its bundled engine directory.
@@ -380,6 +400,30 @@ mod tests {
         // PDFium rasterises to the target width; re-filtering would soften text for nothing.
         let out = downscale(&solid(320, 180), 320);
         assert_eq!((out.width(), out.height()), (320, 180));
+    }
+
+
+    /* Precedence is the load-bearing part of engine resolution: the BUNDLED LibreOffice is the
+       version whose deck rendering was reviewed and accepted, so a different one installed on the
+       host must never take priority. */
+    #[test]
+    fn bundled_libreoffice_wins_over_anything_on_the_host() {
+        let bundled = PathBuf::from("/app/Resources/resources/native/libreoffice/soffice");
+        let on_path = PathBuf::from("/opt/homebrew/bin/soffice");
+        let host = PathBuf::from("/Applications/LibreOffice.app/Contents/MacOS/soffice");
+
+        assert_eq!(
+            soffice_from(Some(bundled.clone()), Some(on_path.clone()), Some(host.clone())),
+            Some(bundled),
+            "a bundled engine must beat both host locations",
+        );
+        assert_eq!(
+            soffice_from(None, Some(on_path.clone()), Some(host.clone())),
+            Some(on_path),
+            "with no bundle, PATH comes before the vendor install dir",
+        );
+        assert_eq!(soffice_from(None, None, Some(host.clone())), Some(host));
+        assert_eq!(soffice_from(None, None, None), None, "nothing found must be None, not a guess");
     }
 
     #[test]
