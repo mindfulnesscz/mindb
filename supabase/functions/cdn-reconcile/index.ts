@@ -19,9 +19,9 @@
 //          requireSignedURLs alongside the object key, since a video's level lives in that flag.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import {
-  effectiveLevel, tierFor, assetUrl, stripVersion, type AccessLevel,
+  effectiveLevel, tierFor, assetUrl, stripVersion, planPageMoves, type AccessLevel,
 } from '../../../packages/domain/src/assetStorage.ts';
-import { tempCredentials, copyObject, type TempCreds } from '../_shared/r2.ts';
+import { tempCredentials, copyObject, s3, type TempCreds } from '../_shared/r2.ts';
 
 /** How many assets one invocation will move. Bounded so a large backlog cannot exceed the
  *  function's wall-clock limit; the queue keeps the rest for the next call. */
@@ -82,7 +82,7 @@ Deno.serve(async (req) => {
   if (!queued.length) return json(200, { moved: 0, skipped: 0, failed: 0, remaining: 0 });
 
   const { data: assets } = await db.from('assets')
-    .select('id,client_id,stable_id,child_id,perm,status,thumbnail_url,download_url,stream_uid')
+    .select('id,client_id,stable_id,child_id,perm,status,thumbnail_url,download_url,stream_uid,preview_page_count')
     .in('id', queued.map(q => q.asset_id));
 
   const accountId = env('CF_ACCOUNT_ID');
@@ -187,8 +187,67 @@ Deno.serve(async (req) => {
       moved++;
     }
 
+    /* Video protection first: it is one cheap API call and it is the security-critical half. Putting
+       it after the page work meant a page failure could keep the asset queued forever while its
+       video kept serving at the wrong protection — see the note below. */
     if (a.stream_uid && !(await reconcileStreamFlag(a.stream_uid, tierFor(level) !== 'public'))) {
       failed++; assetFailed = true;
+    }
+
+    /* ── Per-page document previews ────────────────────────────────────────
+       Page objects appear in no URL column — a document publishes one object per rendered page and
+       the portal derives each address from the thumbnail — so the column loop above cannot see them.
+       Without this, narrowing a deck from `client` to `internal` moves its thumbnail and leaves its
+       pages readable under the old `client/` prefix.
+
+       ADDRESSED FROM `preview_page_count`, NOT BY LISTING. An earlier version listed each level
+       prefix, which cannot work here: `tempCredentials` requests `object-read-write`, which grants
+       Get/Put/Delete on objects but NOT ListBucket. Every list returned 403, every asset was marked
+       failed, and nothing was ever dequeued — so `cdn_move_queue` stopped draining and videos queued
+       behind the jam never had `requireSignedURLs` reconciled. A list here would need bucket-wide
+       read credentials in an edge function, which is a worse trade than the residue below.
+
+       RESIDUE, deliberately accepted: if the page COUNT also shrank (an edited document, or a lowered
+       client limit) the objects past the new count at an old level are not addressable from the row,
+       and are left for the desktop pipeline's own sweep, which lists all four levels with credentials
+       that permit it. That sweep runs on every pipeline run; this one closes the common case — a level
+       change with a stable page count — immediately.
+
+       SOURCE IS DELETED HERE, unlike the column path above. A superseded thumbnail is safe to leave
+       because its column was repointed, so nothing references the old object. A page has no column to
+       repoint: the old object stays at a WIDER level, reachable by anyone holding a cookie for it.
+       Orphaned is not unreachable. */
+    for (const mv of planPageMoves(level, a.client_id, a.stable_id, a.child_id,
+                                   a.preview_page_count ?? 0)) {
+      if (mv.targetTier === 'gated' && !GATED_KEY_SHAPE.test(mv.targetKey)) {
+        failed++; assetFailed = true;
+        console.error(`unservable page key refused: ${mv.targetKey}`);
+        continue;
+      }
+
+      const result = await copyObject(
+        accountId,
+        { creds: creds[mv.fromTier], bucket: bucketOf(mv.fromTier), key: mv.sourceKey },
+        { creds: creds[mv.targetTier], bucket: bucketOf(mv.targetTier), key: mv.targetKey },
+      );
+      /* A page that is not at this level is the NORMAL case — only one of the four levels holds it,
+         so three misses per page are expected. Counting those as failures is what jammed the queue. */
+      if (!result.ok) {
+        if (result.reason !== 'source missing') {
+          failed++; assetFailed = true;
+          console.error(`${a.id} page ${mv.sourceKey}: ${result.reason}`);
+        }
+        continue;
+      }
+      moved++;
+
+      const del = await s3(accountId, creds[mv.fromTier], bucketOf(mv.fromTier), 'DELETE', mv.sourceKey);
+      if (!del.ok && del.status !== 404) {
+        // The copy succeeded so the portal is already correct; the stale WIDER copy surviving is the
+        // security problem, so it is worth reporting and retrying.
+        failed++; assetFailed = true;
+        console.error(`${a.id} page ${mv.sourceKey}: delete of superseded object failed ${del.status}`);
+      }
     }
 
     if (Object.keys(patch).length) {

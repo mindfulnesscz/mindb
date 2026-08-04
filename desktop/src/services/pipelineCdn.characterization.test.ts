@@ -57,7 +57,11 @@ describe('CDN — object key construction', () => {
     vfs.tree(SRC, { 'Asset __a1000001/[03] OUT/(PRD)(SlD) Deck.pdf': '' });
     await cdn({ doCdnOriginals: false });
 
-    expect(invokeStub.uploadedKeys()).toEqual(['client/client-abc/thumbnails/a1000001/c1.webp']);
+    expect(invokeStub.uploadedKeys()).toEqual([
+      // A PDF also publishes its page previews; the page namespace carries the same level.
+      'client/client-abc/pages/a1000001/c1/001.webp',
+      'client/client-abc/thumbnails/a1000001/c1.webp',
+    ]);
   });
 
   it('keys an original by the same identity, keeping the real extension', async () => {
@@ -73,6 +77,7 @@ describe('CDN — object key construction', () => {
 
     expect(invokeStub.uploadedKeys()).toEqual([
       'client/client-abc/originals/a1000003/c1.pdf',
+      'client/client-abc/pages/a1000003/c1/001.webp',
       'client/client-abc/thumbnails/a1000003/c1.webp',
     ]);
   });
@@ -83,7 +88,11 @@ describe('CDN — object key construction', () => {
     vfs.tree(SRC, { 'Asset __a1000004/[03] OUT/(PRD)(SlD) Deck.pdf': '' });
     await cdn({ doCdnOriginals: false }, { assetLevels: new Map([['a1000004:c1', 'public']]) });
 
-    expect(invokeStub.uploadedKeys()).toEqual(['client-abc/thumbnails/a1000004/c1.webp']);
+    expect(invokeStub.uploadedKeys()).toEqual([
+      // Public pages get no level segment either — same rule, same bucket.
+      'client-abc/pages/a1000004/c1/001.webp',
+      'client-abc/thumbnails/a1000004/c1.webp',
+    ]);
     expect(invokeStub.argsFor('upload_to_r2')[0].bucket).toBe('dchub-test');
   });
 
@@ -92,7 +101,125 @@ describe('CDN — object key construction', () => {
     vfs.tree(SRC, { 'Asset __a1000005/[03] OUT/(PRD)(SlD) Deck.pdf': '' });
     await cdn({ doCdnOriginals: false }, { r2: { ...R2, keyPrefix: 'client-abc' } });
 
-    expect(invokeStub.uploadedKeys()).toEqual(['client/client-abc/thumbnails/a1000005/c1.webp']);
+    expect(invokeStub.uploadedKeys()).toEqual([
+      'client/client-abc/pages/a1000005/c1/001.webp',
+      'client/client-abc/thumbnails/a1000005/c1.webp',
+    ]);
+  });
+
+  /* Page previews are DERIVED bytes. They must land at the level of the document they came from —
+     a `client` deck whose pages sat under a public key would publish the deck's content, and the
+     object key IS the authorization the cdn-gate Worker reads. Asserted in both directions. */
+  it('publishes page previews at the DOCUMENT\'s level, never a wider one', async () => {
+    vfs.tree(SRC, { 'Asset __a5000001/[03] OUT/(PRD)(SlD) Deck.pdf': '' });
+    invokeStub.documentPages = 3;
+    await cdn({ doCdnOriginals: false }, {
+      // The row says internal — the narrowest level — so the pages must follow it.
+      assetLevels: new Map([['a5000001:c1', 'internal']]),
+    });
+
+    const pageKeys = invokeStub.uploadedKeys().filter(k => k.includes('/pages/'));
+    expect(pageKeys).toEqual([
+      'internal/client-abc/pages/a5000001/c1/001.webp',
+      'internal/client-abc/pages/a5000001/c1/002.webp',
+      'internal/client-abc/pages/a5000001/c1/003.webp',
+    ]);
+    // Nothing may have leaked into the public bucket.
+    const buckets = new Set(invokeStub.argsFor('upload_to_r2')
+      .filter(a => (a.objectKey as string).includes('/pages/'))
+      .map(a => a.bucket));
+    expect([...buckets]).toEqual(['dchub-test-gated']);
+  });
+
+  it('sends page previews to the public bucket only when the document is public', async () => {
+    vfs.tree(SRC, { 'Asset __a5000002/[03] OUT/(PRD)(SlD) Deck.pdf': '' });
+    await cdn({ doCdnOriginals: false }, {
+      assetLevels: new Map([['a5000002:c1', 'public']]),
+    });
+
+    const pageUploads = invokeStub.argsFor('upload_to_r2')
+      .filter(a => (a.objectKey as string).includes('/pages/'));
+    expect(pageUploads.map(a => a.objectKey)).toEqual(['client-abc/pages/a5000002/c1/001.webp']);
+    expect(pageUploads.every(a => a.bucket === 'dchub-test')).toBe(true);
+  });
+
+  /* A document that lost pages — edited, or the admin lowered the limit — leaves objects past the
+     new count. The portal renders from its stored page count, so a stale page is invisible locally
+     while still sitting in the bucket, and would reappear if the count later grew back. */
+  it('prunes page objects the document no longer has', async () => {
+    vfs.tree(SRC, { 'Asset __a5000003/[03] OUT/(PRD)(SlD) Deck.pdf': '' });
+    // R2 already holds five pages from an earlier, longer version of this deck.
+    for (const p of ['001', '002', '003', '004', '005']) {
+      invokeStub.remoteKeys.add(`client/client-abc/pages/a5000003/c1/${p}.webp`);
+    }
+    invokeStub.documentPages = 2;
+    await cdn({ doCdnOriginals: false });
+
+    expect(invokeStub.deletedKeys()).toEqual([
+      'client/client-abc/pages/a5000003/c1/003.webp',
+      'client/client-abc/pages/a5000003/c1/004.webp',
+      'client/client-abc/pages/a5000003/c1/005.webp',
+    ]);
+  });
+
+  /* Pruning is prefix-scoped. A sibling asset's pages share the namespace, and deleting those would
+     silently empty another document's viewer. */
+  it('never prunes another asset\'s pages while pruning one', async () => {
+    vfs.tree(SRC, { 'Asset __a5000004/[03] OUT/(PRD)(SlD) Deck.pdf': '' });
+    invokeStub.remoteKeys.add('client/client-abc/pages/a5000004/c1/009.webp'); // stale, same asset
+    invokeStub.remoteKeys.add('client/client-abc/pages/a5000099/c1/001.webp'); // another asset
+    invokeStub.documentPages = 1;
+    await cdn({ doCdnOriginals: false });
+
+    expect(invokeStub.deletedKeys()).toEqual(['client/client-abc/pages/a5000004/c1/009.webp']);
+  });
+
+  /* THE leak this sweep exists to prevent, and it heals nowhere else.
+     `rekey-gated-objects.mjs` moves objects listed in the `thumbnail_url` / `download_url` columns.
+     Page previews have no URL column — one object per page — so the reconcile path never sees them.
+     Narrowing a deck (client → internal) would leave its pages readable under the old `client/`
+     prefix. The pipeline writes at the current level; this sweep must remove the old ones. */
+  it('removes page objects left at a WIDER level after the asset was narrowed', async () => {
+    vfs.tree(SRC, { 'Asset __a5000006/[03] OUT/(PRD)(SlD) Deck.pdf': '' });
+    // Previously published while the deck was client-visible, and once while public.
+    invokeStub.remoteKeys.add('client/client-abc/pages/a5000006/c1/001.webp');
+    invokeStub.remoteKeys.add('client-abc/pages/a5000006/c1/001.webp');
+    invokeStub.documentPages = 1;
+
+    await cdn({ doCdnOriginals: false }, {
+      assetLevels: new Map([['a5000006:c1', 'internal']]),
+    });
+
+    // The new page lands at internal; both wider copies are gone.
+    expect(invokeStub.uploadedKeys().filter(k => k.includes('/pages/')))
+      .toEqual(['internal/client-abc/pages/a5000006/c1/001.webp']);
+    expect(invokeStub.deletedKeys()).toEqual([
+      'client-abc/pages/a5000006/c1/001.webp',
+      'client/client-abc/pages/a5000006/c1/001.webp',
+    ]);
+  });
+
+  /* Each stale object must be deleted from the bucket ITS OWN level implies. A public-tier object
+     deleted against the gated bucket is a silent no-op, and the leak survives. */
+  it('deletes a stale public page from the public bucket, not the gated one', async () => {
+    vfs.tree(SRC, { 'Asset __a5000007/[03] OUT/(PRD)(SlD) Deck.pdf': '' });
+    invokeStub.remoteKeys.add('client-abc/pages/a5000007/c1/001.webp'); // public tier
+    invokeStub.documentPages = 1;
+
+    await cdn({ doCdnOriginals: false }, {
+      assetLevels: new Map([['a5000007:c1', 'client']]),
+    });
+
+    const del = invokeStub.argsFor('delete_r2_object')
+      .find(a => a.objectKey === 'client-abc/pages/a5000007/c1/001.webp');
+    expect(del?.bucket).toBe('dchub-test');
+  });
+
+  it('publishes no pages for an asset type that has none', async () => {
+    vfs.tree(SRC, { 'Asset __a5000005/[03] OUT/(ACQ)(Gll) Photo.jpg': '' });
+    await cdn({ doCdnOriginals: false });
+
+    expect(invokeStub.uploadedKeys().filter(k => k.includes('/pages/'))).toEqual([]);
   });
 
   it('sends the right content type for each namespace', async () => {
@@ -295,7 +422,10 @@ describe('CDN — version filtering', () => {
     });
     await cdn({ doCdnOriginals: false });
 
+    // F-5 applies to the page namespace too: same filename, two packages, two distinct prefixes.
     expect(invokeStub.uploadedKeys()).toEqual([
+      'client/client-abc/pages/a4000006/c1/001.webp',
+      'client/client-abc/pages/a4000007/c1/001.webp',
       'client/client-abc/thumbnails/a4000006/c1.webp',
       'client/client-abc/thumbnails/a4000007/c1.webp',
     ]);
@@ -311,8 +441,11 @@ describe('CDN — version filtering', () => {
     });
     await cdn({ doCdnOriginals: false });
 
-    expect(new Set(invokeStub.uploadedKeys()).size).toBe(1);
-    expect(invokeStub.uploadedKeys()[0]).toMatch(/^client\/client-abc\/thumbnails\/a4000008\/c\d\.webp$/);
+    // Scoped to the thumbnail namespace: the .pdf also publishes page previews now, so the total
+    // upload count is no longer 1. The property under test is unchanged — ONE thumbnail per stem.
+    const thumbKeys = invokeStub.uploadedKeys().filter(k => k.includes('/thumbnails/'));
+    expect(new Set(thumbKeys).size).toBe(1);
+    expect(thumbKeys[0]).toMatch(/^client\/client-abc\/thumbnails\/a4000008\/c\d\.webp$/);
   });
 });
 

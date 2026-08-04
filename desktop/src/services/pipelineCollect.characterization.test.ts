@@ -207,6 +207,45 @@ describe('collect — the mirror purge (destructive)', () => {
     ]);
   });
 
+  /* A document's per-page previews live in `<stem>-thumb/` beside it. They are web-preview only and
+     must never be packaged or collected as assets.
+
+     This is the failure mode worth guarding: the page files are named `001.webp`, which contains no
+     `-thumb`, so the long-standing `name.includes('-thumb')` file filter does NOT catch them. The
+     exclusion only works if it is applied to the DIRECTORY before a walker descends. Two walkers
+     were missing that — `pipeline/fs.ts` (which would have collected the pages as publishable
+     assets, then given each one a thumbnail of its own) and `dam/scan.ts` (which would have
+     registered every previews folder as an orphan asset folder in the vault). */
+  it('never collects or packages a document\'s per-page previews', async () => {
+    seedCampaign();
+    const previews = `${SRC}/Campaign/Asset One __a1b2c3d4/[03] OUT/(PRD)(SlD) Deck v2-thumb`;
+    vfs.put(`${previews}/001.webp`, 'page 1');
+    vfs.put(`${previews}/002.webp`, 'page 2');
+    vfs.put(`${previews}/pages.json`, '{"version":1}');
+
+    await collect();
+
+    // Only the real deliverables reach the package — no page files, no previews folder.
+    expect(vfs.relPaths(PKG)).toEqual([
+      'Acquisition Gallery — Photo.jpg',
+      'Product Slides — Deck v2.pdf',
+    ]);
+  });
+
+  /* Hard-mirror semantics: a previews folder that somehow reached a package is purged as a UNIT.
+     Purging its files one by one would leave the empty directory behind. */
+  it('purges a previews folder that reached a package, directory included', async () => {
+    seedCampaign();
+    vfs.put(`${PKG}/Product Slides — Deck v2-thumb/001.webp`, 'stray page');
+    await collect();
+
+    expect(vfs.hasFile(`${PKG}/Product Slides — Deck v2-thumb/001.webp`)).toBe(false);
+    expect(vfs.relPaths(PKG)).toEqual([
+      'Acquisition Gallery — Photo.jpg',
+      'Product Slides — Deck v2.pdf',
+    ]);
+  });
+
   it('deletes thumbnails and previously-flagged 🚫 files unconditionally', async () => {
     seedCampaign();
     vfs.put(`${PKG}/Product Slides — Deck v2-thumb.webp`, 'thumb');

@@ -1,0 +1,62 @@
+# Slimming the bundled LibreOffice
+
+**Status:** idea, 2026-08-04 — deliberately deferred while bundling lands. Revisit if download size
+becomes a complaint.
+
+LibreOffice is bundled with the desktop app so that Office-document thumbnails work on a clean
+machine, with no install step and no terminal. The cost is size: a stock install measures **794MB**,
+which takes the macOS DMG from ~11MB to roughly 400–450MB compressed.
+
+The decision was to ship it whole and revisit later. That is the right order — a fragile strip that
+breaks PowerPoint rendering costs more than the megabytes, and the rendering fidelity is the entire
+reason LibreOffice is there rather than a smaller engine.
+
+## Where the size actually is
+
+Measured on LibreOffice 25.x, macOS arm64:
+
+| Component | Size |
+|---|---|
+| `Contents/Frameworks` | 422MB |
+| `Contents/Resources` | 363MB |
+| `Contents/MacOS` | 3.8MB |
+| everything else | ~4MB |
+
+So it is a two-way split, and neither side is obviously disposable from the outside.
+
+## Candidate reductions, roughly in order of safety
+
+**Language packs and help.** The app only ever runs LibreOffice headless with `--convert-to pdf`.
+Interface translations and bundled help have no path to being read. Likely the largest safe win.
+
+**Non-Impress/Writer/Calc modules.** Base (database) and Math are not on any conversion path we use.
+Draw is less clear — it participates in some import filters.
+
+**Python scripting and the extension framework.** Only if nothing in the import filter chain reaches
+for them, which needs verification rather than assumption.
+
+**Bundled fonts.** Tempting and *dangerous*: fonts are exactly what makes a deck render faithfully.
+Removing a font LibreOffice was substituting silently changes output. Treat as out of scope.
+
+## Why this is not a quick win
+
+Two reasons it needs a real spike rather than a `rm -rf` in the build script:
+
+**Failures are silent and content-dependent.** A stripped install still converts most documents. The
+breakage shows up on the one deck that uses a filter or font that went missing — quite possibly a
+client deck, quite possibly after release. Any strip needs a corpus render test across real decks,
+comparing against unstripped output, not a spot check.
+
+**It interacts with signing.** Every removed file changes the set of nested executables to sign, and
+the signing order is inside-out before the outer app is signed. Strip after signing and the
+signature breaks; strip before, and the manifest has to match. Sequence the strip *ahead* of the
+signing step, never after.
+
+## If it gets picked up
+
+Success looks like: a measured before/after size, a corpus render comparison over real client decks
+with no visual diffs, and the strip expressed as a declarative allow/deny list in
+`scripts/fetch-native-deps.mjs` so it is reviewable and reproducible — not an imperative cleanup
+that is hard to audit.
+
+See [Thumbnails](/desktop/thumbnails) for how rendering and engine resolution work today.

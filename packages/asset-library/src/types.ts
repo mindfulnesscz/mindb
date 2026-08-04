@@ -59,6 +59,15 @@ export interface Asset {
   thumbnailUrl?: string
   /** CDN original — primary Download button. */
   downloadUrl?: string
+  /* ── Document page previews ───────────────────────────────────────────────
+     Both absent for anything that is not a previewed document. There is no page URL column: the
+     addresses are derived from `thumbnailUrl` via `pageUrlsFromThumbnail`, which keeps the domain
+     and access level the thumbnail already resolved to. */
+  /** Pages rendered and published — how many the viewer can show. */
+  previewPageCount?: number | null
+  /** Pages the document actually has. Above `previewPageCount` when the client's limit capped it;
+   *  the difference is what the viewer turns into "download the asset to see the rest". */
+  previewPageTotal?: number | null
   /* ── Video ────────────────────────────────────────────────────────────────
      Cloudflare Stream carries playback and stills; R2 still holds the master, which is what
      `downloadUrl` points at. Both absent for everything that is not a video. */

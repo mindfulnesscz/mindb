@@ -1,0 +1,5 @@
+# Native engines are fetched by scripts/fetch-native-deps.mjs, never committed: they are large,
+# per-platform, and reproducible from the pinned URLs + digests in that script. CI caches this
+# directory keyed on the script's contents.
+*
+!.gitignore

@@ -135,6 +135,6 @@ R2 storage is **environment-level**: bucket and public domain are edge secrets (
 
 ## Release artifacts
 
-`npm run build` validates/builds the three JavaScript parts but does not produce signed desktop installers or deploy a hosted environment. Build Tauri bundles from `desktop` with `npm run tauri build`; hosting and signing credentials remain environment-specific and are not automated in this repository today.
+`npm run build` validates/builds the three JavaScript parts but does not produce signed desktop installers or deploy a hosted environment. Build distributable bundles from the repo root with `npm run build:app` (not `npm run tauri build`, which omits the bundled LibreOffice — see [Third-party engines](/reference/third-party-engines)); hosting and signing credentials remain environment-specific and are not automated in this repository today.
 
 All deployed parts should come from the same `vX.Y.Z` commit. Follow [Versioning and releases](/reference/versioning) rather than changing component manifests independently.

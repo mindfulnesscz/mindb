@@ -41,6 +41,8 @@ export async function exportAssetsToSupabase(
   galleries?:    GalleryGroup[],
   originalUrls?: Map<string, string>,
   allowLargeDeletions = false,
+  /** absPath → page-preview counts from the render step, for documents. */
+  pageCounts?:   Map<string, { total: number; rendered: number }>,
 ): Promise<SupabaseExportResult> {
   const result: SupabaseExportResult = { created: 0, updated: 0, disconnected: 0, errors: 0, staleObjectKeys: [] };
   const base    = `${config.url}/rest/v1`;
@@ -84,7 +86,8 @@ export async function exportAssetsToSupabase(
 
     /* ── 2. Plan ──────────────────────────────────────────────────────────── */
     const plan = await planExport({
-      identified, clientId, vocab, existingByStableId, cdnUrls, originalUrls, cloudUrls, appendLog,
+      identified, clientId, vocab, existingByStableId, cdnUrls, originalUrls, cloudUrls,
+      pageCounts, appendLog,
     });
 
     /* ── 3. Write — parents first; children need the resolved parent uuid ─── */

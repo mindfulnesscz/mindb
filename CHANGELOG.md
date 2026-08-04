@@ -5,6 +5,75 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [3.2.0] — 2026-08-04
+
+Thumbnails need nothing installed, and a document can be paged through in the portal. The rendering
+engines ship inside the app — no `brew install`, no missing-tool errors — and PDFs, decks and Word
+documents now publish a preview per page alongside the title thumbnail.
+
+### Added
+
+- **Bundled render engines.** LibreOffice (MPL-2.0, ~800MB) and PDFium ship with the app on macOS and
+  Windows; on Linux LibreOffice is a declared `.deb`/`.rpm` dependency, so the package manager
+  installs it and the user still touches no terminal. Fetched per-platform by
+  `scripts/fetch-native-deps.mjs` (`npm run deps:native`), never committed, cached in CI. Pinned to
+  LibreOffice 26.2.x — the line whose deck rendering was reviewed. **Treat a major bump as a visual
+  change**, not a dependency update: re-render real decks and compare first. See
+  [Third-party engines](docs/pages/reference/third-party-engines.mdx).
+- **`npm run build:app`** — builds a distributable bundle. Use it instead of `npm run tauri build`,
+  which now produces an app with **no LibreOffice**: it works on the build machine, which has one
+  installed, and fails on a clean one.
+- **Per-page document previews.** A PDF, PowerPoint or Word document gets `<stem>-thumb.webp` as
+  before plus a `<stem>-thumb/` folder of `001.webp…`, published to a new `pages/` R2 namespace and
+  shown as a page strip in the portal that opens the existing lightbox. Spreadsheets render one page:
+  a wide sheet paginates into dozens of near-empty slices. Word and Excel also gain thumbnails, which
+  they never had.
+- **`clients.preview_page_limit`** (default 50, 0 disables) — an admin sets it per client in the
+  client admin. `assets.preview_page_count` and `preview_page_total` are separate columns on purpose:
+  when the limit caps rendering the portal shows what it has and says *"Showing the first 5 of 40
+  pages. Download the asset to see the rest."* One column could render the pages it had but could not
+  tell a capped document from a short one.
+- **`npm run smoke:functions`** — asserts every Supabase edge function boots. They are Deno modules
+  outside every tsconfig, so nothing else in the repo type-checks or runs them. Wired into CI; use
+  `--fresh` locally, because the runtime caches a module on first import and ignores later edits.
+
+### Changed
+
+- **Rendering happens in-process.** `cwebp` and `pdftoppm` are gone, replaced by statically-linked
+  libwebp and bundled PDFium. Both were resolved from `PATH`, which a packaged app does not inherit —
+  see Fixed. Release output beats the old `cwebp` on every asset measured (a 16000×9000 JPEG: 850ms →
+  535ms).
+- **PDF rasterisation runs in a worker process, one per document.** PDFium keeps process-global state
+  and **cannot** be used concurrently: with eight threads on eight *different* documents, all 160
+  renders failed. One worker per document, not per page, so process spawn amortises across its pages —
+  233 pages/s at 8-way for multi-page documents.
+- **Page objects are moved and their sources deleted when an access level changes.** They appear in no
+  URL column, so both movers (`cdn-reconcile`, `scripts/rekey-gated-objects.mjs`) were blind to them.
+  Unlike a thumbnail, a superseded page cannot be left behind: with no column to repoint it stays
+  readable at the old, wider level. Orphaned is not unreachable.
+
+### Fixed
+
+- **`cwebp not found` on every asset in a packaged build.** An app launched from Finder/Dock/Explorer
+  inherits the OS's minimal `PATH`, so Homebrew's prefix is invisible to it — the tools resolved under
+  `tauri dev` and failed in the DMG. Engines are now resolved by absolute path through
+  `desktop/src-tauri/src/native.rs`.
+- **Thumbnailing was ~75× slower in `tauri dev`.** `cwebp` was an optimised binary, so the build
+  profile never mattered; now the work is Rust and an unoptimised build took **21s** on an 8000×4500
+  JPEG. `[profile.dev.package."*"] opt-level = 3` is load-bearing — do not remove it.
+- **A previews folder was collected as an asset.** `<stem>-thumb/` inherits the long-standing
+  `-thumb` exclusion, but only if it is applied before a walker branches on file-vs-directory — the
+  page files are `001.webp` and carry no `-thumb`. Two walkers checked only files: `pipeline/fs.ts`
+  would have packaged and uploaded the pages as assets, and `dam/scan.ts` would have given every
+  previewed document a spurious vault note.
+- **A page sweep jammed `cdn_move_queue`, which broke video.** The first version listed R2 with
+  credentials scoped `object-read-write`, which does not permit `ListBucket`. Every asset was marked
+  failed and nothing was dequeued — and because the same pass sets Cloudflare Stream's
+  `requireSignedURLs`, video playback and animated thumbnails stopped working. Pages are now addressed
+  from the recorded count, a missing source is silence rather than a failure, and the stream flag is
+  reconciled first so it cannot be starved.
+
+
 ## [3.1.1] — 2026-08-03
 
 Desktop release CI installs the full workspace again, so a version tag can produce a
