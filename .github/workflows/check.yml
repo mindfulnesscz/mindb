@@ -63,6 +63,14 @@ jobs:
           version: latest
       - run: supabase db start
       - run: npm ci
+      # Do the edge functions BOOT? Nothing else in CI type-checks or runs them — they are Deno
+      # modules outside every tsconfig — and a broken import in one, or in _shared/, is otherwise
+      # invisible until production. It cost an incident: a page sweep in cdn-reconcile listed R2 with
+      # credentials that cannot list, the move queue jammed, and video stopped working because the
+      # same pass sets Stream's requireSignedURLs. No `--fresh` needed: this container is new, so its
+      # module cache is empty and the probe reflects the checked-out files.
+      - name: Edge functions boot
+        run: npm run smoke:functions
       - run: npx playwright install --with-deps chromium
       - name: Portal smoke
         run: npm run test:e2e

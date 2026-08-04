@@ -34,6 +34,7 @@
     "test": "npm run test:packages && npm run test:desktop",
     "test:rust": "cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib",
     "test:rls": "supabase test db",
+    "smoke:functions": "node scripts/smoke-functions.mjs",
     "db:start": "supabase start",
     "db:stop": "supabase stop",
     "db:reset": "supabase db reset",

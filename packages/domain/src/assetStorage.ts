@@ -175,6 +175,65 @@ export function assetUrl(domain: string, objectKey: string, contentHash?: string
   return `${base}?v=${contentHash.slice(0, 12)}`;
 }
 
+/** One page object that has to move because the asset's level changed. */
+export interface PageMove {
+  /** The level the object is currently sitting under. */
+  from: AccessLevel;
+  fromTier: 'public' | 'gated';
+  sourceKey: string;
+  targetKey: string;
+  targetTier: 'public' | 'gated';
+}
+
+/**
+ * Every page object that would be in the wrong place if this asset is at `level`.
+ *
+ * Extracted from `cdn-reconcile` so the decision is testable without a Deno runtime, an R2 bucket or
+ * a queue. Nothing in the toolchain type-checks or exercises the edge functions, and the first
+ * version of this logic — written inline — shipped two bugs that only appeared in production:
+ *
+ *   1. it LISTED each level prefix, but the function's credentials are `object-read-write`, which
+ *      does not include ListBucket. Every list 403'd, every asset was marked failed, and the move
+ *      queue stopped draining — which broke video, because the same pass sets `requireSignedURLs`.
+ *   2. it treated a missing source object as a failure. Only ONE of the four levels holds a given
+ *      page, so three misses per page are the normal case.
+ *
+ * Addressed from the recorded page COUNT rather than a listing, for reason 1. The caller treats a
+ * missing source as silence, for reason 2 — this function deliberately returns the full cross-product
+ * of levels and pages, because which ones exist is not knowable without asking R2.
+ *
+ * Returns nothing for a zero count (a raster, a video, or a client whose page limit is 0), so the
+ * overwhelming majority of assets cost no work at all.
+ */
+export function planPageMoves(
+  level: AccessLevel,
+  clientId: string,
+  stableId: string,
+  childId: string,
+  pageCount: number,
+): PageMove[] {
+  if (!Number.isFinite(pageCount) || pageCount <= 0) return [];
+
+  const targetTier = tierFor(level);
+  const moves: PageMove[] = [];
+  for (const from of ALL_ACCESS_LEVELS) {
+    if (from === level) continue; // already where it belongs
+    for (let page = 1; page <= pageCount; page++) {
+      moves.push({
+        from,
+        fromTier: tierFor(from),
+        sourceKey: pageTarget(from, clientId, stableId, childId, page).key,
+        targetKey: pageTarget(level, clientId, stableId, childId, page).key,
+        targetTier,
+      });
+    }
+  }
+  return moves;
+}
+
+/** Every level an object could be sitting under. Order is stable so plans are comparable. */
+export const ALL_ACCESS_LEVELS: readonly AccessLevel[] = ['public', 'guest', 'client', 'internal'];
+
 /**
  * Page-preview URLs for a document, derived from its THUMBNAIL URL.
  *

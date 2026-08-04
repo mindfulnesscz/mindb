@@ -10,7 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   effectiveLevel, tierFor, storageTarget, assetUrl, stripVersion,
-  pageTarget, pagePrefix, pageObjectName, pageUrlsFromThumbnail,
+  pageTarget, pagePrefix, pageObjectName, pageUrlsFromThumbnail, planPageMoves, ALL_ACCESS_LEVELS,
   isServableGatedKey, parseObjectPath, type AccessLevel,
 } from './assetStorage';
 
@@ -216,5 +216,74 @@ describe('pageUrlsFromThumbnail — the portal has no page URL column', () => {
     const thumb = `https://files.example.com/${storageTarget('client', CLIENT, 'thumbnails', 'a7', 'c3', '.webp').key}`
     const expected = `https://files.example.com/${pageTarget('client', CLIENT, 'a7', 'c3', 1).key}`
     expect(pageUrlsFromThumbnail(thumb, 1)).toEqual([expected])
+  })
+})
+
+describe('planPageMoves — what cdn-reconcile has to move after a level change', () => {
+  /* This logic shipped broken once. It lived inline in a Deno edge function that nothing in the
+     toolchain type-checks or runs, and the failure surfaced as "video stopped working" — because the
+     same pass sets Cloudflare Stream's requireSignedURLs, and a jammed move queue never reached it.
+     It lives here now so it is covered by the ordinary test run. */
+
+  it('moves every page from every OTHER level to the asset\'s level', () => {
+    const moves = planPageMoves('internal', CLIENT, 'a1', 'c1', 2)
+
+    // 3 other levels x 2 pages. The asset's own level is skipped — it is already correct.
+    expect(moves).toHaveLength(6)
+    expect(new Set(moves.map(m => m.from))).toEqual(new Set(['public', 'guest', 'client']))
+    expect(moves.every(m => m.targetKey.startsWith('internal/'))).toBe(true)
+  })
+
+  it('never plans a move away from the level the asset is already at', () => {
+    for (const level of ALL_ACCESS_LEVELS) {
+      const moves = planPageMoves(level, CLIENT, 'a1', 'c1', 3)
+      expect(moves.some(m => m.from === level)).toBe(false)
+      expect(moves).toHaveLength(3 * (ALL_ACCESS_LEVELS.length - 1))
+    }
+  })
+
+  it('addresses pages from the recorded count, not from a listing', () => {
+    // The credentials this runs under are `object-read-write`, which does NOT include ListBucket.
+    // Listing 403'd on every asset, marked them all failed, and jammed the queue. Keys are therefore
+    // constructed, and must match exactly what the pipeline wrote.
+    const moves = planPageMoves('client', CLIENT, 'a7', 'c3', 2)
+    const fromPublic = moves.filter(m => m.from === 'public')
+    expect(fromPublic.map(m => m.sourceKey)).toEqual([
+      `${CLIENT}/pages/a7/c3/001.webp`,
+      `${CLIENT}/pages/a7/c3/002.webp`,
+    ])
+    expect(fromPublic.map(m => m.targetKey)).toEqual([
+      pageTarget('client', CLIENT, 'a7', 'c3', 1).key,
+      pageTarget('client', CLIENT, 'a7', 'c3', 2).key,
+    ])
+  })
+
+  it('routes each side to the right tier, so a delete cannot hit the wrong bucket', () => {
+    // A public-tier object deleted against the gated bucket is a silent no-op, and the stale wider
+    // copy survives — which is the leak the sweep exists to close.
+    const moves = planPageMoves('internal', CLIENT, 'a1', 'c1', 1)
+    const fromPublic = moves.find(m => m.from === 'public')!
+    expect(fromPublic.fromTier).toBe('public')
+    expect(fromPublic.targetTier).toBe('gated')
+
+    const toPublic = planPageMoves('public', CLIENT, 'a1', 'c1', 1)
+    expect(toPublic.every(m => m.targetTier === 'public')).toBe(true)
+    expect(toPublic.every(m => m.fromTier === 'gated')).toBe(true)
+  })
+
+  it('plans nothing for an asset with no pages, which is most of the table', () => {
+    // Rasters, videos, and any client whose preview_page_limit is 0. This is what keeps the sweep
+    // from costing anything on the assets that have no page previews at all.
+    expect(planPageMoves('client', CLIENT, 'a1', 'c1', 0)).toEqual([])
+    expect(planPageMoves('client', CLIENT, 'a1', 'c1', -1)).toEqual([])
+    expect(planPageMoves('client', CLIENT, 'a1', 'c1', NaN)).toEqual([])
+  })
+
+  it('produces only keys the cdn-gate Worker can authorize', () => {
+    for (const level of ALL_ACCESS_LEVELS) {
+      for (const m of planPageMoves(level, CLIENT, 'a1000001', 'c1', 3)) {
+        if (m.targetTier === 'gated') expect(isServableGatedKey(m.targetKey)).toBe(true)
+      }
+    }
   })
 })

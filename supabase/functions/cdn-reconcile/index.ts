@@ -19,14 +19,9 @@
 //          requireSignedURLs alongside the object key, since a video's level lives in that flag.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import {
-  effectiveLevel, tierFor, assetUrl, stripVersion, pageTarget, type AccessLevel,
+  effectiveLevel, tierFor, assetUrl, stripVersion, planPageMoves, type AccessLevel,
 } from '../../../packages/domain/src/assetStorage.ts';
 import { tempCredentials, copyObject, s3, type TempCreds } from '../_shared/r2.ts';
-
-/* Every level a page object could be sitting under. After a level change the old objects are under a
-   DIFFERENT prefix, so a single-level search would miss them and leave a narrowed asset's pages
-   readable at its old, wider address. */
-const LEVELS: AccessLevel[] = ['public', 'guest', 'client', 'internal'];
 
 /** How many assets one invocation will move. Bounded so a large backlog cannot exceed the
  *  function's wall-clock limit; the queue keeps the rest for the next call. */
@@ -222,46 +217,36 @@ Deno.serve(async (req) => {
        because its column was repointed, so nothing references the old object. A page has no column to
        repoint: the old object stays at a WIDER level, reachable by anyone holding a cookie for it.
        Orphaned is not unreachable. */
-    const pageCount = a.preview_page_count ?? 0;
-    if (pageCount > 0) {
-      const targetTier = tierFor(level);
-      for (const from of LEVELS) {
-        if (from === level) continue; // already where it belongs
-        const fromTier = tierFor(from);
-        for (let page = 1; page <= pageCount; page++) {
-          const key = pageTarget(from, a.client_id, a.stable_id, a.child_id, page).key;
-          const targetKey = pageTarget(level, a.client_id, a.stable_id, a.child_id, page).key;
-          if (targetTier === 'gated' && !GATED_KEY_SHAPE.test(targetKey)) {
-            failed++; assetFailed = true;
-            console.error(`unservable page key refused: ${targetKey}`);
-            continue;
-          }
+    for (const mv of planPageMoves(level, a.client_id, a.stable_id, a.child_id,
+                                   a.preview_page_count ?? 0)) {
+      if (mv.targetTier === 'gated' && !GATED_KEY_SHAPE.test(mv.targetKey)) {
+        failed++; assetFailed = true;
+        console.error(`unservable page key refused: ${mv.targetKey}`);
+        continue;
+      }
 
-          const result = await copyObject(
-            accountId,
-            { creds: creds[fromTier], bucket: bucketOf(fromTier), key },
-            { creds: creds[targetTier], bucket: bucketOf(targetTier), key: targetKey },
-          );
-          /* A page that is not at this level is the NORMAL case — only one of the four levels holds
-             it — so a missing source is silence, not a failure. Marking it failed is what jammed the
-             queue before. */
-          if (!result.ok) {
-            if (result.reason !== 'source missing') {
-              failed++; assetFailed = true;
-              console.error(`${a.id} page ${key}: ${result.reason}`);
-            }
-            continue;
-          }
-          moved++;
-
-          const del = await s3(accountId, creds[fromTier], bucketOf(fromTier), 'DELETE', key);
-          if (!del.ok && del.status !== 404) {
-            // The copy succeeded so the portal is already correct; the stale WIDER copy surviving is
-            // the security problem, so it is worth reporting and retrying.
-            failed++; assetFailed = true;
-            console.error(`${a.id} page ${key}: delete of superseded object failed ${del.status}`);
-          }
+      const result = await copyObject(
+        accountId,
+        { creds: creds[mv.fromTier], bucket: bucketOf(mv.fromTier), key: mv.sourceKey },
+        { creds: creds[mv.targetTier], bucket: bucketOf(mv.targetTier), key: mv.targetKey },
+      );
+      /* A page that is not at this level is the NORMAL case — only one of the four levels holds it,
+         so three misses per page are expected. Counting those as failures is what jammed the queue. */
+      if (!result.ok) {
+        if (result.reason !== 'source missing') {
+          failed++; assetFailed = true;
+          console.error(`${a.id} page ${mv.sourceKey}: ${result.reason}`);
         }
+        continue;
+      }
+      moved++;
+
+      const del = await s3(accountId, creds[mv.fromTier], bucketOf(mv.fromTier), 'DELETE', mv.sourceKey);
+      if (!del.ok && del.status !== 404) {
+        // The copy succeeded so the portal is already correct; the stale WIDER copy surviving is the
+        // security problem, so it is worth reporting and retrying.
+        failed++; assetFailed = true;
+        console.error(`${a.id} page ${mv.sourceKey}: delete of superseded object failed ${del.status}`);
       }
     }
 
