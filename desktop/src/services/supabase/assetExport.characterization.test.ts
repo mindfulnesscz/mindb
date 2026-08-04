@@ -49,13 +49,16 @@ const VOCAB: VocabularyData = {
 };
 
 /** Drive the sync from real file paths, through the real grouping logic. */
-async function sync(paths: string[], opts: { cdnUrls?: Map<string, string> } = {}) {
+async function sync(paths: string[], opts: {
+  cdnUrls?: Map<string, string>;
+  pageCounts?: Map<string, { total: number; rendered: number }>;
+} = {}) {
   const { singles, galleries } = groupAssets(paths, 'OUT');
   const logs: Array<{ type: string; msg: string }> = [];
   const result = await exportAssetsToSupabase(
     singles, CLIENT, VOCAB, config,
     (type, msg) => { logs.push({ type, msg }); },
-    opts.cdnUrls, undefined, galleries, undefined,
+    opts.cdnUrls, undefined, galleries, undefined, false, opts.pageCounts,
   );
   return { result, logs, logged: (n: string) => logs.some(l => l.msg.includes(n)) };
 }
@@ -450,5 +453,44 @@ describe('assetExport — guards', () => {
 
     expect(restStub.calls).toEqual([]);
     expect(result).toMatchObject({ created: 0, updated: 0, disconnected: 0, errors: 0 });
+  });
+});
+
+describe('page-preview counts against an environment that lacks the columns', () => {
+  /* PostgREST rejects the WHOLE write when one column is unknown (PGRST204). Sending page counts to
+     a database without the migration failed the PARENT row, and every child then skipped for want of
+     a parent_id — one additive metadata column stopped a package syncing. Observed on staging. */
+  const PATHS = ['/src/Deck __a9000001/OUT/(PRD)(SlD) Deck.pdf'];
+  const counts = () => new Map([['/src/Deck __a9000001/OUT/(PRD)(SlD) Deck.pdf',
+                                 { total: 40, rendered: 5 }]]);
+
+  it('writes the counts when the columns exist', async () => {
+    const { result } = await sync(PATHS, { pageCounts: counts() });
+    expect(result.errors).toBe(0);
+    const write = restStub.calls.find(c => c.body && 'preview_page_count' in c.body);
+    expect(write?.body).toMatchObject({ preview_page_count: 5, preview_page_total: 40 });
+  });
+
+  it('still syncs everything else when the columns are missing', async () => {
+    // The probe asks for the column and gets a 400 — exactly what an un-migrated database answers.
+    restStub.failUrlMatching = /select=preview_page_count/;
+
+    const { result, logged } = await sync(PATHS, { pageCounts: counts() });
+
+    expect(result.errors).toBe(0);
+    expect(result.created + result.updated).toBeGreaterThan(0);
+    // The fields are withheld, not sent as null — a null would still name the column.
+    for (const c of restStub.calls) {
+      if (c.body) {
+        expect(c.body).not.toHaveProperty('preview_page_count');
+        expect(c.body).not.toHaveProperty('preview_page_total');
+      }
+    }
+    expect(logged('no page-preview columns yet')).toBe(true);
+  });
+
+  it('does not probe at all when there are no counts to write', async () => {
+    await sync(PATHS);
+    expect(restStub.calls.some(c => c.url.includes('select=preview_page_count'))).toBe(false);
   });
 });

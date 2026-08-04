@@ -19,7 +19,7 @@ import { buildVocabMap, parseFilename, type VocabularyData, type GalleryGroup, t
 import type { CloudUrlEntry } from '../pipeline/types';
 import { writeReadme } from '../readmeService';
 import type { SupabaseConfig } from './rest';
-import { makeHeaders, fetchAllForClient } from './rest';
+import { makeHeaders, fetchAllForClient, sbFetch } from './rest';
 import { fetchAssetStats } from './assetQueries';
 import { parseAssetForSupabase } from './rowMapping';
 import type { StableRow, SupabaseExportResult, ReadmeTarget } from './exportTypes';
@@ -29,6 +29,27 @@ import { dedupeByKey, writeParents, writeChildren } from './exportWrite';
 import { disconnectStaleRows } from './exportDisconnect';
 
 export type { SupabaseExportResult } from './exportTypes';
+
+/**
+ * Does this database have the page-preview columns?
+ *
+ * `limit=0` asks for the shape and no rows, so it is one cheap round trip. An unknown column makes
+ * PostgREST answer 400 rather than ignore it, which is exactly the signal wanted here.
+ */
+async function hasPagePreviewColumns(
+  base: string,
+  headers: Record<string, string>,
+): Promise<boolean> {
+  try {
+    // sbFetch, not global fetch: it carries this module's auth refresh and is what the stub drives.
+    const res = await sbFetch(`${base}/assets?select=preview_page_count&limit=0`, { headers });
+    return res.ok;
+  } catch {
+    // A network failure is not evidence the columns are missing, but withholding two metadata
+    // fields is the harmless direction — the alternative risks failing every row.
+    return false;
+  }
+}
 
 export async function exportAssetsToSupabase(
   singles:      SingleAsset[],
@@ -84,10 +105,25 @@ export async function exportAssetsToSupabase(
       (existingByStableId.get(row.stable_id) ?? existingByStableId.set(row.stable_id, []).get(row.stable_id)!).push(row);
     }
 
+    /* Page-preview counts are only written where the columns exist.
+       PostgREST rejects the WHOLE write when one column is unknown (PGRST204), so on an environment
+       that has not had the migration yet, sending them failed the PARENT row — and every child then
+       skipped for want of a parent_id. One additive metadata column stopped an entire package from
+       syncing. Withholding the data is enough: `planExport` writes null without it and
+       `stripAbsentUrls` removes the fields, which is the same no-opinion path a run with thumbnails
+       disabled already takes. One probe per run, not per row. */
+    let writablePageCounts = pageCounts;
+    if (pageCounts?.size && !(await hasPagePreviewColumns(base, headers))) {
+      writablePageCounts = undefined;
+      appendLog('warn',
+        '  ⚠  This environment has no page-preview columns yet — page counts not synced. '
+        + 'Everything else is unaffected; apply the document-page-previews migration to enable them.');
+    }
+
     /* ── 2. Plan ──────────────────────────────────────────────────────────── */
     const plan = await planExport({
       identified, clientId, vocab, existingByStableId, cdnUrls, originalUrls, cloudUrls,
-      pageCounts, appendLog,
+      pageCounts: writablePageCounts, appendLog,
     });
 
     /* ── 3. Write — parents first; children need the resolved parent uuid ─── */
