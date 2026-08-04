@@ -37,7 +37,7 @@ export const DEFAULT_DIMENSION_LABELS: DimensionLabels = {
  * subsets — the failure that made a portal field silently invisible on desktop.
  */
 export const CLIENT_IDENTITY_SELECT =
-  'id,name,accent,initials,slug,logo_url,website,portal_bg,domain_whitelist,dimension_labels'
+  'id,name,accent,initials,slug,logo_url,website,portal_bg,domain_whitelist,dimension_labels,preview_page_limit'
 
 /** The portal-owned facts about a client. Machine-local state (folders, tokens) is never in here. */
 export interface ClientIdentity {
@@ -51,6 +51,12 @@ export interface ClientIdentity {
   portalBg?:        string
   domainWhitelist?: string[]
   dimensionLabels:  DimensionLabels
+  /** Pages of a document the pipeline renders previews for. 0 disables page previews entirely.
+   *
+   *  Optional because several places construct a client identity for DISPLAY — the portal header,
+   *  test fixtures — where the limit is irrelevant and inventing one would be noise. `toClientIdentity`
+   *  always fills it from the row, so anything reading a real client gets a number. */
+  previewPageLimit?: number
 }
 
 /**
@@ -80,6 +86,10 @@ export function toClientIdentity(row: ClientRow): ClientIdentity {
     portalBg:        row.portal_bg ?? undefined,
     domainWhitelist: row.domain_whitelist,
     dimensionLabels: toDimensionLabels(row.dimension_labels),
+    /* NOT NULL with a default in the schema, but a row read through a narrower select — or one from
+       before the column existed — can still arrive undefined. Falls back to the same value as the
+       column default; see DEFAULT_PREVIEW_PAGE_LIMIT in the pipeline, which must agree. */
+    previewPageLimit: row.preview_page_limit ?? 50,
   }
 }
 

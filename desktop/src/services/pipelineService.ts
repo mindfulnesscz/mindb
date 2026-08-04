@@ -49,8 +49,9 @@ export async function runPipeline(ctx: RunContext): Promise<RunStats> {
 
   const stats: RunStats = {
     packages: 0, copied: 0, skipped: 0, errors: 0,
-    pubFolders: 0, published: 0, thumbnails: 0, notes: 0, disconnected: 0,
+    pubFolders: 0, published: 0, thumbnails: 0, pagePreviews: 0, notes: 0, disconnected: 0,
     cdnThumbUploaded: 0, cdnThumbCached: 0, cdnThumbUnchanged: 0,
+    cdnPagesUploaded: 0, cdnPagesCached: 0, cdnPagesUnchanged: 0,
     cdnOrigUploaded: 0, cdnOrigCached: 0, cdnOrigUnchanged: 0,
   };
 

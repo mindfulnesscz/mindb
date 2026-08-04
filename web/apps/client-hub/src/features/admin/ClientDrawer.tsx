@@ -7,7 +7,10 @@ import { uploadClientLogo } from '../../services/brandingService'
 import { importTaxonomyJsonFile, parseAndValidateTaxonomyJson } from '../../services/taxonomyImport'
 import { TagsAdmin } from './TagsAdmin'
 import { DestinationsAdmin } from './DestinationsAdmin'
-import { getInitials, toSlug, emptyForm, clientToForm, type ClientFormState } from './clientForm'
+import {
+  getInitials, toSlug, emptyForm, clientToForm, parsePreviewPageLimit,
+  MAX_PREVIEW_PAGE_LIMIT, type ClientFormState,
+} from './clientForm'
 import { LogoField } from './LogoField'
 import { DomainInput } from './DomainInput'
 import { inputCls } from './styles'
@@ -73,6 +76,10 @@ export function ClientDrawer({ editing, onClose, onSaved }: {
       setError('Portal URL slug is required so the client can be opened.')
       return
     }
+    if (parsePreviewPageLimit(form.previewPageLimit) === null) {
+      setError(`Page-preview limit must be a whole number between 0 and ${MAX_PREVIEW_PAGE_LIMIT}.`)
+      return
+    }
     setSaving(true); setError(''); setLogoUploadError('')
     try {
       const payload = {
@@ -81,6 +88,12 @@ export function ClientDrawer({ editing, onClose, onSaved }: {
         website: form.website.trim() || undefined,
         portalBg: form.portalBg.trim() || undefined, domainWhitelist: form.domainWhitelist,
         dimensionLabels: { entity: form.dimEntity.trim(), angle: form.dimAngle.trim(), format: form.dimFormat.trim() },
+        /* Omitted when unparseable so the stored value is left alone rather than reset — the same
+           no-opinion rule the pipeline applies to URLs it has no value for. `validate` rejects a
+           bad entry before we get here, so this is the belt to that braces. */
+        ...(parsePreviewPageLimit(form.previewPageLimit) !== null
+          ? { previewPageLimit: parsePreviewPageLimit(form.previewPageLimit)! }
+          : {}),
       }
       const saved = editing
         ? await updateClient(editing.id, payload)
@@ -204,6 +217,27 @@ export function ClientDrawer({ editing, onClose, onSaved }: {
           <div>
             <label className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5">Website</label>
             <input type="url" value={form.website} onChange={e => set('website', e.target.value)} placeholder="https://acme.com" className={`${inputCls} font-mono`} />
+          </div>
+
+          <div>
+            <label
+              htmlFor="preview-page-limit"
+              className="block text-[10px] font-sans font-bold uppercase tracking-label text-text-muted mb-1.5"
+            >
+              Document page previews
+            </label>
+            <input
+              id="preview-page-limit"
+              type="number" min={0} max={MAX_PREVIEW_PAGE_LIMIT} inputMode="numeric"
+              value={form.previewPageLimit}
+              onChange={e => set('previewPageLimit', e.target.value)}
+              className={`${inputCls} font-mono`}
+            />
+            <p className="mt-1.5 text-[10px] font-sans text-text-muted">
+              Pages rendered per PDF, PowerPoint or Word document, so viewers can page through it in
+              the portal. Longer documents show this many and then prompt a download. 0 turns page
+              previews off. Spreadsheets always show one page.
+            </p>
           </div>
 
           <div>
