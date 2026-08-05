@@ -1,5 +1,4 @@
 use std::io::{BufReader, Read};
-use std::path::Path;
 
 mod r2;
 mod cloud;
@@ -7,6 +6,7 @@ mod supabase;
 mod reveal;
 mod native;
 mod render;
+mod path_policy;
 
 /// Extensions routed through LibreOffice → PDF → PDFium.
 ///
@@ -27,12 +27,19 @@ const RASTER_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff
 /// source is older than the destination but its bytes changed without changing length. Streaming
 /// avoids loading two large creative files into the webview at once.
 #[tauri::command]
-fn files_equal(source_path: String, destination_path: String) -> Result<bool, String> {
+fn files_equal(
+    app: tauri::AppHandle,
+    source_path: String,
+    destination_path: String,
+) -> Result<bool, String> {
     const CHUNK: usize = 64 * 1024;
+    let source_path = path_policy::require_allowed_file(&app, &source_path, "comparison source")?;
+    let destination_path =
+        path_policy::require_allowed_file(&app, &destination_path, "comparison destination")?;
     let source = std::fs::File::open(&source_path)
-        .map_err(|e| format!("open {source_path}: {e}"))?;
+        .map_err(|e| format!("open {}: {e}", source_path.display()))?;
     let destination = std::fs::File::open(&destination_path)
-        .map_err(|e| format!("open {destination_path}: {e}"))?;
+        .map_err(|e| format!("open {}: {e}", destination_path.display()))?;
     if source.metadata().map_err(|e| e.to_string())?.len()
         != destination.metadata().map_err(|e| e.to_string())?.len()
     {
@@ -69,16 +76,18 @@ fn generate_thumbnail(
     width: u32,
     quality: u32,
 ) -> Result<bool, String> {
-    let src_path = Path::new(&src);
-    let dest_path = Path::new(&dest);
-    if render::thumbnail_current(src_path, dest_path, width, quality) { return Ok(false); }
+    let src_path = path_policy::require_allowed_file(&app, &src, "thumbnail source")?;
+    let dest_path = path_policy::require_allowed_output(&app, &dest, "thumbnail destination")?;
+    if render::thumbnail_current(&src_path, &dest_path, width, quality) { return Ok(false); }
 
     if let Some(parent) = dest_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    let ext = Path::new(&src).extension()
+    let ext = src_path.extension()
         .and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    let src = src_path.to_string_lossy();
+    let dest = dest_path.to_string_lossy();
 
     if ext == "pdf" {
         render::pdf_to_thumb(&app, &src, &dest, width, quality)?;
@@ -91,7 +100,7 @@ fn generate_thumbnail(
     }
     // Written last: a failed render can leave the previous thumbnail in place, but not a fresh
     // manifest that would incorrectly mark it current on the next run.
-    render::write_thumbnail_manifest(src_path, dest_path, width, quality)?;
+    render::write_thumbnail_manifest(&src_path, &dest_path, width, quality)?;
     Ok(true)
 }
 
@@ -132,7 +141,12 @@ fn generate_document_previews(
     quality: u32,
     limit: u32,
 ) -> Result<PreviewReport, String> {
-    let ext = Path::new(&src)
+    let src_path = path_policy::require_allowed_file(&app, &src, "preview source")?;
+    let thumb_path = path_policy::require_allowed_output(&app, &thumb, "preview thumbnail")?;
+    let pages_path = path_policy::require_allowed_output(&app, &pages_dir, "preview directory")?;
+    render::validate_preview_area(&src_path, &thumb_path, &pages_path)?;
+
+    let ext = src_path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
@@ -143,13 +157,11 @@ fn generate_document_previews(
     }
 
     let budget = render::page_budget(&ext, limit);
-    let src_path = Path::new(&src);
-    let pages_path = Path::new(&pages_dir);
 
     // Cheap check first: unchanged source, same limit and same output settings means the previews on
     // disk are still the right ones. Re-runs over a processed library do no rendering at all.
-    if let Some(existing) = render::previews_current(src_path, pages_path, budget, width, quality) {
-        if Path::new(&thumb).is_file() {
+    if let Some(existing) = render::previews_current(&src_path, &pages_path, budget, width, quality) {
+        if thumb_path.is_file() {
             return Ok(PreviewReport {
                 total: existing.total,
                 rendered: existing.rendered,
@@ -158,13 +170,16 @@ fn generate_document_previews(
         }
     }
 
+    let src = src_path.to_string_lossy();
+    let thumb = thumb_path.to_string_lossy();
+    let pages_dir = pages_path.to_string_lossy();
     let outcome = if ext == "pdf" {
         render::pdf_previews(&app, &src, &thumb, Some(&pages_dir), width, quality, budget)?
     } else {
         render::office_previews(&app, &src, &thumb, Some(&pages_dir), width, quality, budget)?
     };
 
-    let manifest = render::write_manifest(src_path, pages_path, &outcome, budget, width, quality)?;
+    let manifest = render::write_manifest(&src_path, &pages_path, &outcome, budget, width, quality)?;
     Ok(PreviewReport {
         total: manifest.total,
         rendered: manifest.rendered,
@@ -242,6 +257,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            path_policy::restore_persisted_scope(app.handle())
+                .map_err(std::io::Error::other)?;
+            Ok(())
+        })
         /* Updater deliberately NOT registered. Its config is gone from tauri.conf.json — the
            `pubkey` there was a pasted Supabase publishable key rather than a minisign key, and the
            release workflow publishes no `latest.json` for the endpoint to fetch, so auto-update has
