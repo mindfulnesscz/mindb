@@ -12,11 +12,210 @@ Therefore a wall of green lines means local sidecar thumbnails were absent—not
 
 | Source | Native conversion |
 |---|---|
-| PDF | First page via `pdftoppm`, then `cwebp` |
-| PPT/PPTX/PPTM | Headless LibreOffice to temporary PDF, first page via Poppler, then `cwebp` |
-| Raster image | Direct `cwebp` resize/encode |
+| PDF | Page 1 rasterised by bundled PDFium, encoded by statically-linked libwebp |
+| PPT/PPTX/PPTM · DOC/DOCX · XLS/XLSX | Headless LibreOffice to a temporary PDF, then the PDF path above |
+| Raster image | Decoded by `image`, resized, encoded by libwebp |
 
-Width and quality are parsed from settings, with fallbacks of 320 and 70 in service code. Height preserves aspect ratio. Temporary directories are removed after conversion. Required executables are `cwebp`, `pdftoppm`, and LibreOffice for presentations.
+Width and quality are parsed from settings, with fallbacks of 320 and 70 in service code. Height
+preserves aspect ratio, matching the `cwebp -resize <width> 0` behaviour this replaced. Temporary
+directories are tied to a guard value and removed when it drops, on every exit path.
+
+### Rendering happens in-process
+
+`cwebp` and `pdftoppm` are gone. They were external binaries resolved from `PATH`, and a packaged
+app launched from Finder/Dock/Explorer inherits the OS's minimal `PATH` — so both were invisible to
+the shipped build even when installed, producing a misleading "cwebp not found" on every asset.
+They are now libraries compiled into the app:
+
+| Engine | How it links | Replaces |
+|---|---|---|
+| libwebp (`webp` crate) | built from vendored C, **statically linked** | `cwebp` |
+| PDFium (`pdfium-render`) | **bundled dynamic library**, loaded from the resource dir | `pdftoppm` |
+
+PDFium is a dynamic library because the upstream builds
+([bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries)) ship shared libraries
+only — there is no static archive to link. It is fetched per-platform by
+`scripts/fetch-native-deps.mjs` (`npm run deps:native`) into
+`desktop/src-tauri/resources/native/pdfium/`, and is never committed.
+
+`desktop/src-tauri/src/native.rs` is the only module that knows where engines live. It resolves the
+packaged resource dir first, then falls back to the source tree so `tauri dev` works without a
+packaged build. Add engines there — never as a bare command name.
+
+### One render, one process — PDFium cannot be threaded
+
+PDFium keeps process-global state (`FPDF_InitLibrary` / `FPDF_DestroyLibrary`) and **cannot be used
+concurrently within one process**. This is not a performance caveat, it is a hard failure. Measured
+with the `pdfium-render` crate's `thread_safe` feature enabled, eight threads rendering eight
+*different* documents:
+
+| Threads | Renders OK | Failed (`FormatError`) |
+|---|---|---|
+| 1 | 20 | 0 |
+| 4 | 4 | 76 |
+| 8 | 0 | 160 |
+
+A single shared `OnceLock` instance plus `thread_safe` is **not** sufficient — that was tried and it
+still fails, because the crate's mutex guards the bindings, not PDFium's cross-call internal state.
+Pushed harder, the process segfaults.
+
+So the unit of isolation is a **process**. `render::pdf_to_thumb` re-invokes this same executable
+with a hidden `--dchub-render-worker` flag (see `WORKER_FLAG`), which `run()` intercepts before Tauri
+builds a webview. One render, one short-lived worker, no IPC beyond argv and an exit code.
+
+This is not a regression in shape: the code it replaced spawned `pdftoppm` **and** `cwebp` per file,
+eight at a time — two processes plus a PNG intermediate.
+
+### Scaling strategy, and why not Lanczos3 all the way
+
+Running Lanczos3 across a large reduction is the most expensive thing in the image path and buys
+nothing at 320px. `render::downscale` therefore box-averages down to 2× the target first (`thumbnail`)
+and applies Lanczos3 only for the final hop, whenever the source is ≥4× the target width. Below that
+ratio it filters directly, because box averaging would start to show and Lanczos3 is cheap on a small
+image. Measured on a real 8000×4500 asset: 280ms direct versus 62ms prescaled, visually
+indistinguishable (14418 B vs 14082 B, against `cwebp`'s 13900 B).
+
+The contract is unchanged from `cwebp -resize <width> 0`: fit to width, preserve aspect ratio, never
+upscale. Sources already at the target width pass through unfiltered.
+
+### Build profile is load-bearing for thumbnail speed
+
+`cwebp` was an optimised binary, so the app's build profile never affected thumbnail speed. Now that
+decode/resize/encode happen in Rust, an unoptimised build is catastrophic — an 8000×4500 JPEG took
+**21s** in a stock debug build against 0.28s for `cwebp`, which made `tauri dev` unusable for real
+runs. `Cargo.toml` sets `[profile.dev.package."*"] opt-level = 3`, optimising dependencies while
+leaving our own crate unoptimised and debuggable. Do not remove it.
+
+With that in place, **release beats `cwebp` on every asset measured**:
+
+| Source | `cwebp` | Release | Debug |
+|---|---|---|---|
+| 1920×1080 PNG | 50ms | **28ms** | 30ms |
+| 8000×4500 JPEG | 280ms | **247ms** | 885ms |
+| 8256×5504 JPEG | 450ms | **336ms** | 1126ms |
+| 16000×9000 JPEG | 850ms | **535ms** | 3078ms |
+
+A gap remains in debug for large **JPEG decode** specifically — PNG decode and the whole
+scale-plus-encode stage sit at release parity, but `zune-jpeg` stays ~4× slower. It is not the build
+profile: `debug-assertions = false`, `overflow-checks = false` and `codegen-units = 1` were each
+tested on a genuinely fresh build and none moved the number. For perf-sensitive local runs use
+`npm --prefix desktop run tauri dev -- --release`.
+
+DCT-domain scale-on-decode (via `jpeg-decoder`) was evaluated as a fix and **rejected**: only
+1.2–2.0× on JPEGs, while adding a second decoder, a CMYK fallback path, and off-by-one output
+dimensions (320×213 vs 320×214). Release already beats `cwebp`; the complexity was not worth it.
+
+### Throughput
+
+Measured on an M-series Mac, 320px WebP output:
+
+| Workload | Serialised in one process | Worker pool, 8-way |
+|---|---|---|
+| Single-page documents | ~35 pages/s | **86 pages/s** |
+| Multi-page documents | ~35 pages/s | **233 pages/s** |
+
+Multi-page scales better because one worker per *document* amortises process spawn and PDFium init
+across all its pages. Concurrency is not managed here — it comes from the pipeline's existing
+8-at-a-time batching.
+
+For Office documents none of this dominates: LibreOffice's conversion is ~6.4s per deck against
+PDFium's ~28ms per page, so the rasterising step is under half a percent of the work.
+
+There is deliberately **no test** that renders concurrently in-process — one was written and it
+segfaulted the whole test binary. A weaker earlier version rendered a single shared file from eight
+threads and *passed while the code was broken*, so do not reintroduce that as reassurance. Tests
+that touch PDFium hold a shared mutex, because cargo runs tests on parallel threads and two of them
+entering PDFium at once reproduces the crash.
+
+### LibreOffice is bundled
+
+Office documents (PowerPoint, Word, Excel) are converted to PDF by LibreOffice, after which the
+PDFium path above rasterises them. It ships **inside the app** on macOS and Windows — ~284MB
+download, ~800MB on disk — so a clean machine needs no install step. On Linux it is a declared
+package dependency instead; see [Third-party engines](/reference/third-party-engines) for the
+licensing and signing consequences.
+
+Resolution precedence, in `render::soffice_from`:
+
+1. **Bundled** engine under `resources/native/libreoffice/`
+2. `soffice` on `PATH`
+3. The vendor's own install location (`/Applications/LibreOffice.app/...`, `C:\Program Files\...`),
+   which its installer does not add to `PATH`
+
+Bundled must win, and a test pins that. The shipped copy is the version whose deck rendering was
+reviewed and accepted; a different version installed on the host would silently change how client
+decks look. The host fallbacks exist for `tauri dev` before `npm run deps:native` has run, and for
+Linux.
+
+Each conversion gets a private profile via `-env:UserInstallation`. This is **not optional**:
+LibreOffice locks a single shared profile, so eight concurrent conversions would otherwise serialise
+or fail outright.
+
+Rendering cost is ~6.4s per deck, which dominates the Office path completely — PDFium's ~28ms per
+page is under half a percent of it.
+
+## Per-page previews
+
+A document gets a **title thumbnail** (unchanged, and the only one that reaches packages and target
+destinations) plus a folder of per-page previews for the web portal:
+
+```text
+(PRD)(SlD) Deck v2.pptx
+(PRD)(SlD) Deck v2-thumb.webp     ← title page — packages, target destinations, R2 thumbnails
+(PRD)(SlD) Deck v2-thumb/         ← per-page previews, web preview only
+    001.webp  002.webp  …
+    pages.json
+```
+
+The folder name ends in `-thumb`, which is load-bearing rather than cosmetic: `name.includes('-thumb')`
+is already the exclusion filter across the pipeline's walkers, and `scan.ts` applies it *before*
+branching on file-vs-directory, so the folder is invisible to OUT collection and packaging with no new
+rules. Page files are named zero-padded so lexical order is page order in shells, R2 listings and the
+portal alike.
+
+Eligible types are PDF, PowerPoint and Word. **Spreadsheets are capped at one page** — a wide sheet
+printed to PDF paginates into dozens of near-empty slices, so the full allowance would spend real time
+producing useless images and then show them to a client.
+
+### One conversion, one worker, per document
+
+`generate_document_previews` produces the thumbnail *and* the pages from a **single** LibreOffice
+conversion. That conversion is ~6.4s per deck against ~28ms per rasterised page, so doing it once for
+the thumbnail and again for the pages would nearly double the cost of every document in the library.
+Page 1 is rasterised once and reused as both the thumbnail and `001.webp`.
+
+One worker process per **document**, not per page — spawn plus PDFium init is ~12ms, which would
+double the cost of a 28ms page but disappears when amortised across a document's pages. Measured: a
+20-page PDF renders in 0.93s end to end, including spawn.
+
+### `pages.json` decides what is current
+
+Existence checking — how the plain `-thumb.webp` cache works — cannot see the three things that
+invalidate previews: the source changed, an administrator changed the page limit, or the width/quality
+settings changed. So the manifest records its inputs:
+
+```json
+{ "version": 1, "srcMtimeMs": …, "srcSize": …,
+  "total": 7, "rendered": 5, "limit": 5, "width": 320, "quality": 70 }
+```
+
+The source is fingerprinted by **mtime + size, not a content hash** — hashing would mean reading every
+document in the library on every run, some 20MB+, for a check whose whole purpose is to make re-runs
+cheap. This matches how `r2Cache` already decides whether an upload can be skipped.
+
+Two ordering rules that are easy to break:
+
+**The manifest is written last**, after every page is on disk. It is what marks the set complete, so
+writing it earlier would let an interrupted run leave a directory that passes the currency check while
+missing files. `previews_current` also verifies that every page the manifest promises actually exists.
+
+**The page folder is cleared before re-rendering.** A shrinking page count — an edited deck, or a
+lowered limit — would otherwise leave orphans, and orphans past `rendered` are invisible locally and
+visible to a client.
+
+`total` is always the document's real page count, even when `rendered` is lower. That difference is
+what lets the portal show the rendered pages and then tell the viewer to download the asset for the
+rest.
 
 ## Video is not handled here
 

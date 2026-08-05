@@ -38,7 +38,9 @@ export { slugifyKeyPart, parentKeyForLeaf } from './supabase/taxonomyKeys';
 export { cdnStemKey, resolveCdnIdentity } from './supabase/identity';
 
 /* ── Queries ──────────────────────────────────────────────────────────────── */
-export { fetchExistingStableIds, fetchAssetStats, fetchAssetLevels } from './supabase/assetQueries';
+export {
+  fetchExistingStableIds, fetchAssetStats, fetchAssetLevels, fetchPreviewPageLimit,
+} from './supabase/assetQueries';
 export { reconcileCdnObjects } from './supabase/cdnReconcile';
 export { syncStreamVideos } from './supabase/streamSync';
 export { requestStreamUpload, type StreamUploadResult } from './supabase/streamUpload';

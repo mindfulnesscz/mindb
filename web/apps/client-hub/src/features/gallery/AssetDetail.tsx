@@ -12,6 +12,7 @@ import { StarRating } from './StarRating'
 import { AssetCommentsPanel } from './panels/AssetCommentsPanel'
 import { AssetStatusPanel } from './panels/AssetStatusPanel'
 import { AssetPreviewPanel } from './panels/AssetPreviewPanel'
+import { DocumentPagesPanel } from './panels/DocumentPagesPanel'
 import { DisconnectedSubAssetsPanel } from './panels/DisconnectedSubAssetsPanel'
 import { useAssetChildren } from './hooks/useAssetChildren'
 import { useDetailFocus } from './hooks/useDetailFocus'
@@ -189,6 +190,13 @@ export default function AssetDetail({
           accent={accent}
           bumpDownloads={bumpDownloads}
           visibleDests={visibleDests}
+        />
+
+        {/* Page previews for a document. Renders nothing for anything without them, so it sits
+            unconditionally between the preview and the title rather than behind a branch here. */}
+        <DocumentPagesPanel
+          asset={selectedAsset}
+          onDownload={bumpDownloads}
         />
 
         {/* Title + meta */}

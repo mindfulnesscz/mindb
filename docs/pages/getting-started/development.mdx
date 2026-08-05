@@ -14,7 +14,9 @@ For who owns which fields, see [Platform division](/getting-started/platform-div
 | Git | Source control and Nextra edit metadata |
 | Docker | Local Supabase for migration work only |
 
-Optional for thumbnail conversion: LibreOffice, Poppler (`pdftoppm`), WebP (`cwebp`).
+Thumbnail rendering needs no separately installed tools. `npm run setup` fetches the bundled engines
+(or `npm run deps:native` on its own) — PDFium and LibreOffice, ~290MB download and ~800MB on disk.
+See [Thumbnails](/desktop/thumbnails) and [Third-party engines](/reference/third-party-engines).
 
 ## 2. Clone and install
 
@@ -37,9 +39,27 @@ cp web/apps/client-hub/.env.local.example web/apps/client-hub/.env.local
 # VITE_SUPABASE_URL=http://127.0.0.1:54321
 # VITE_SUPABASE_ANON_KEY=<local anon from supabase status>
 # VITE_CDN_GATE_URL=http://localhost:8623
+# VITE_STREAM_DOMAIN=https://customer-<id>.cloudflarestream.com
 npm run db:start
-npm run db:reset
+npm run db:reset      # FIRST TIME ONLY — see the warning below
 ```
+
+### ⛔ `db:reset` destroys local data — local is not scratch space
+
+It drops and reseeds, which wipes
+`stream_uid` values for videos already provisioned on Cloudflare Stream, generated thumbnails and page
+previews, R2 upload caches, vocabulary, and any tenant configured by hand. None of that comes back from
+the seed. The failure then presents as a feature being broken rather than as missing data — a reset that
+wiped every `stream_uid` read as a video regression and cost a long hunt in the wrong place.
+
+To pick up new migrations **without** destroying anything:
+
+```bash
+npx supabase migration up      # applies pending migrations only
+```
+
+Reset only when you actually want a clean slate. The same rule is at the top of `CLAUDE.md`, because
+it applies to anyone — human or agent — working in this repository.
 
 Only the anon/publishable key belongs in browser/desktop config. Do **not** put the service-role key or permanent R2 keys in the desktop. Folders and OAuth tokens stay machine-local.
 
@@ -50,6 +70,19 @@ Never mix local Supabase with a shared R2 bucket for pipeline work.
 ### Gated delivery and video, locally
 
 Both work locally, and neither did before — not because of a design limit, but because four things were never wired up. If gated thumbnails are blank or video says "not provisioned", check these in order:
+
+**Read the symptom first, it narrows this fast.** Every gated IMAGE — the asset thumbnail and all of a
+document's page previews — is fetched through the gate. Video comes from Cloudflare Stream and does
+not touch it. So:
+
+| Symptom | Where to look |
+|---|---|
+| Images broken, video plays | The **gate is not running** (`lsof -ti:8623`). `npm run dev` treats it as optional; start it with `npm run dev:gate`. |
+| Video dead, images fine | Stream: `stream_uid` on the row, `CF_STREAM_TOKEN`, `VITE_STREAM_DOMAIN` |
+| Both dead | Supabase or the environment's config, not either delivery path |
+
+A browser showing broken-image icons with a `net::ERR_CONNECTION_REFUSED` on `:8623` is the first row,
+not a bug in whatever you just changed.
 
 1. **`supabase/functions/.env`** needs `R2_GATED_BUCKET=dc-hub-gated-dev`, `R2_GATED_DOMAIN=http://localhost:8623` and `CF_STREAM_TOKEN`. Without the first two, `r2-grant` hands the desktop no gated tier and the pipeline refuses to publish; without the third, `stream-token` and `stream-upload` answer 503 `Video not provisioned` — which reads like "this asset has no video".
 2. **The local edge runtime must have been *created* after the functions were added** — created, not started. Its function list is baked into the container's entrypoint when the container is built, even though `supabase/functions/` is bind-mounted, so a function added later answers `404 Function not found` forever. `docker start` brings the stale list back up, and a bare `supabase start` takes an "already running" fast path and skips recreation. Only a full cycle rebuilds it:

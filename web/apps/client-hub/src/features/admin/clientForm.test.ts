@@ -6,7 +6,10 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { getInitials, toSlug, emptyForm, clientToForm } from './clientForm'
+import {
+  getInitials, toSlug, emptyForm, clientToForm, parsePreviewPageLimit,
+  DEFAULT_PREVIEW_PAGE_LIMIT, MAX_PREVIEW_PAGE_LIMIT,
+} from './clientForm'
 import { assignableRoles, ROLE_OPTIONS, ROLE_LABELS } from './roles'
 import type { Client } from '@dc-hub/asset-library'
 import { DEFAULT_DIMENSION_LABELS } from '@dc-hub/database'
@@ -134,5 +137,41 @@ describe('assignableRoles', () => {
 
   it('every option has a display label', () => {
     for (const r of ROLE_OPTIONS) expect(ROLE_LABELS[r]).toBeTruthy()
+  })
+})
+
+describe('parsePreviewPageLimit', () => {
+  it('accepts whole numbers within the range the column allows', () => {
+    expect(parsePreviewPageLimit('0')).toBe(0)
+    expect(parsePreviewPageLimit('50')).toBe(50)
+    expect(parsePreviewPageLimit(String(MAX_PREVIEW_PAGE_LIMIT))).toBe(MAX_PREVIEW_PAGE_LIMIT)
+    expect(parsePreviewPageLimit('  12  ')).toBe(12)
+  })
+
+  it('treats zero as a real value, not as absent', () => {
+    // 0 is how an admin turns page previews OFF for a client. Returning null here would make the
+    // field un-clearable, because null means "leave the stored value alone".
+    expect(parsePreviewPageLimit('0')).toBe(0)
+    expect(parsePreviewPageLimit('0')).not.toBeNull()
+  })
+
+  it('rejects rather than clamps an out-of-range number', () => {
+    // Silently turning 5000 into 500 hides a typo the admin would otherwise notice, and the DB
+    // check constraint would reject it anyway — better to say so before the round trip.
+    expect(parsePreviewPageLimit(String(MAX_PREVIEW_PAGE_LIMIT + 1))).toBeNull()
+    expect(parsePreviewPageLimit('5000')).toBeNull()
+  })
+
+  it('rejects anything that is not a whole non-negative number', () => {
+    for (const bad of ['', '  ', 'abc', '1.5', '-1', '1e3', '10a', '٣']) {
+      expect(parsePreviewPageLimit(bad)).toBeNull()
+    }
+  })
+
+  it('defaults a new client to the same value as the column default', () => {
+    // emptyForm, DEFAULT_PREVIEW_PAGE_LIMIT, the migration's column default and the pipeline's
+    // fallback all have to agree, or the admin sees one number and the pipeline renders another.
+    expect(parsePreviewPageLimit(emptyForm().previewPageLimit)).toBe(DEFAULT_PREVIEW_PAGE_LIMIT)
+    expect(DEFAULT_PREVIEW_PAGE_LIMIT).toBe(50)
   })
 })

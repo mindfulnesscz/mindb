@@ -22,7 +22,7 @@ import { runPipeline, scanVersionMap, deleteCdnObjects, type RunContext } from '
 import type { CloudUrlEntry } from '../../services/pipelineService';
 import {
   exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary, requestR2Grant, processRenameTasks,
-  fetchAssetLevels, reconcileCdnObjects, syncStreamVideos,
+  fetchAssetLevels, fetchPreviewPageLimit, reconcileCdnObjects, syncStreamVideos,
 } from '../../services/supabaseService';
 import { loadVocabulary } from '../../services/vocabService';
 import { notifyRunComplete } from '../../services/notifyService';
@@ -44,6 +44,9 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
     const cdnUrls      = new Map<string, string>();
     const originalUrls = new Map<string, string>();
     const cloudUrls    = new Map<string, CloudUrlEntry[]>();
+    /* Page counts from the render step, carried to the Supabase sync so the portal knows how many
+       pages it can show and how many the document actually has. */
+    const pageCounts   = new Map<string, { total: number; rendered: number }>();
 
     /* ── Pre-run: vocabulary, then the storage grant ─────────────────────────── */
     // The client IS a DB row — its id is the identity, no name resolution. Sync runs as the
@@ -77,6 +80,7 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
 
     let r2Config: RunContext['r2'];
     let assetLevels: Map<string, string> | undefined;
+    let previewPageLimit: number | undefined;
     if (sbConfig && clientId && (settings.doThumbnails || settings.doCdnOriginals)) {
       try {
         const grant = await requestR2Grant(sbConfig, clientId);
@@ -113,6 +117,14 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
            the reconciler picks up anything that lands wrong. */
         assetLevels = await fetchAssetLevels(clientId, sbConfig);
         log('dim', `  ${assetLevels.size} known asset level(s) loaded for key routing`);
+
+        /* How many pages of a document get previewed is an admin setting on the client row, so it
+           comes from the same place `perm` does. A failed read leaves it undefined and the pipeline
+           uses the documented default rather than an unbounded render. */
+        previewPageLimit = await fetchPreviewPageLimit(clientId, sbConfig) ?? undefined;
+        if (previewPageLimit !== undefined) {
+          log('dim', `  Page-preview limit for this client: ${previewPageLimit}`);
+        }
       } catch (e) {
         log('error', `  ✕  CDN steps disabled — ${e}`);
       }
@@ -127,6 +139,8 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
       cdnUrls,
       originalUrls,
       assetLevels,
+      previewPageLimit,
+      pageCounts,
       cloudUrls,
       cloudDestinations: cloudDests,
       localExportLayout:    resolveExportShape(runLocalDest ?? {}).exportLayout,
@@ -138,7 +152,7 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
     if (sbConfig && clientId) {
       await syncRunToPortal({
         effectiveSettings, collectedAssets, clientId, sbConfig, vocabData, vocabDirty,
-        cdnUrls, cloudUrls, originalUrls, r2Config, log, appendLog, setSupabaseSync,
+        cdnUrls, cloudUrls, originalUrls, pageCounts, r2Config, log, appendLog, setSupabaseSync,
       });
     }
 
@@ -157,6 +171,8 @@ async function syncRunToPortal(a: {
   cdnUrls: Map<string, string>;
   cloudUrls: Map<string, CloudUrlEntry[]>;
   originalUrls: Map<string, string>;
+  /** absPath → page-preview counts, so the sync can record them on the asset row. */
+  pageCounts: Map<string, { total: number; rendered: number }>;
   r2Config: RunContext['r2'];
   log: (type: string, msg: string) => void;
   appendLog: ReturnType<typeof usePipelineStore.getState>['appendLog'];
@@ -176,6 +192,7 @@ async function syncRunToPortal(a: {
       singles, a.clientId, a.vocabData, a.sbConfig, a.log,
       a.cdnUrls, a.cloudUrls, galleries, a.originalUrls,
       a.effectiveSettings.allowLargeDeletions,
+      a.pageCounts,
     );
     a.setSupabaseSync({
       created:      sbResult.created,
