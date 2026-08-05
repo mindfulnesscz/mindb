@@ -857,15 +857,6 @@ export type Database = {
           occurrences: number
         }[]
       }
-      profile_privileged_fields_unchanged: {
-        Args: {
-          p_can_create_clients: boolean
-          p_client_id: string
-          p_id: string
-          p_role: string
-        }
-        Returns: boolean
-      }
       send_error_digest: { Args: { p_window?: string }; Returns: number }
       send_error_test: { Args: { p_id: string }; Returns: number }
       update_user_access: {

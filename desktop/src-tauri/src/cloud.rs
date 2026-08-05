@@ -115,15 +115,12 @@ async fn dropbox_sharing_link(
 /// Uses Rust/reqwest — no WKWebView body-size or CSP restrictions.
 #[tauri::command]
 pub async fn upload_to_dropbox(
-    app:          tauri::AppHandle,
     file_path:    String,
     remote_path:  String,
     access_token: String,
     get_link:     bool,
 ) -> Result<DropboxUploadResult, String> {
     let client = reqwest::Client::new();
-    let file_path =
-        crate::path_policy::require_allowed_file(&app, &file_path, "Dropbox upload source")?;
 
     // Skip upload if the file already exists on Dropbox
     if dropbox_file_exists(&client, &access_token, &remote_path).await? {
@@ -136,7 +133,7 @@ pub async fn upload_to_dropbox(
     }
 
     let bytes = std::fs::read(&file_path)
-        .map_err(|e| format!("Cannot read {}: {e}", file_path.display()))?;
+        .map_err(|e| format!("Cannot read {file_path}: {e}"))?;
 
     // Dropbox's simple /files/upload endpoint is capped at 150 MB; larger files
     // must use a chunked upload session (start → append_v2 → finish).

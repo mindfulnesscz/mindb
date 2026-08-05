@@ -27,7 +27,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import type { Asset } from '@sotto/asset-library'
+import type { Asset } from '@dc-hub/asset-library'
 import { fetchChildAssets, fetchVariants, deleteAssetAndMedia } from '../../../services/assetService'
 
 export function useAssetChildren(asset: Asset, isStaff: boolean, focusAssetId?: string) {

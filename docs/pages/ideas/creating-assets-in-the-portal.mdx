@@ -17,10 +17,10 @@ Two things about it as it stands:
 **It is desktop-shaped.** It assumes a pipeline caller with an `editor`/`admin` role and a
 `client_id`, and returns credentials plus a key prefix for a whole run.
 
-**Its credentials are tenant-prefix scoped.** `permission: 'object-read-write'` is paired with
-Cloudflare `prefixes`: `{client_id}/` for public objects and each level-prefixed namespace for that
-client in the gated bucket. A future browser upload should narrow this further to the one asset or
-object it is allowed to create; the current whole-tenant grant is shaped for a desktop pipeline run.
+**Its credentials are bucket-wide.** `permission: 'object-read-write'` scoped to the bucket, which
+is defensible for a trusted operator running a publish, and much less so for something a browser
+holds. The Cloudflare temp-credentials API supports narrowing by prefix or object, and a browser
+grant should use that.
 
 ## The harder half is identity, not upload
 

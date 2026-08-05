@@ -5,7 +5,7 @@
 1. Select a Google Cloud project and enable Drive API v3.
 2. Configure the OAuth consent screen. Use Internal for one Workspace organization; otherwise use External and add test users while the app remains in Testing.
 3. Create a **Web application** OAuth client and add `http://localhost:7623/callback` exactly.
-4. Copy client ID and client secret into Sotto.
+4. Copy client ID and client secret into DC Hub.
 5. Prefer a Shared Drive for team ownership. Copy the ID from its folder URL and grant each connecting user sufficient content permissions. Leave it blank only when personal My Drive is intended.
 6. Set a slash-separated remote folder without relying on a leading slash, then Connect.
 
@@ -13,9 +13,9 @@
 
 Google authorization uses browser PKCE plus the configured client secret and a random state. Scope is the broad `drive` scope. `access_type=offline` and `prompt=consent` request a refresh token. The same three-minute localhost callback listener used by Dropbox captures the code; token exchange currently runs from the webview.
 
-On each file, Sotto walks every remote-path segment. It searches for a matching folder beneath the current parent and creates missing folders. Shared Drive queries include `corpora=drive`, `driveId`, `includeItemsFromAllDrives`, and `supportsAllDrives`.
+On each file, DC Hub walks every remote-path segment. It searches for a matching folder beneath the current parent and creates missing folders. Shared Drive queries include `corpora=drive`, `driveId`, `includeItemsFromAllDrives`, and `supportsAllDrives`.
 
-New files up to 5 MB upload as one multipart request (metadata + bytes); **larger files use a resumable session** (`uploadType=resumable`), so big assets upload past the multipart limit. Before uploading, Sotto looks up an existing same-name file in the target folder: matching size skips the upload; a different size updates the file in place (media `PATCH`, or a resumable update when large). Repeated runs therefore no longer create duplicates. With link generation enabled, it adds an `anyone/reader` permission and returns `webViewLink`; the permission response is not checked before returning.
+New files up to 5 MB upload as one multipart request (metadata + bytes); **larger files use a resumable session** (`uploadType=resumable`), so big assets upload past the multipart limit. Before uploading, DC Hub looks up an existing same-name file in the target folder: matching size skips the upload; a different size updates the file in place (media `PATCH`, or a resumable update when large). Repeated runs therefore no longer create duplicates. With link generation enabled, it adds an `anyone/reader` permission and returns `webViewLink`; the permission response is not checked before returning.
 
 ## Tradeoffs
 

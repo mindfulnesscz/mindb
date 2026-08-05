@@ -7,13 +7,13 @@ import {
   signOut as signOutCore,
   type EmailAuthType,
   type OAuthProvider,
-} from '@sotto/auth'
+} from '@dc-hub/auth'
 import { supabase, isConfigured, getConfig } from '../lib/supabase'
 import { configureErrorSink } from '../lib/reportError'
 import { useCdnCookie } from '../hooks/useCdnCookie'
-import type { ProfileRow } from '@sotto/database'
+import type { ProfileRow } from '@dc-hub/database'
 
-// Auth logic + types now live in the shared @sotto/auth package. Re-export the
+// Auth logic + types now live in the shared @dc-hub/auth package. Re-export the
 // types so existing importers (e.g. SignInModal) keep resolving them from here.
 export type { EmailAuthType, OAuthProvider }
 
@@ -22,7 +22,7 @@ interface AuthContextValue {
   profile: ProfileRow | null
   loading: boolean
   checkEmail: (email: string) => Promise<EmailAuthType>
-  sendMagicLink: (email: string, userData?: Record<string, string>, redirectTo?: string) => Promise<string | null>
+  sendMagicLink: (email: string, userData?: Record<string, string>, redirectTo?: string, clientId?: string) => Promise<string | null>
   signInWithProvider: (provider: OAuthProvider, redirectTo?: string) => Promise<string | null>
   completeProfile: (fields: { name: string; company: string; country: string; industry: string }) => Promise<string | null>
   signOut: () => Promise<void>
@@ -99,14 +99,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     email: string,
     userData?: Record<string, string>,
     redirectTo?: string,
+    clientId?: string,
   ): Promise<string | null> {
     if (!supabase) return 'Supabase not configured'
     try {
       await sendMagicLinkCore(supabase, email, {
         emailRedirectTo: redirectTo ?? window.location.origin,
-        // Profile fields are descriptive only. Tenant access comes from the server-controlled
-        // domain allow-list or a later admin assignment, never caller-supplied signup metadata.
-        data: userData,
+        data: { ...userData, ...(clientId ? { client_id: clientId } : {}) },
       })
       return null
     } catch (e) {

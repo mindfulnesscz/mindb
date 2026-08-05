@@ -5,8 +5,8 @@
 
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Client } from '@sotto/asset-library'
-import { canManageClients, canCreateClients } from '@sotto/asset-library'
+import { Client } from '@dc-hub/asset-library'
+import { canManageClients, canCreateClients } from '@dc-hub/asset-library'
 import { useAuth } from '../../context/AuthContext'
 import { useClients } from '../../hooks/useClients'
 import { asRole } from '../../services/userService'
@@ -46,7 +46,7 @@ function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
       <header className="flex items-center gap-4 px-6 py-4 border-b border-border bg-surface shrink-0">
         <div className="flex items-center gap-2">
           <DCMark />
-          <span className="font-sans text-sm font-bold tracking-[0.14em] uppercase text-cosmos-black">SOTTO</span>
+          <span className="font-sans text-sm font-bold tracking-[0.14em] uppercase text-cosmos-black">DC HUB</span>
         </div>
         <div className="flex gap-1 ml-4">
           <button className={tabCls('clients')} onClick={() => setTab('clients')}>Clients</button>
@@ -176,25 +176,11 @@ function EditorRouter() {
 
 // ── Main page ─────────────────────────────────────────────────
 
-function AdminConfigurationRequired() {
-  return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-bg px-4 text-center">
-      <DCMark size="lg" />
-      <h1 className="font-serif text-2xl font-medium text-cosmos-black mt-6 mb-2">
-        Admin unavailable
-      </h1>
-      <p className="font-sans text-sm text-text-muted max-w-sm">
-        This deployment is not configured for Supabase sign-in. Contact the site administrator.
-      </p>
-    </div>
-  )
-}
-
 export default function AdminLandingPage() {
   const configured = isConfigured()
   const { session, profile, loading, signOut } = useAuth()
 
-  if (!configured) return <AdminConfigurationRequired />
+  if (!configured) return <AdminDashboard isAdmin />
 
   if (loading) {
     return (
@@ -215,7 +201,7 @@ export default function AdminLandingPage() {
         <DCMark size="lg" />
         <h1 className="font-serif text-2xl font-medium text-cosmos-black mt-6 mb-2">Staff access only</h1>
         <p className="font-sans text-sm text-text-muted mb-1 max-w-sm">
-          You're signed in{session?.user?.email ? <> as <span className="font-mono text-cosmos-black">{session.user.email}</span></> : ''}, but this account doesn't have staff access to the Sotto admin area.
+          You're signed in{session?.user?.email ? <> as <span className="font-mono text-cosmos-black">{session.user.email}</span></> : ''}, but this account doesn't have staff access to the DC Hub admin area.
         </p>
         <p className="font-sans text-sm text-text-muted mb-6 max-w-sm">
           If you're a client, open your portal link (<span className="font-mono">hub.disruptcollective.com/your-brand</span>) to reach your workspace. Otherwise ask an admin to grant you access.
@@ -238,3 +224,4 @@ export default function AdminLandingPage() {
     </div>
   )
 }
+

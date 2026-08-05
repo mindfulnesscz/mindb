@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { canRate, type Role } from '@sotto/asset-library'
+import { canRate, type Role } from '@dc-hub/asset-library'
 import { fetchMyRating, upsertRating } from '../../../services/ratingService'
 import { reportError } from '../../../lib/reportError'
 import { isConfigured } from '../../../lib/supabase'

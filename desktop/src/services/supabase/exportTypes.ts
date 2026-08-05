@@ -19,9 +19,7 @@ export interface StableRow {
   stable_id: string;
   child_id: string;
   thumbnail_url: string | null;
-  download_url?: string | null;
   download_key?: string | null;
-  preview_page_count?: number | null;
   parent_id: string | null;
   variant_of: string | null;
   /** Access level as the DATABASE has it — portal-owned after creation, so the pipeline
@@ -53,8 +51,6 @@ export interface ChildWrite {
 export interface ReadmeTarget {
   packageDir: string;
   stableId: string;
-  /** The planner-selected primary, which is not necessarily c1 in a migrated manifest. */
-  primaryKey: string;
   stem: string;
   /** What this run WOULD write for a brand-new row. For a row that already exists the readme
    *  shows the database's value instead — perm and status are portal-owned once created, and a

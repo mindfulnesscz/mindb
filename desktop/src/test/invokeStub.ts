@@ -39,10 +39,6 @@ class InvokeStub {
    * arguments handed to Rust rather than anything the fake does with them.
    */
   replies = new Map<string, unknown>();
-  private thumbnailFingerprints = new Map<
-    string,
-    { mtimeMs: number; size: number; width: number; quality: number }
-  >();
 
   reset(): void {
     this.calls = [];
@@ -52,7 +48,6 @@ class InvokeStub {
     this.thumbnailFails = false;
     this.documentPages = 1;
     this.replies = new Map();
-    this.thumbnailFingerprints = new Map();
   }
 
   /** Args of every call to `cmd`, in order. */
@@ -72,31 +67,9 @@ class InvokeStub {
   invoke = async (cmd: string, args: Record<string, unknown> = {}): Promise<unknown> => {
     this.calls.push({ cmd, args });
     switch (cmd) {
-      case 'files_equal':
-        return vfs.sameContent(
-          args.sourcePath as string,
-          args.destinationPath as string,
-        );
       case 'generate_thumbnail': {
         if (this.thumbnailFails) throw new Error('thumbnail generation failed');
-        const info = await vfs.fsApi().stat(args.src as string);
-        const fingerprint = {
-          mtimeMs: info.mtime?.getTime() ?? -1,
-          size: info.size,
-          width: args.width as number,
-          quality: args.quality as number,
-        };
-        const previous = this.thumbnailFingerprints.get(args.dest as string);
-        if (vfs.hasFile(args.dest as string)
-            && previous
-            && previous.mtimeMs === fingerprint.mtimeMs
-            && previous.size === fingerprint.size
-            && previous.width === fingerprint.width
-            && previous.quality === fingerprint.quality) {
-          return false;
-        }
         vfs.put(args.dest as string, 'webp-bytes');
-        this.thumbnailFingerprints.set(args.dest as string, fingerprint);
         return true;
       }
       /* Documents take this path instead: ONE call produces the title thumbnail and the page

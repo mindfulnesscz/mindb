@@ -103,7 +103,7 @@ workerd. That matters: a suite that needs a container is a suite that stops bein
 # a real session from the seeded local admin
 TOKEN=$(curl -s -X POST "http://127.0.0.1:54321/auth/v1/token?grant_type=password" \
   -H "apikey: $LOCAL_ANON_KEY" -H 'Content-Type: application/json' \
-  -d '{"email":"admin@acme.test","password":"sotto-local"}' | jq -r .access_token)
+  -d '{"email":"admin@acme.test","password":"dchub-local"}' | jq -r .access_token)
 
 # seed a local object (note --local, not --remote)
 npx wrangler r2 object put \

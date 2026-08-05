@@ -1,6 +1,6 @@
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { appDataDir, join } from '@tauri-apps/api/path';
-import { type VocabularyData, type VocabTag, type Slot } from '@sotto/domain';
+import { type VocabularyData, type VocabTag, type Slot } from '@dc-hub/domain';
 import { activeEnvironment } from '../store/environmentStore';
 import { makeHeaders, sbFetch } from './supabase/rest';
 
@@ -149,18 +149,10 @@ async function readLocalCache(clientId: string | null): Promise<VocabularyData |
  */
 export async function loadVocabulary(
   clientId: string | null,
-  opts: {
-    forceFromDb?: boolean;
-    preferLocal?: boolean;
-    persistCache?: boolean;
-    /** Refuse the local fallback when the caller needs proof that this read is current. */
-    requireDb?: boolean;
-  } = {},
+  opts: { forceFromDb?: boolean; preferLocal?: boolean } = {},
 ): Promise<VocabularyData> {
   const forceFromDb = opts.forceFromDb ?? false;
   const preferLocal = opts.preferLocal ?? false;
-  const persistCache = opts.persistCache ?? true;
-  const requireDb = opts.requireDb ?? false;
 
   if (clientId && !forceFromDb) {
     const local = await readLocalCache(clientId);
@@ -173,12 +165,9 @@ export async function loadVocabulary(
   if (clientId) {
     const fromDb = await fetchTagsFromDb(clientId);
     if (fromDb) {
-      if (persistCache) {
-        await saveVocabularyCache({ ...fromDb, _unpublished: false }, clientId).catch(console.warn);
-      }
+      await saveVocabularyCache({ ...fromDb, _unpublished: false }, clientId).catch(console.warn);
       return { ...fromDb, _unpublished: false };
     }
-    if (requireDb) throw new Error('Portal vocabulary could not be refreshed');
   }
 
   // DB unavailable — fall back to any local cache (including empty).

@@ -1,5 +1,5 @@
 /**
- * Ask the running Sotto desktop app to reveal a package in Finder / Explorer.
+ * Ask the running DC Hub desktop app to reveal a package in Finder / Explorer.
  * Bridge: http://127.0.0.1:7624 (started with the desktop app).
  */
 const REVEAL_URL = 'http://127.0.0.1:7624/reveal'
@@ -24,7 +24,7 @@ export async function revealInDesktop(clientId: string, stableId: string): Promi
     return {
       ok: false,
       desktopMissing: true,
-      error: 'Sotto desktop is not running (or the reveal bridge is offline). Open the desktop app with this client selected, then try again.',
+      error: 'DC Hub desktop is not running (or the reveal bridge is offline). Open the desktop app with this client selected, then try again.',
     }
   }
 }

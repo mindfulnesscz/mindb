@@ -12,7 +12,7 @@
  * that renders nowhere is a shortcode still baked into filenames that nobody can edit or delete.
  */
 
-import type { Client } from '@sotto/asset-library'
+import type { Client } from '@dc-hub/asset-library'
 import type { Tag } from '../../../services/tagService'
 
 const DIM_LABELS: Record<Tag['dimension'], string> = {

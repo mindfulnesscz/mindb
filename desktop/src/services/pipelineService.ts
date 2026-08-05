@@ -46,15 +46,6 @@ export { reconcileCdn, deleteCdnObjects } from './pipeline/cdnCleanup';
 
 export async function runPipeline(ctx: RunContext): Promise<RunStats> {
   const { settings, appendLog, finishRun } = ctx;
-  let stopReported = false;
-  const stopping = (checkpoint: string): boolean => {
-    if (!ctx.isStopping?.()) return false;
-    if (!stopReported) {
-      appendLog('warn', `  ⏹  Stop requested — halted before ${checkpoint}.`);
-      stopReported = true;
-    }
-    return true;
-  };
 
   const stats: RunStats = {
     packages: 0, copied: 0, skipped: 0, errors: 0,
@@ -67,11 +58,7 @@ export async function runPipeline(ctx: RunContext): Promise<RunStats> {
   try {
     // Single scan — shared by thumbnails (filtered) and Supabase sync (all stems)
     if (settings.sourceFolder) {
-      ctx.sourceReadErrors ??= new Set<string>();
-      const scanned = await scanAllAssets(settings.sourceFolder, settings, (path, error) => {
-        ctx.sourceReadErrors?.add(path);
-        appendLog('error', `  ✕  Cannot read source directory: ${path}\n     ${error}`);
-      });
+      const scanned = await scanAllAssets(settings.sourceFolder, settings);
       ctx.collectedAssets?.push(...scanned);
     }
 
@@ -79,8 +66,7 @@ export async function runPipeline(ctx: RunContext): Promise<RunStats> {
     // stable_id/child_id, not by the current filename, so a rename or a retitle never
     // orphans an uploaded object. Gated the same as the CDN steps themselves, so the
     // cost is only paid when its result is actually used.
-    if (!settings.dryRun && !stopping('CDN identity resolution')
-        && ctx.r2 && (settings.doThumbnails || settings.doCdnOriginals)) {
+    if (ctx.r2 && (settings.doThumbnails || settings.doCdnOriginals)) {
       try {
         ctx.cdnIdentity = await resolveCdnIdentity(ctx.collectedAssets ?? [], settings.outFolder || 'OUT');
       } catch (e) {
@@ -88,26 +74,17 @@ export async function runPipeline(ctx: RunContext): Promise<RunStats> {
       }
     }
 
-    if (settings.doThumbnails && !stopping('thumbnail generation')) await runThumbnails(ctx, stats);
-    if (settings.doThumbnails && !stopping('CDN thumbnail upload')) {
-      if (settings.dryRun && !ctx.r2) appendLog('dim', '  [DRY] would upload thumbnails to CDN');
-      else if (ctx.r2) await runCdnUpload(ctx, stats);
-    }
+    if (settings.doThumbnails) await runThumbnails(ctx, stats);
+    if (settings.doThumbnails && ctx.r2) await runCdnUpload(ctx, stats);
     /* After the thumbnail upload, and gated on the same setting that produced the previews. R2 is
        the ONLY place page previews are published — they are deliberately excluded from packages and
        target destinations — so without this the portal's page viewer has nothing to read. */
-    if (settings.doThumbnails && !stopping('CDN page-preview upload')) {
-      if (settings.dryRun && !ctx.r2) appendLog('dim', '  [DRY] would upload and reconcile CDN page previews');
-      else if (ctx.r2) await runPagesUpload(ctx, stats);
-    }
-    if (settings.doCdnOriginals && !stopping('CDN original upload')) {
-      if (settings.dryRun && !ctx.r2) appendLog('dim', '  [DRY] would upload originals to CDN');
-      else if (ctx.r2) await runOriginalUpload(ctx, stats);
-    }
-    if (settings.doDistribute && !stopping('package distribution')) await runDistribute(ctx, stats);
-    if (settings.doPublish && !stopping('local publish')) await runPublish(ctx, stats);
-    if (settings.doFlatExport && !stopping('cloud export')) await runCloudExport(ctx, stats);
-    if (settings.doObsidian && !stopping('DAM publish')) {
+    if (settings.doThumbnails && ctx.r2) await runPagesUpload(ctx, stats);
+    if (settings.doCdnOriginals && ctx.r2) await runOriginalUpload(ctx, stats);
+    if (settings.doDistribute) await runDistribute(ctx, stats);
+    if (settings.doPublish)    await runPublish(ctx, stats);
+    if (settings.doFlatExport) await runCloudExport(ctx, stats);
+    if (settings.doObsidian) {
       await runObsidian(ctx, stats);
     }
   } catch (e) {
@@ -116,6 +93,6 @@ export async function runPipeline(ctx: RunContext): Promise<RunStats> {
   }
 
   const hasIssues = stats.errors > 0 || stats.skipped > 0;
-  if (!ctx.deferFinish) finishRun(stats, hasIssues);
+  finishRun(stats, hasIssues);
   return stats;
 }

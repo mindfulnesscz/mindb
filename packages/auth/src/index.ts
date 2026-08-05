@@ -1,4 +1,4 @@
-/* @sotto/auth — auth logic shared by the web portal and the desktop app.
+/* @dc-hub/auth — auth logic shared by the web portal and the desktop app.
  *
  * Both clients sign in against the *same* Supabase project, profiles, and roles.
  * What is shared lives here: the typed client factory and the provider-agnostic
@@ -15,10 +15,10 @@
  * returning an error string instead of throwing — wrap them at the call site.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import type { Database } from '@sotto/database'
+import type { Database } from '@dc-hub/database'
 
-/** A typed client bound to the Sotto schema. */
-export type SottoClient = SupabaseClient<Database>
+/** A typed client bound to the DC Hub schema. */
+export type DcHubClient = SupabaseClient<Database>
 
 /** Result of the anonymous `check_email_auth` pre-flight. */
 export type EmailAuthType = 'staff' | 'whitelisted' | 'returning' | 'unknown'
@@ -48,7 +48,7 @@ export interface AuthClientOptions {
 export function createAuthClient(
   config: AuthClientConfig,
   options: AuthClientOptions = {},
-): SottoClient {
+): DcHubClient {
   return createClient<Database>(config.url, config.anonKey, {
     auth: {
       flowType: 'pkce',
@@ -62,7 +62,7 @@ export function createAuthClient(
 
 /** Anonymous pre-flight: which sign-in flow an email should get. Throws on RPC
  *  error. */
-export async function checkEmailAuth(client: SottoClient, email: string): Promise<EmailAuthType> {
+export async function checkEmailAuth(client: DcHubClient, email: string): Promise<EmailAuthType> {
   const { data, error } = await client.rpc('check_email_auth', { p_email: email })
   if (error) throw new Error(error.message)
   return (data as EmailAuthType) ?? 'unknown'
@@ -79,7 +79,7 @@ export interface MagicLinkOptions {
 
 /** Send a magic link / OTP. Throws on error. */
 export async function sendMagicLink(
-  client: SottoClient,
+  client: DcHubClient,
   email: string,
   options: MagicLinkOptions,
 ): Promise<void> {
@@ -106,7 +106,7 @@ const PROVIDER_SCOPES: Record<OAuthProvider, string> = {
 /** Begin an OAuth sign-in. Throws on error. On success the browser navigates
  *  to the provider, so control does not return to the caller. */
 export async function signInWithProvider(
-  client: SottoClient,
+  client: DcHubClient,
   provider: OAuthProvider,
   redirectTo: string,
 ): Promise<void> {
@@ -117,6 +117,6 @@ export async function signInWithProvider(
   if (error) throw new Error(error.message)
 }
 
-export async function signOut(client: SottoClient): Promise<void> {
+export async function signOut(client: DcHubClient): Promise<void> {
   await client.auth.signOut()
 }

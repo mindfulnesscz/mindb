@@ -1,4 +1,4 @@
-/* @sotto/domain — the asset domain, shared by the desktop app and the web portal.
+/* @dc-hub/domain — the asset domain, shared by the desktop app and the web portal.
  *
  * Everything here is PLATFORM-FREE by contract: no Tauri, no Supabase, no React, no
  * filesystem, no network, no `window`. Pure functions and types over strings and plain

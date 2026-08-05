@@ -155,7 +155,7 @@ which breaks the "unedited" acceptance criterion in Phases 2 and 5.
 | `../../context/RoleContext` `useRole` | **throws** without a provider (`RoleContext.tsx:99`) |
 | `../../services/assetService` (`fetchAsset`) | `openAsset`'s sibling resolution |
 | `./hooks/useStreamMedia` | Cloudflare Stream URL building |
-| `@sotto/database` `DEFAULT_DIMENSION_LABELS` | **has no alias in `vitest.config.ts`** — resolves only through the workspace symlink to a `.ts` entry. Verify it resolves before writing the suite; add an alias if not. |
+| `@dc-hub/database` `DEFAULT_DIMENSION_LABELS` | **has no alias in `vitest.config.ts`** — resolves only through the workspace symlink to a `.ts` entry. Verify it resolves before writing the suite; add an alias if not. |
 | The `AssetDetail` service surface | the "clicking a card opens the drawer" case renders the real `AssetDetail`. Copy the ~8 stubs from `AssetDetail.characterization.test.tsx:19-75` (`ratingService`, `commentService`, `assetService`, `eventService`, `destinationService`, `assetActions`, `supabase`, `ImageLightbox`) or stub `AssetDetail` itself and assert on its props. |
 
 **Acceptance:** tests pass against unmodified `GalleryView`. No production file changed in this phase.

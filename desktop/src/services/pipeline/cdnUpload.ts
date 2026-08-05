@@ -16,7 +16,7 @@ import { invoke } from '@tauri-apps/api/core';
 import {
   filterHighestVersions, storageTarget, assetUrl, tierFor,
   pageTarget, pagePrefix, pageObjectName, type AccessLevel, type ObjectKind,
-} from '@sotto/domain';
+} from '@dc-hub/domain';
 import type { RunContext, RunStats } from './types';
 import { cdnStemKey } from '../supabaseService';
 import { loadR2Cache, saveR2Cache, r2CacheKey, rememberR2Upload } from './r2Cache';
@@ -145,10 +145,6 @@ export async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<vo
     appendLog('dim', '  No assets to upload.');
     return;
   }
-  if (ctx.settings.dryRun) {
-    appendLog('dim', `  [DRY] would upload ${thumbFiles.length} thumbnail(s)`);
-    return;
-  }
 
   let uploaded = 0;
   let skipped  = 0; // no local thumb file, or already known uploaded per DB inventory
@@ -163,7 +159,6 @@ export async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<vo
 
   const CONCURRENCY = 8;
   for (let i = 0; i < thumbFiles.length; i += CONCURRENCY) {
-    if (ctx.isStopping?.()) return;
     const batch = thumbFiles.slice(i, i + CONCURRENCY);
     await Promise.all(batch.map(async ({ thumbPath, stem, srcPath }) => {
       // Check thumbnail exists locally before attempting upload
@@ -304,11 +299,6 @@ export async function runPagesUpload(ctx: RunContext, stats: RunStats): Promise<
     appendLog('dim', '  No page previews to upload.');
     return;
   }
-  if (ctx.settings.dryRun) {
-    const pages = docs.reduce((total, doc) => total + doc.rendered, 0);
-    appendLog('dim', `  [DRY] would upload ${pages} page preview(s) and prune stale page objects`);
-    return;
-  }
 
   let uploaded = 0, cached = 0, deduped = 0, pruned = 0, errors = 0;
   const r2Cache = await loadR2Cache();
@@ -319,7 +309,6 @@ export async function runPagesUpload(ctx: RunContext, stats: RunStats): Promise<
   // parallelising the many small uploads a multi-page deck produces.
   const CONCURRENCY = 8;
   for (const { srcPath, pagesDir, rendered } of docs) {
-    if (ctx.isStopping?.()) return;
     const identity = ctx.cdnIdentity?.get(cdnStemKey(srcPath));
     if (!identity) {
       appendLog('error',
@@ -342,7 +331,6 @@ export async function runPagesUpload(ctx: RunContext, stats: RunStats): Promise<
     );
 
     for (let i = 0; i < pageNumbers.length; i += CONCURRENCY) {
-      if (ctx.isStopping?.()) return;
       const batch = pageNumbers.slice(i, i + CONCURRENCY);
       await Promise.all(batch.map(async page => {
         const localPath = `${pagesDir}/${pageObjectName(page)}`;
@@ -467,10 +455,6 @@ export async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promi
     appendLog('dim', '  No assets to upload.');
     return;
   }
-  if (ctx.settings.dryRun) {
-    appendLog('dim', `  [DRY] would upload ${files.length} original(s) and remove stale siblings`);
-    return;
-  }
 
   let uploaded = 0;
   let cached   = 0; // local mtime+size match last upload — skipped without hashing or a network call
@@ -505,7 +489,6 @@ export async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promi
 
   const CONCURRENCY = 8;
   for (let i = 0; i < withKeys.length; i += CONCURRENCY) {
-    if (ctx.isStopping?.()) return;
     const batch = withKeys.slice(i, i + CONCURRENCY);
     await Promise.all(batch.map(async ({ srcPath, stem, ext, keyPrefix, objectKey, route }) => {
 
@@ -625,3 +608,4 @@ export function mimeFromExt(ext: string): string {
   };
   return m[ext.toLowerCase()] ?? 'application/octet-stream';
 }
+

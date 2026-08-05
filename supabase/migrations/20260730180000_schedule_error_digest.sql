@@ -53,7 +53,7 @@ begin
     headers := '{"Content-Type": "application/json"}'::jsonb,
     body    := jsonb_build_object(
                  'text',
-                 format('Sotto test message for *%s*. Error digests will arrive here daily at 08:00 UTC.',
+                 format('DC Hub test message for *%s*. Error digests will arrive here daily at 08:00 UTC.',
                         target.label))
   ) into req_id;
 
@@ -103,7 +103,7 @@ begin
       headers := '{"Content-Type": "application/json"}'::jsonb,
       body    := jsonb_build_object(
                    'text',
-                   format('*Sotto — %s errors in the last %s*%s%s',
+                   format('*DC Hub — %s errors in the last %s*%s%s',
                           case when target.notify_all then 'all' else 'new' end,
                           p_window, E'\n', summary))
     );

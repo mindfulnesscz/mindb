@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { Client, Role } from '@sotto/asset-library'
+import type { Client, Role } from '@dc-hub/asset-library'
 import {
   fetchDestinations,
   saveDestinations,

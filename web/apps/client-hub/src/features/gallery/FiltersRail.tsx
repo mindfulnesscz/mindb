@@ -6,7 +6,7 @@
  */
 
 import { useState, useEffect } from 'react'
-import { type FilterState, type Asset } from '@sotto/asset-library'
+import { type FilterState, type Asset } from '@dc-hub/asset-library'
 import { type TagsByDimension, type TagGroup } from '../../hooks/useTags'
 import { deleteDisconnectedAssets } from '../../services/assetService'
 import { STATUS_LABELS } from './statusLabels'

@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import type { Client } from '@sotto/asset-library'
+import type { Client } from '@dc-hub/asset-library'
 import type { Tag } from '../../../services/tagService'
 import { isGroup, isLeaf, buildDimensionTree, dimLabel, slugify, defaultTagKey, clientFileSlug } from './tagTree'
 

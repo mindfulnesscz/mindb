@@ -17,12 +17,10 @@ Gallery **parents** are keyed as `__gallery__:<path-under-OUT>`. Renaming a gall
 reuses the orphaned parent slot in the same package, so children stay attached while the card's
 tags and name update. File children stay rename-proof via content hash / version lineage.
 
-The same resolved pair keys R2 and Supabase. Both planners send every physical file through the
-same manifest resolver in the same lexical path order before selecting primaries or gallery-parent
-slots. A changed manifest must be persisted before CDN or database work continues; a write failure
-aborts instead of leaving an identity that existed only in memory. An asset outside a hashed package
-folder has no identity: the CDN steps and the sync both report it and skip it, rather than inventing
-a filename-based key.
+The same resolved pair keys R2 and Supabase. CDN resolution writes the manifest before metadata
+sync, so the later sync reads the recorded mapping rather than independently guessing again. An
+asset outside a hashed package folder has no identity: the CDN steps and the sync both report it
+and skip it, rather than inventing a filename-based key.
 
 Assets missing from disk are marked `disconnected`, never deleted — a disconnected row is
 reclaimed if the folder reappears.

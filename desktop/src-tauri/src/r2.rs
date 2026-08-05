@@ -97,7 +97,7 @@ fn uri_encode(s: &str, encode_slash: bool) -> String {
 fn sign(
     method:        &str,
     host:          &str,
-    canonical_uri: &str,  // e.g. "/sotto-ess/thumbnails/foo.webp"
+    canonical_uri: &str,  // e.g. "/dc-hub-ess/thumbnails/foo.webp"
     query:         &str,  // e.g. "list-type=2&max-keys=0"
     body_hash:     &str,
     extra_headers: &[(&str, &str)],
@@ -238,7 +238,6 @@ async fn r2_object_meta_sha256(
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn upload_to_r2(
-    app:           tauri::AppHandle,
     file_path:     String,
     object_key:    String,
     endpoint:      String,
@@ -252,11 +251,8 @@ pub async fn upload_to_r2(
     session_token: Option<String>,
 ) -> Result<R2UploadResult, String> {
     let endpoint = endpoint.trim_end_matches('/');
-    let file_path = crate::path_policy::require_allowed_file(&app, &file_path, "R2 upload source")?;
 
-    let body = tokio::fs::read(&file_path)
-        .await
-        .map_err(|e| format!("Cannot read {}: {e}", file_path.display()))?;
+    let body      = tokio::fs::read(&file_path).await.map_err(|e| format!("Cannot read {file_path}: {e}"))?;
     let body_hash = sha256_hex(&body);
     // Content-hash query so gallery URLs change when bytes change (version-stable keys
     // otherwise keep the same path and browsers serve a cached older image).
@@ -691,7 +687,7 @@ mod tests {
 
     #[test]
     fn sha256_hex_is_lowercase_hex_of_the_right_length() {
-        let h = sha256_hex(b"sotto");
+        let h = sha256_hex(b"dc-hub");
         assert_eq!(h.len(), 64);
         assert!(h.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
     }

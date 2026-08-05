@@ -19,8 +19,6 @@ The desktop uses fixed port 1420, docs uses 3001, and the web portal normally us
 | `staging` | `staging.hub.disruptcollective.com` (branch domain) | pushed to the **staging** Supabase project | rehearsal against hosted infra |
 | `main` | `hub.disruptcollective.com` (production) | pushed to **production**, approval-gated | what clients and editors use |
 
-Pull requests run the portal smoke suite against an ephemeral local Supabase stack on the GitHub runner. That stack is never linked to a hosted project and disappears with the job. Because the pull request already tested the merge candidate, the subsequent push to `dev` skips this database-backed E2E job; pushes to `staging` and `main` run it again alongside their separate deployment workflows. The CLI version used by these workflows is pinned rather than resolved from `latest` at runtime.
-
 Every deploy path follows git. Nothing publishes from a laptop:
 
 | Target | Deployed by |
@@ -58,10 +56,6 @@ Schema-dependent UI: merge the migration first (or in the same merge — migrati
 - Production project: Site URL `https://hub.disruptcollective.com`; redirect list adds the staging domain is NOT needed here.
 - Staging project: Site URL `https://staging.hub.disruptcollective.com`; add `https://*.vercel.app/**` to redirects so ephemeral previews can sign in.
 - Both: keep `http://localhost:7623/auth-callback` for desktop sign-in.
-- After the portal version containing `/auth/confirm` is deployed, set **Authentication → Email
-  Templates → Magic Link** to the subject and HTML in `supabase/templates/magic_link.html`. This is
-  dashboard configuration per project; migrations and Vercel do not deploy it. See the ordered
-  [scanner-safe magic-link rollout](/auth#scanner-safe-confirmation).
 
 **Supabase function secrets** (per project, once): `R2_BUCKET`, `R2_PUBLIC_DOMAIN`, `CF_R2_TOKEN`, `CF_ACCOUNT_ID`, `R2_PARENT_ACCESS_KEY_ID` — see [Database environments](/operations/database-environments#storage-tiers--environment-level-r2) and [Team staging setup](/getting-started/team-dev-setup).
 
@@ -99,14 +93,11 @@ No source file names a domain any more. Everything that used to is configuration
 |---|---|---|
 | CDN cookie scope | `COOKIE_DOMAIN` in `workers/cdn-gate/wrangler.jsonc`, per env | Must be the registrable domain shared by portal and CDN |
 | CDN origin allow-list | `ALLOWED_ORIGINS`, same file | Exact origins; `*` is invalid alongside credentials |
-| Edge-function origin allow-list | `ALLOWED_ORIGINS` secret, from `<env>.public.env` | Exact origins only; falls back to a built-in exact list when unset |
+| Edge-function origin allow-list | `ALLOWED_ORIGINS` secret, from `<env>.public.env` | Falls back to a built-in list when unset, so an un-migrated environment does not lock its own portal out |
 | Gate hostname | `R2_GATED_DOMAIN` | Also what the pipeline writes into `download_url` |
 | Bucket names | `wrangler.jsonc` + `<env>.public.env` | Must match each other |
 
-There is no wildcard exception for Vercel previews. Auth redirect configuration and function CORS
-are separate controls: `https://*.vercel.app/**` may be present in Supabase Auth redirects, but a
-preview can call browser-facing edge functions only when its exact origin is deliberately added to
-`ALLOWED_ORIGINS`. Unknown `*.vercel.app` projects are refused.
+The one deliberate exception is the `*.vercel.app` suffix rule in the CORS helpers: that is a platform fact about preview hostnames, not a per-deployment choice, so it stays in code.
 
 **The manual half** (platform-account actions the script deliberately doesn't automate — it prints this list at the end):
 
@@ -114,9 +105,6 @@ preview can call browser-facing edge functions only when its exact origin is del
 2. Cloudflare R2: create **both** buckets. The public one gets a public domain (r2.dev or custom) and CORS `GET`/`HEAD` from `*`. The gated one gets **no public access and no custom domain of its own** — the Worker binding being its only door is what makes a broken route fail closed instead of publishing the library. Then create an account-scoped R2 API token and put its Token value + Access Key ID into `supabase/functions/.env` before running (or re-run after).
 3. Vercel: point a project/branch at the site URL with this environment's URL + anon key.
 4. DNS for any custom domain.
-5. After Vercel serves `/auth/confirm`, paste `supabase/templates/magic_link.html` into Supabase
-   **Authentication → Email Templates → Magic Link** and verify the flow. `bootstrap-env.mjs` sets
-   Auth URLs but does not deploy hosted email templates.
 
 After the script runs and the manual list is done, an editor adds the environment in the desktop (Settings → Environments) and signs in. Nothing else is hand-assembled.
 
@@ -128,9 +116,6 @@ After the script runs and the manual list is done, an editor adds the environmen
 2. Environment variables: `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` — production values for **Production**, staging values for **Preview**. Branch builds also bake `.env.staging` / `.env.production` via `build:vercel`.
 3. **Domains** → add the custom domain, create the CNAME it asks for in Cloudflare DNS.
 4. Supabase → Auth → URL Configuration: set **Site URL** to that environment's portal domain and add it to the redirect allow-list — otherwise magic links fall back to the wrong host (staging → prod).
-5. Once that deployment serves `/auth/confirm`, paste `supabase/templates/magic_link.html` into
-   **Authentication → Email Templates → Magic Link**. Apply the portal first and template second;
-   reversing the order makes newly issued emails point at a route that is not live yet.
 
 From then on every push to `main` redeploys the portal automatically, and pull requests get preview URLs. No GitHub Action is involved; Vercel's git integration is the pipeline.
 
@@ -146,33 +131,7 @@ The web app reads Supabase URL/anon key from environment (Vercel env vars in pro
 
 Desktop workstations need filesystem permissions plus native dependencies for requested thumbnail formats. Port 7623 must be available for OAuth and sign-in callbacks. OneDrive device flow needs outbound HTTPS but no callback listener.
 
-R2 storage is **environment-level**: bucket and public domain are edge secrets (`R2_BUCKET`,
-`R2_PUBLIC_DOMAIN`); object keys carry the client UUID (after the level on the gated tier).
-Credentials are minted per run by `r2-grant` and Cloudflare limits them to that client's exact key
-prefixes (see [R2 CDN](/desktop/cdn)). Deploy migrations before UI that depends on them; regenerate
-types with `npm run db:types` into `@sotto/database`.
-
-### Adding a column: the desktop talks to every environment at once
-
-A migration reaches Production, Staging and Local at different times, but one desktop build talks to
-whichever the operator selects. PostgREST does not ignore a column it does not know — it rejects the
-**entire** request:
-
-| | Error | What the user sees |
-|---|---|---|
-| Reading it | `42703 column … does not exist` | "Could not load clients" — no client list at all |
-| Writing it | `PGRST204 Could not find the … column` | The parent row fails, then every child skips for want of a `parent_id` |
-
-Both happened when `preview_page_limit` and `preview_page_count` were added. So for any column that is
-not yet everywhere:
-
-- **Do not add it to a shared select list** such as `CLIENT_IDENTITY_SELECT` — that list is sent to
-  every environment, and one unknown name fails the whole query.
-- **Read it with its own query** that degrades to a default (`fetchPreviewPageLimit`).
-- **Probe before writing it**, once per run, and withhold the field if it is absent — withhold, not
-  send `null`, because a null still names the column.
-
-Add a column to a shared list only once every environment is guaranteed to have it.
+R2 storage is **environment-level**: bucket and public domain are edge secrets (`R2_BUCKET`, `R2_PUBLIC_DOMAIN`); object keys are prefixed `{client_id}/`. Credentials are minted per run by `r2-grant` (see [R2 CDN](/desktop/cdn)). Deploy migrations before UI that depends on them; regenerate types with `npm run db:types` into `@dc-hub/database`.
 
 ## Release artifacts
 

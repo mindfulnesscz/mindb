@@ -20,13 +20,9 @@ export interface StableRow {
   stable_id: string;
   child_id: string;
   thumbnail_url?: string | null;
-  download_url?: string | null;
   download_key?: string | null;
-  preview_page_count?: number | null;
   parent_id?: string | null;
   variant_of?: string | null;
-  perm?: string | null;
-  status?: string | null;
 }
 
 class RestStub {

@@ -1,17 +1,12 @@
 # Cloudflare R2 setup and publishing
 
-Sotto uses Cloudflare R2 for thumbnails and, when enabled, original files. Storage is **environment-level**: one pair of buckets per Supabase project (Production / Staging / Local), not per client.
+DC Hub uses Cloudflare R2 for thumbnails and, when enabled, original files. Storage is **environment-level**: one pair of buckets per Supabase project (Production / Staging / Local), not per client.
 
 Delivery is **two-tier**. Assets whose effective level is `public` go to the public bucket on the public domain, keyed `{client_id}/…`. Everything else goes to a **gated** bucket with no public access, keyed `{level}/{client_id}/…`, reachable only through the `cdn-gate` Worker — which authorizes from a signed cookie and the object key alone. See [Access levels and gated delivery](/cloud-storage/access-levels).
 
 > Links on the **public** tier are bearer links: anyone who knows the URL can download the object, and a URL that has been published cannot be un-published. Anything confidential belongs at `guest`, `client` or `internal`, which never touch the public domain.
 
-The desktop holds **no permanent R2 credentials**. Each pipeline run requests a short-lived grant
-from the `r2-grant` edge function. Cloudflare enforces the tenant scope on the credentials themselves:
-the public-bucket credential is limited to `{client_id}/`, and the gated credential is limited to
-`guest/{client_id}/`, `client/{client_id}/`, and `internal/{client_id}/`. A key for another client is
-rejected by R2 even if a caller constructs it directly. Logos are uploaded from the web admin via
-`r2-branding-upload` to `branding/{client_id}/logo.ext`.
+The desktop holds **no permanent R2 credentials**. Each pipeline run requests a short-lived grant from the `r2-grant` edge function. Logos are uploaded from the web admin via `r2-branding-upload` to `branding/{client_id}/logo.ext`.
 
 ## Before you start
 
@@ -113,7 +108,7 @@ deleted against the gated bucket is a silent no-op.
 
 ## Object keys
 
-Public asset keys start with the client UUID (or `branding/{client_id}/` for logos):
+Keys always start with the client UUID (or `branding/{client_id}/` for logos):
 
 | Kind | Key |
 |---|---|

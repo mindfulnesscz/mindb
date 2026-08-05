@@ -1,6 +1,6 @@
 # Database
 
-Sotto uses Supabase (Postgres). All tables are in the `public` schema with Row Level Security enabled.
+DC Hub uses Supabase (Postgres). All tables are in the `public` schema with Row Level Security enabled.
 
 ## Tables
 
@@ -157,6 +157,6 @@ Queue for taxonomy-driven filesystem updates (`tag_rename`, `tag_delete`, `asset
 | `update_user_access(...)` | admin | Role + member `client_id` + editor `client_members` |
 | `update_user_role(p_user_id, p_role)` | admin | Role-only helper — prefer `update_user_access` |
 | `get_user_client_members(p_user_id)` | authenticated | Editor memberships for admin UI |
-| `handle_new_user` / profile trigger | trigger | Auto-creates profile; only a verified email-domain allow-list match can set member `client_id` |
+| `handle_new_user` / profile trigger | trigger | Auto-creates profile; portal OTP can set member `client_id` |
 
 Schema changes ship only via `supabase/migrations/` — see [Database environments](/operations/database-environments). The `client` → `member` role rename is already in migration history.

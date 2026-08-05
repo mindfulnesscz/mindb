@@ -14,7 +14,7 @@ import { copyFile, mkdir, remove, exists } from '@tauri-apps/plugin-fs';
 import { join, dirname } from '@tauri-apps/api/path';
 import type { AppSettings } from '../../store/settingsStore';
 import type { LogType } from '../../store/pipelineStore';
-import { filterHighestVersions, buildVocabMap, translateExportName, isPreviewArtifact } from '@sotto/domain';
+import { filterHighestVersions, buildVocabMap, translateExportName, isPreviewArtifact } from '@dc-hub/domain';
 import { shouldSkip, isPackageFolder, isOutFolder, isPublishableFile } from './naming';
 import { listDir, collectFiles, isUnchanged } from './fs';
 

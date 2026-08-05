@@ -1,6 +1,6 @@
 /* The two query params that belong to the detail drawer rather than to the grid.
  *
- * Kept apart from `FILTER_PARAMS` (`@sotto/asset-library/filterUrl`) because they are scoped to
+ * Kept apart from `FILTER_PARAMS` (`@dc-hub/asset-library/filterUrl`) because they are scoped to
  * `/:slug/a/:assetId` and are not part of `FilterState` — `useFilterParams` treats them as foreign
  * and preserves them untouched, which is what lets a filter change happen without closing the
  * lightbox.

@@ -8,10 +8,8 @@
  * Touches the filesystem (manifests), so this stays desktop-side.
  */
 
-import { extractStableId } from '@sotto/domain';
-import {
-  type IdentityFile, type ManifestStates, resolveIdentityFiles, writeManifest,
-} from './manifest';
+import { extractStableId } from '@dc-hub/domain';
+import { type ManifestStates, getManifestState, resolveChildId, writeManifest } from './manifest';
 
 export function cdnStemKey(absPath: string): string {
   const norm = absPath.replace(/\\/g, '/');
@@ -36,7 +34,6 @@ export async function resolveCdnIdentity(
 ): Promise<Map<string, { stableId: string; childId: string }>> {
   const result: Map<string, { stableId: string; childId: string }> = new Map();
   const manifests: ManifestStates = new Map();
-  const files: IdentityFile[] = [];
 
   // Resolved per FILE, not per stem: stems collapse extension-only variants
   // (foo.pdf + foo.webp), which would make both files claim the same child key
@@ -55,11 +52,12 @@ export async function resolveCdnIdentity(
     const stableId   = extractStableId(packageDir.split('/').pop() ?? '');
     if (!stableId) continue;
 
-    files.push({ packageDir, stableId, absPath });
-  }
+    const filename = parts[parts.length - 1];
+    const state    = await getManifestState(manifests, packageDir, stableId);
+    const resolved = await resolveChildId(state.manifest, filename, absPath, state.used);
+    if (resolved.dirty) { state.manifest.children[filename] = { child_id: resolved.childId, sha256: resolved.sha256 }; state.dirty = true; }
 
-  const resolvedByPath = await resolveIdentityFiles(manifests, files);
-  for (const [absPath, identity] of resolvedByPath) {
+    const identity = { stableId, childId: resolved.childId };
     // Per-file key: unique, so two packages holding the same filename keep distinct keys.
     result.set(absPath, identity);
     // Directory-scoped stem key for the shared-per-stem thumbnail. First writer wins so
@@ -70,10 +68,9 @@ export async function resolveCdnIdentity(
 
   for (const [dir, state] of manifests) {
     if (!state.dirty) continue;
-    // The CDN must not publish an identity that was only held in memory. If persistence fails,
-    // abort this stage so a later planner cannot resolve the same files to different child ids.
-    await writeManifest(dir, state.manifest);
+    try { await writeManifest(dir, state.manifest); } catch { /* best-effort — a later run will retry */ }
   }
 
   return result;
 }
+

@@ -17,7 +17,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import type { Asset } from '@sotto/asset-library';
+import type { Asset } from '@dc-hub/asset-library';
 
 /* ── Service stubs — recorded so we can assert what the component asked for ── */
 

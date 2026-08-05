@@ -50,26 +50,18 @@ The desktop is a public client. Even when installed on a trusted employee workst
 
 ## Planned desktop sign-in flow
 
-The desktop reuses the web portal's email magic-link experience through Supabase's
-`signInWithOtp` API:
+The desktop should reuse the web portal's email OTP/magic-link experience:
 
 1. Start in a signed-out screen before loading privileged client controls.
 2. Ask for the operator's email address.
 3. Call the existing `check_email_auth` RPC.
 4. Send a Supabase OTP/magic link using authorization code flow with PKCE.
-5. Open the inert `/auth/confirm` link in the system browser and wait for an explicit
-   **Continue signing in** click, so a mail scanner cannot spend the token.
-6. Let Supabase verify the token and return through the loopback callback at
-   `http://localhost:7623/auth-callback`.
-7. Exchange the authorization code for a Supabase session in the webview that holds the PKCE verifier.
+5. Open the verification link in the system browser.
+6. Return through a registered desktop deep link or loopback callback.
+7. Exchange the authorization code for a Supabase session.
 8. Load the same `profiles` row used by the web portal.
 9. Allow desktop operation only for approved roles and client assignments.
 10. Attach the short-lived Supabase access token to every Control API request.
-
-The confirmation page is hosted by the web portal named in Auth's Site URL. Local desktop sign-in
-therefore requires the portal dev server at `http://localhost:5173`; hosted desktop sign-in requires
-the matching portal release and Magic Link template to be deployed first. See
-[Authentication → Scanner-safe confirmation](/auth#scanner-safe-confirmation).
 
 The initial role policy should permit `editor` and `admin`. If operators require narrower rights, introduce an explicit `operator` role rather than treating every authenticated member as a desktop publisher.
 

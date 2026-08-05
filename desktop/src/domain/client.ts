@@ -1,8 +1,8 @@
 /* Client domain — the portal's client identity, this machine's config, cloud destinations,
    and OAuth token types. */
 
-import { DEFAULT_DIMENSION_LABELS } from '@sotto/database';
-import type { ClientIdentity } from '@sotto/database';
+import { DEFAULT_DIMENSION_LABELS } from '@dc-hub/database';
+import type { ClientIdentity } from '@dc-hub/database';
 
 export type DestType = 'local' | 'dropbox' | 'onedrive' | 'gdrive';
 export type DestRole = 'internal' | 'client';
@@ -90,7 +90,7 @@ export function resolveExportShape(
 /**
  * The portal's identity for a client, plus what only this machine knows.
  *
- * `ClientIdentity` is shared with the portal (@sotto/database) rather than redeclared, so a field
+ * `ClientIdentity` is shared with the portal (@dc-hub/database) rather than redeclared, so a field
  * added to a client cannot exist on one side only. Everything below it is machine-local and is never
  * written to the database: folder paths, per-machine destination toggles, OAuth tokens.
  */

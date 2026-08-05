@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import type { Asset, Role } from '@sotto/asset-library'
+import type { Asset, Role } from '@dc-hub/asset-library'
 import {
   fetchDestinations, destinationsVisibleToRole, roleAtLeast, type PortalDestination,
 } from '../../../services/destinationService'

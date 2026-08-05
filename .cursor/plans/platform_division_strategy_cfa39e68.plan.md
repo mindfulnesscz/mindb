@@ -33,7 +33,7 @@ todos:
     content: "Sprint 5 (future): rename_tasks queue + desktop rename stage"
     status: completed
   - id: sprint-6-shared-types
-    content: "Sprint 6: @sotto/database package from supabase gen types; desktop + web consume; remove as any casts"
+    content: "Sprint 6: @dc-hub/database package from supabase gen types; desktop + web consume; remove as any casts"
     status: completed
   - id: sprint-6-critical-tests
     content: "Sprint 6: Vitest for identity matching, shortcode parsing, sync diff; wire npm run check in CI"
@@ -767,9 +767,9 @@ Web services bypass typing with **27 `as any` casts** across 9 files ([assetServ
 **Already improved:** `asset-library` is a shared web package; `npm run db:types` script exists.
 
 **Direct steps (Sprint 6 — do right after Sprint 1, alongside Step 0.5):**
-1. Create `packages/database/` (or `@sotto/database`) — output target for `supabase gen types typescript`
+1. Create `packages/database/` (or `@dc-hub/database`) — output target for `supabase gen types typescript`
 2. Change `db:types` script to write there; export `Database`, helper types (`Tables<>`, `Enums<>`)
-3. Add thin `@sotto/asset-library` adapters: `toPortalAsset(row: AssetRow): Asset` — **one** mapping layer
+3. Add thin `@dc-hub/asset-library` adapters: `toPortalAsset(row: AssetRow): Asset` — **one** mapping layer
 4. Desktop imports `Database` types for Supabase REST payloads; keep desktop-only `Client` as `DesktopClient` extending a `ClientRow` pick
 5. Replace all `as any` RPC calls with typed `supabase.rpc<'fn_name'>()` 
 6. Add CI check: `db:types` output committed and matches migrations

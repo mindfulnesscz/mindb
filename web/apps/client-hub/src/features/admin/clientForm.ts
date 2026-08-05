@@ -5,7 +5,7 @@
  * change here re-points a live link.
  */
 
-import type { Client } from '@sotto/asset-library'
+import type { Client } from '@dc-hub/asset-library'
 
 /* Mirrors the column default in 20260804120000_document_page_previews.sql and the pipeline's
    DEFAULT_PREVIEW_PAGE_LIMIT. All three must agree, or a client created here would render a

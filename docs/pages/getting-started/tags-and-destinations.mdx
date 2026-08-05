@@ -124,9 +124,9 @@ Internal-role destinations never write into `download_urls`. Details: [CDN and c
 
 When at least one destination has `allowRevealLocal` and the user’s role meets that dest’s `minRole`:
 
-1. An allowed production, staging, or local portal origin sends JSON `POST http://127.0.0.1:7624/reveal` with `{ clientId, stableId }`
+1. Portal calls `http://127.0.0.1:7624/reveal` with `{ clientId, stableId }`
 2. Desktop bridge (started with the app) looks up the client’s `sourceFolder`
-3. Walks without following directory symlinks for valid `.dchub.json` whose top-level `stable_id` matches exactly, then reveals the package folder
+3. Walks for `.dchub.json` whose `stable_id` matches, then reveals the package folder
 
 Desktop must be running with that client selected and a valid source folder. Without the bridge, the portal shows a clear “desktop not running” message.
 

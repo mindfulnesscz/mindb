@@ -3,7 +3,7 @@ import { DocsThemeConfig } from 'nextra-theme-docs'
 
 const config: DocsThemeConfig = {
   logo: (
-    <span style={{ fontWeight: 700, letterSpacing: '0.08em' }}>SOTTO</span>
+    <span style={{ fontWeight: 700, letterSpacing: '0.08em' }}>DC HUB</span>
   ),
   project: {},
   docsRepositoryBase: 'https://github.com/disruptcollective/dc-hub',
@@ -17,7 +17,7 @@ const config: DocsThemeConfig = {
     </>
   ),
   useNextSeoProps() {
-    return { titleTemplate: '%s — Sotto Docs' }
+    return { titleTemplate: '%s — DC Hub Docs' }
   },
 }
 

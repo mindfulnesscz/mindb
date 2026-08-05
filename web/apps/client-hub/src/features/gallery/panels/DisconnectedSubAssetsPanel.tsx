@@ -19,10 +19,9 @@
  */
 
 import { useState } from 'react'
-import type { Asset } from '@sotto/asset-library'
+import type { Asset } from '@dc-hub/asset-library'
 import { StreamReleaseError } from '../../../services/streamRelease'
 import { useStreamMedia } from '../hooks/useStreamMedia'
-import { AssetImage } from '../../../components/AssetImage'
 
 export interface DisconnectedSubAssetsPanelProps {
   /** Gallery children that went missing — labelled as images. */
@@ -99,12 +98,11 @@ export function DisconnectedSubAssetsPanel({
             >
               <div className="w-10 h-10 shrink-0 rounded-sm overflow-hidden bg-gray-150 flex items-center justify-center">
                 {src
-                  ? <AssetImage
+                  ? <img
+                      referrerPolicy="no-referrer"
                       src={src}
                       alt={asset.name}
                       className="w-full h-full object-cover opacity-60"
-                      fallbackClassName="w-full h-full"
-                      compact
                     />
                   : <span className="text-text-muted text-[13px] leading-none">
                       {asset.streamUid ? '🎞' : '⦾'}

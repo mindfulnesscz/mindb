@@ -1,4 +1,4 @@
-# Sotto — Codebase Audit, SWOT & Bulletproofing Refactor Plan
+# DC Hub — Codebase Audit, SWOT & Bulletproofing Refactor Plan
 
 _Prepared 2026-07-24. Based on a direct read of the repository at `/Users/petrmucha/Sites/localhost/dc-hub` (branch `fix/packages-export`). Focus: functionality and technical hardening._
 
@@ -6,7 +6,7 @@ _Prepared 2026-07-24. Based on a direct read of the repository at `/Users/petrmu
 
 ## 1. Executive summary
 
-Sotto is a well-conceived, monorepo digital-asset pipeline: a Tauri 2 + React desktop app that scans, transforms and publishes assets; a React/Vite Supabase-backed client portal; a Supabase database with edge functions; and a Nextra docs site. The architecture is coherent and the _domain thinking_ is unusually mature — the folder-based stable-identity design is a real differentiator and is cleanly implemented.
+DC Hub is a well-conceived, monorepo digital-asset pipeline: a Tauri 2 + React desktop app that scans, transforms and publishes assets; a React/Vite Supabase-backed client portal; a Supabase database with edge functions; and a Nextra docs site. The architecture is coherent and the _domain thinking_ is unusually mature — the folder-based stable-identity design is a real differentiator and is cleanly implemented.
 
 The gap between the current state and "bulletproof" is **not architecture — it is verification and containment**. Two of ~21,000 lines of TypeScript are covered by tests. Business logic is concentrated in a handful of 1,000–1,800-line service files. There is no linter. Error handling swallows failures into `console`. And there is at least one concrete multi-tenant data-leak in the database policies. None of these are hard to fix; together they are what stands between "works on David's machine" and "safe to put in front of paying clients."
 
@@ -105,7 +105,7 @@ stage modules, none over 400._
 
 ### Opportunities
 
-- **Extract a shared `@sotto/core` package** (identity, naming, taxonomy, Supabase types + data access) consumed by both desktop and web — kills duplication and the divergence risk in one move. The `web/packages` scaffold already proves the pattern.
+- **Extract a shared `@dc-hub/core` package** (identity, naming, taxonomy, Supabase types + data access) consumed by both desktop and web — kills duplication and the divergence risk in one move. The `web/packages` scaffold already proves the pattern.
 - **Characterization tests + fixtures** for the pipeline turn the biggest liability into the biggest confidence gain, and make the god-file decomposition safe.
 - **RLS policy tests** (pgTAP or seeded integration tests) make multi-tenant isolation a _proven_ property, which is a sellable trust signal for an agency-client product.
 - **Structured logging + error boundaries** convert silent failures into diagnosable events — directly reduces the "works on my machine" support burden.
@@ -331,15 +331,15 @@ web-only; code that receives its caller can serve both.
 Three facts make this much smaller than it first appears:
 
 1. **Desktop already depends on `@supabase/supabase-js`** (`^2.110.2`) and already holds a typed
-   `SottoClient` built by `@sotto/auth` — both apps share one auth client today.
+   `DcHubClient` built by `@dc-hub/auth` — both apps share one auth client today.
 2. **supabase-js accepts a custom `fetch`** (`createClient(url, key, { global: { fetch } })`), so
    desktop can keep Rust networking *and* use the typed query builder plus the generated
-   `Database` types from `@sotto/database`.
+   `Database` types from `@dc-hub/database`.
 3. **Desktop's `sbFetch` is already fetch-shaped** — it returns `{ ok, status, text(), json() }`.
    The adapter is essentially written.
 
-So 2c's seam is simply: shared query modules take a `SottoClient`; each app constructs that
-client with its own fetch. That is the `@sotto/auth` pattern extended, not a new invention.
+So 2c's seam is simply: shared query modules take a `DcHubClient`; each app constructs that
+client with its own fetch. That is the `@dc-hub/auth` pattern extended, not a new invention.
 
 - 🔎 To check during 2c: desktop's auth client uses the *default* webview fetch and works, which
   suggests the webview can reach Supabase directly and the Rust proxy may no longer be needed for
@@ -349,7 +349,7 @@ client with its own fetch. That is the `@sotto/auth` pattern extended, not a new
 
 | Step | Scope | State |
 | ---- | ----- | ----- |
-| 2a | `@sotto/domain` — extract the platform-free domain | ✅ **done** |
+| 2a | `@dc-hub/domain` — extract the platform-free domain | ✅ **done** |
 | 2b | `pipelineService` (1,894) → orchestrator + 12 stage modules | ✅ **done** |
 
 ##### 2b — `pipelineService` split (done 2026-07-29)
@@ -361,7 +361,7 @@ object, the stage order, and the settings flags that gate each stage. Everything
 | Module | Lines | Holds |
 | ------ | ----- | ----- |
 | `types.ts` | 70 | `RunContext`, `R2Config`, `CloudUrlEntry`, `VersionEntry`, `AssetVersions` |
-| `naming.ts` | 46 | the four settings-shaped adapters over `@sotto/domain` |
+| `naming.ts` | 46 | the four settings-shaped adapters over `@dc-hub/domain` |
 | `fs.ts` | 64 | `listDir`, `listDirLogged`, `collectFiles`, `isUnchanged` |
 | `r2Cache.ts` | 54 | mtime+size upload cache, public URL shape |
 | `collect.ts` | 81 | COLLECT stage (`runDistribute`) |
@@ -484,11 +484,11 @@ asset. Now `readFailed` gates stage 4, and a test covers it.
 
 **Also now visible:** the QUERIES group is platform-free apart from its caller — each function takes
 a `SupabaseConfig` and goes through `./rest`. Phase 3 can lift these into a package by passing the
-transport in, exactly as `@sotto/auth` already does. That is why the split was grouped this way
+transport in, exactly as `@dc-hub/auth` already does. That is why the split was grouped this way
 rather than by entity.
 
 
-##### 2a — `@sotto/domain` (done 2026-07-29)
+##### 2a — `@dc-hub/domain` (done 2026-07-29)
 
 Six modules moved out of `desktop/src/domain` into `packages/domain`, with their tests:
 `stableId`, `naming`, `version`, `vocabulary`, `filenameTranslator`, `assetGrouping`. They form a
@@ -588,7 +588,7 @@ is pinned to one exact version, verified by building and testing each tree after
 | `@vitejs/plugin-react` | 4.6.0 / 4.3.0 | **4.7.0** | |
 | `vitest` | root 4.1.10, desktop 3.2.7 | **4.1.10** | desktop 3→4: all 124 tests pass unchanged |
 | `@types/node` | 26 / 22 / 20 | **26.1.0** | three different ideas of the standard library |
-| `@supabase/supabase-js` | 2.110.2 / 2.110.0 | **2.110.8** | the client type `SottoClient` is built from |
+| `@supabase/supabase-js` | 2.110.2 / 2.110.0 | **2.110.8** | the client type `DcHubClient` is built from |
 | `react` + `react-dom` | 19.2.7 / 19.2.8 | **19.2.8** | |
 | `@types/react` + `-dom` | 19.1.8 / 19.2.17 | **19.2.17 / 19.2.3** | |
 
@@ -858,13 +858,13 @@ filenames that nobody can edit or delete. One test asserts every leaf lands in *
 - **Create `packages/core`** (or extend `web/packages/database`) holding: `ID_SUFFIX_PATTERN` + identity, naming/taxonomy, generated Supabase types (single source), and typed data-access functions.
 - **Generate `database.types.ts` from Supabase** in CI (`supabase gen types`) so types can never drift from the schema; delete hand-maintained copies.
 - **Consume `core` from both desktop and web.** Desktop's `supabaseService` and web's services become thin adapters over shared functions.
-- _Exit criteria:_ one identity regex, one type source, one client-service implementation; desktop imports `@sotto/core`.
+- _Exit criteria:_ one identity regex, one type source, one client-service implementation; desktop imports `@dc-hub/core`.
 
 #### What was already true
 
 Surveying first changed the shape of this phase. Two of the three exit criteria were **already met** by
 Phase 2: `ID_SUFFIX_PATTERN` has exactly one definition (`packages/domain/src/stableId.ts`), and
-`@sotto/database` was already the single type source, with the portal's `lib/database.types.ts` down
+`@dc-hub/database` was already the single type source, with the portal's `lib/database.types.ts` down
 to a two-line deprecated re-export. So this was not a consolidation job. It was a **drift** job.
 
 #### `packages/core` was NOT created — deliberately
@@ -910,7 +910,7 @@ Now there is one projection — `packages/database/src/clients.ts`:
 
 - `ClientIdentity` — the portal-owned facts. Desktop's `Client` **extends** it and adds only what is
   machine-local (folder paths, per-machine destination toggles, OAuth tokens); the portal's `Client` in
-  `@sotto/asset-library` **is** it, re-exported under the old name so no consumer changed. That is the
+  `@dc-hub/asset-library` **is** it, re-exported under the old name so no consumer changed. That is the
   standing goal in miniature: the portal as a slightly limited desktop, not a parallel implementation.
 - `CLIENT_IDENTITY_SELECT` — one column list, so the two apps cannot read different subsets.
 - `toDimensionLabels` — the defaulting, once. It defaults **each label independently**, because a client
@@ -937,7 +937,7 @@ objects, and that `CLIENT_IDENTITY_SELECT` names every column the projection rea
   restored explicitly — the generator reports function return columns as non-null, and `logo_url` /
   `portal_bg` are nullable on the table.
 - The portal's deprecated `lib/database.types.ts` shim is deleted; its five importers now name
-  `@sotto/database` directly.
+  `@dc-hub/database` directly.
 
 ⚠ **Left alone, with cause:** `get_client_portal` is executable by `anon` and returns six columns on
 purpose, so the public portal page cannot read a client's renamed dimension labels. It defaults them.
@@ -1008,7 +1008,7 @@ from either. The portal's `reportError` is therefore still console-only.
 #### Error boundaries — shared logic, per-app chrome
 
 A React render error unmounts the whole tree by default: a blank white page, with the error only in a
-console the user cannot open. `@sotto/asset-library` now exports one `ErrorBoundary` — catch, report
+console the user cannot open. `@dc-hub/asset-library` now exports one `ErrorBoundary` — catch, report
 through the app's own sink **with the component stack** (the part that makes a minified error locatable
 at all), and offer a way out.
 
@@ -1303,7 +1303,7 @@ contexts. Both defects share a root: a test that never ran in the conditions the
 | 2  | ~~ESLint + CI gate~~ ✅ (no Prettier pass)         | High                | S      | 0     |
 | 3  | ~~`reportError` seam~~ ✅ CI-enforced              | Med                 | S      | 0     |
 | 4  | ~~Pipeline characterization tests~~ ✅ 82          | Critical            | M      | 1     |
-| 5  | ~~Domain unit tests~~ ✅ 84 (in `@sotto/domain`)  | High                | M      | 1     |
+| 5  | ~~Domain unit tests~~ ✅ 84 (in `@dc-hub/domain`)  | High                | M      | 1     |
 | 6  | ~~RLS integration tests~~ ✅ 51 pgTAP              | High                | M      | 1     |
 | 4a | ~~F-4: scope `ratings` writes~~ ✅                 | High (security)     | S      | 1.5   |
 | 4b | ~~F-5: key CDN maps by path~~ ✅                   | High (data)         | S      | 1.5   |
@@ -1312,7 +1312,7 @@ contexts. Both defects share a root: a test that never ran in the conditions the
 | T1 | ~~Unify TypeScript + fix 4 real errors it hid~~ ✅ | High (correctness)  | S      | 2     |
 | T2 | ~~Unify vite/vitest/node/react/supabase-js~~ ✅    | High                | S      | 2     |
 | T3 | ~~`toolchain.mjs` drift gate (10 tools)~~ ✅       | High                | S      | 2     |
-| 2a | ~~`@sotto/domain` + CI-enforced boundary~~ ✅     | High                | M      | 2     |
+| 2a | ~~`@dc-hub/domain` + CI-enforced boundary~~ ✅     | High                | M      | 2     |
 | 2b | ~~Split `pipelineService` 1894 → 92 + 12~~ ✅      | High                | L      | 2     |
 | 2c | ~~Split `supabaseService` 1438 → 47 + 13~~ ✅       | High                | L      | 2     |
 | 2d | ~~Split portal components~~ ⚠️ partial (AssetDetail) | Med               | M      | 2     |

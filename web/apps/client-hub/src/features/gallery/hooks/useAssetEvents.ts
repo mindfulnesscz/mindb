@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import type { Role } from '@sotto/asset-library'
+import type { Role } from '@dc-hub/asset-library'
 import { trackEvent, fetchEventCounts, type EventCounts } from '../../../services/eventService'
 import { reportError } from '../../../lib/reportError'
 import { isConfigured } from '../../../lib/supabase'

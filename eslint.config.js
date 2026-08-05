@@ -74,12 +74,12 @@ export default tseslint.config(
     },
   },
 
-  /* ── @sotto/domain must stay platform-free ───────────────────────────────
+  /* ── @dc-hub/domain must stay platform-free ───────────────────────────────
      The whole value of this package is that the SAME rules run in the desktop pipeline,
      in the web portal, and (later) in a script or edge function with no shim. One
      `@tauri-apps/*` import would make it desktop-only; one React import would make it
      unusable outside a component tree. A comment cannot hold that line, so CI does.
-     Shared UI belongs in @sotto/asset-library, which may depend on React. */
+     Shared UI belongs in @dc-hub/asset-library, which may depend on React. */
   /* Error contexts are sorted by CONCERN, not by file.
    *
    * `errors.log` is the only diagnostic once the app is a packaged binary, and the question it has to
@@ -113,13 +113,13 @@ export default tseslint.config(
     rules: {
       'no-restricted-imports': ['error', {
         paths: [
-          { name: 'react', message: '@sotto/domain must stay React-free — put shared UI in @sotto/asset-library.' },
+          { name: 'react', message: '@dc-hub/domain must stay React-free — put shared UI in @dc-hub/asset-library.' },
         ],
         patterns: [
-          { group: ['@tauri-apps/*'], message: '@sotto/domain must stay platform-free — pass the data in instead of reading it here.' },
-          { group: ['@supabase/*'], message: '@sotto/domain must stay transport-free — the caller owns the client.' },
-          { group: ['node:*', 'fs', 'path'], message: '@sotto/domain must not touch the filesystem — pass paths in as strings.' },
-          { group: ['../../../*'], message: '@sotto/domain must not reach outside the package.' },
+          { group: ['@tauri-apps/*'], message: '@dc-hub/domain must stay platform-free — pass the data in instead of reading it here.' },
+          { group: ['@supabase/*'], message: '@dc-hub/domain must stay transport-free — the caller owns the client.' },
+          { group: ['node:*', 'fs', 'path'], message: '@dc-hub/domain must not touch the filesystem — pass paths in as strings.' },
+          { group: ['../../../*'], message: '@dc-hub/domain must not reach outside the package.' },
         ],
       }],
     },

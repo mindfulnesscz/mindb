@@ -1,6 +1,6 @@
 # First run
 
-1. Sign into the correct **environment** on the desktop (Staging for team work, Local for schema-only). Staff magic-link: editor or admin only. Open the email action in the browser and select **Continue signing in**; for Local, keep the portal dev server on `http://localhost:5173` running.
+1. Sign into the correct **environment** on the desktop (Staging for team work, Local for schema-only). Staff magic-link: editor or admin only.
 2. Select a client from the database list (create clients in the **web admin**, not in the desktop). Set machine-local source / OUT / vault folders.
 3. Confirm Supabase is the environment’s URL + anon key only — never a service-role key on the desktop.
 4. CDN is environment-provisioned (`r2-grant`). If Staging secrets are set, enable thumbnails/originals upload and run a small package. If not, expect CDN steps to skip with a grant 503 — local files and metadata sync can still work when pointed at a matching DB.

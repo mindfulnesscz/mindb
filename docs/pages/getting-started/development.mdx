@@ -1,7 +1,6 @@
 # Daily developer routine
 
-This page is the fastest path from a fresh clone to a reviewable contribution. Sotto is one Git
-monorepo with four runnable applications and one managed application release version.
+This page is the fastest path from a fresh clone to a reviewable contribution. DC Hub is one Git monorepo with three runnable applications and one shared release version.
 
 For who owns which fields, see [Platform division](/getting-started/platform-division). For Staging as the shared backend, see [Team staging setup](/getting-started/team-dev-setup).
 
@@ -13,7 +12,7 @@ For who owns which fields, see [Platform division](/getting-started/platform-div
 | Rust stable (`rustc`, `cargo`) | Tauri native application and Rust checks |
 | Tauri 2 platform prerequisites | Native window/WebView and application bundles |
 | Git | Source control and Nextra edit metadata |
-| Docker | Full local Supabase stack for migrations, edge-function smoke, and portal e2e |
+| Docker | Local Supabase for migration work only |
 
 Thumbnail rendering needs no separately installed tools. `npm run setup` fetches the bundled engines
 (or `npm run deps:native` on its own) — PDFium and LibreOffice, ~290MB download and ~800MB on disk.
@@ -27,10 +26,7 @@ cd dc-hub
 npm run setup
 ```
 
-The desktop, portal, shared packages, and CDN Worker form one root npm workspace backed by
-`package-lock.json`. The Nextra site has the second and only other lockfile,
-`docs/package-lock.json`. `npm run setup` installs both exactly, then fetches the pinned native
-engines. Rerun it after either lockfile changes.
+There is intentionally no root dependency tree. `npm run setup` runs `npm ci` in `desktop`, `web`, and `docs`. Rerun after lockfile changes.
 
 ## 3. Configure backends
 
@@ -45,12 +41,8 @@ cp web/apps/client-hub/.env.local.example web/apps/client-hub/.env.local
 # VITE_CDN_GATE_URL=http://localhost:8623
 # VITE_STREAM_DOMAIN=https://customer-<id>.cloudflarestream.com
 npm run db:start
+npm run db:reset      # FIRST TIME ONLY — see the warning below
 ```
-
-A fresh `supabase start` creates the stack from the migrations and seed. Do not add a reset to the
-normal startup loop; use the migration command below to update an existing local database.
-
-To use **Continue with Microsoft / Google / GitHub** locally, also copy `supabase/.env.local.example` to `supabase/.env.local`, fill it in, and source it before starting the stack — provider credentials are per environment and the CLI reads them from the shell ([Authentication → Where provider credentials live](/auth)). Email magic link works without provider credentials; locally those emails land in Mailpit (`http://localhost:54324`). Keep `npm run dev:web` running because the link first opens the scanner-safe confirmation page at `http://localhost:5173/auth/confirm`, including when signing into the local desktop app.
 
 ### ⛔ `db:reset` destroys local data — local is not scratch space
 
@@ -137,8 +129,8 @@ Focused starts: `npm run dev:desktop`, `npm run dev:web`, `npm run dev:web:stagi
 | Native I/O | `desktop/src-tauri/src` | Tauri capabilities, `check:rust` |
 | Naming / filename tags | `desktop/src/domain` | Vocabulary for **filenames**; DB tags admin on web |
 | Portal UI / admin | `web/apps/client-hub/src/features` | Platform division, permissions |
-| Schema / RLS / RPC | `supabase/migrations` | `db:types` → `@sotto/database` |
-| Shared portal rules | `packages/asset-library` | Roles: public / member / editor / admin |
+| Schema / RLS / RPC | `supabase/migrations` | `db:types` → `@dc-hub/database` |
+| Shared portal rules | `web/packages/asset-library` | Roles: public / member / editor / admin |
 
 Desktop is staff-session privileged under RLS; the web stays anon + session. UI helpers do not replace RLS.
 
@@ -155,26 +147,19 @@ Do not run two pipelines against the same Staging client/source tree at once.
 ## 7. Testing by area
 
 ```bash
-npm run check          # versions, toolchain, types, lint, builds, Worker types, clippy
-npm test               # package/portal/Worker/script Vitest, then desktop Vitest
-npm run test:rust      # Rust unit tests
+npm run check          # version + desktop build + web typecheck + docs + rust
+npm test               # desktop Vitest (filename parsing and growing suites)
 ```
 
-CI (`.github/workflows/check.yml`) runs those gates plus the coverage ratchet. Its separate smoke job
-starts the full Supabase stack, proves every edge function boots, and runs Playwright against the
-real portal. A missing stack is a failure for both smoke commands, never a green skip.
+CI (`.github/workflows/check.yml`) runs the same on pull requests.
 
 ### Database changes
 
 ```bash
 supabase migration new <name>
-supabase migration up  # applies pending migrations without destroying local data
-npm run test:rls       # pgTAP against the full local stack
-npm run db:types       # writes packages/database/src/database.types.ts
+npm run db:reset
+npm run db:types       # writes web/packages/database/src/database.types.ts
 ```
-
-CI separately proves that the migrations replay from zero; do not reset a developer database merely
-to reproduce that check.
 
 ### Documentation
 
@@ -188,12 +173,8 @@ npm run dev:docs
 ```bash
 npm run check
 npm test
-npm run test:rust
 git status --short
 ```
-
-If the change touches the portal, functions, or schema, also run `npm run smoke:functions`,
-`npm run test:e2e`, and/or `npm run test:rls` as appropriate with `supabase start` running.
 
 Describe the boundary, manual scenarios, schema impact, and screenshots (no client secrets).
 

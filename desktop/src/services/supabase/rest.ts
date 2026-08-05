@@ -90,10 +90,7 @@ export async function fetchAllForClient<T>(
   let page = 0;
   const sep = path.includes('?') ? '&' : '?';
   while (true) {
-    // PostgREST does not promise row order without `order=`. Offset paging an unordered relation
-    // can repeat or skip rows as concurrent writes change the query plan between requests; the
-    // primary key supplies a unique, deterministic boundary for every page.
-    const url = `${base}/${path}${sep}client_id=eq.${clientId}&select=${select}&order=id.asc&limit=${PAGE}&offset=${page * PAGE}`;
+    const url = `${base}/${path}${sep}client_id=eq.${clientId}&select=${select}&limit=${PAGE}&offset=${page * PAGE}`;
     const res = await sbFetch(url, { headers });
     if (!res.ok) throw new Error(await res.text());
     const batch = await res.json() as T[];

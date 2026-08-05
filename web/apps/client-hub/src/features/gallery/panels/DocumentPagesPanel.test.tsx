@@ -10,7 +10,7 @@
 
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import type { Asset } from '@sotto/asset-library'
+import type { Asset } from '@dc-hub/asset-library'
 import { DocumentPagesPanel } from './DocumentPagesPanel'
 
 /* The lightbox portals into document.body and animates; none of that is under test here, and its
