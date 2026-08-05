@@ -197,6 +197,34 @@ fn pdfium_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 /// Hidden argv flag that turns this executable into a one-shot render worker.
 pub const WORKER_FLAG: &str = "--sotto-render-worker";
 
+/// A deletable page-preview directory is never an arbitrary caller path. It is the exact
+/// `<source-stem>-thumb` sidecar documented by the pipeline, and its title thumbnail is the sibling
+/// `<source-stem>-thumb.webp` file. This check also runs inside the one-shot worker immediately
+/// before `remove_dir_all`, so the destructive boundary is local to the operation that needs it.
+pub fn validate_preview_area(src: &Path, thumb: &Path, pages_dir: &Path) -> Result<(), String> {
+    let parent = src
+        .parent()
+        .ok_or_else(|| format!("preview source has no parent: {}", src.display()))?;
+    let stem = src
+        .file_stem()
+        .ok_or_else(|| format!("preview source has no file stem: {}", src.display()))?;
+    let mut thumb_name = stem.to_os_string();
+    thumb_name.push("-thumb.webp");
+    let mut pages_name = stem.to_os_string();
+    pages_name.push("-thumb");
+    let expected_thumb = parent.join(thumb_name);
+    let expected_pages = parent.join(pages_name);
+
+    if thumb != expected_thumb || pages_dir != expected_pages {
+        return Err(format!(
+            "Refusing preview outputs outside the source's preview sidecars (expected {} and {})",
+            expected_thumb.display(),
+            expected_pages.display(),
+        ));
+    }
+    Ok(())
+}
+
 /// Render page 1 of a PDF to a WebP thumbnail, in a short-lived WORKER PROCESS.
 ///
 /// PDFium cannot be used concurrently. Not "is slower when threaded" — it FAILS: with the crate's
@@ -225,6 +253,10 @@ pub struct RenderJob {
     pub thumb: String,
     /// Where per-page previews go, or None for thumbnail-only work.
     pub pages_dir: Option<String>,
+    /// Original document whose sidecar preview directory may be replaced. For Office rendering,
+    /// `src` is a temporary PDF, so the worker needs this path to enforce the real output boundary.
+    #[serde(default)]
+    pub preview_source: Option<String>,
     pub width: u32,
     pub quality: u32,
     /// Maximum pages to render. Ignored when `pages_dir` is None.
@@ -290,6 +322,7 @@ pub fn pdf_to_thumb(
         src: src.to_string(),
         thumb: dest.to_string(),
         pages_dir: None,
+        preview_source: None,
         width,
         quality,
         limit: 0,
@@ -341,6 +374,17 @@ pub fn worker_main(args: &[String]) -> i32 {
 /// Page 1 is rendered ONCE and written to `thumb`; when `pages_dir` is set the same bitmap is reused
 /// as `001.webp` rather than rasterised again.
 fn render_pdf(job: &RenderJob) -> Result<RenderOutcome, String> {
+    if let Some(pages_dir) = job.pages_dir.as_deref() {
+        let preview_source = job
+            .preview_source
+            .as_deref()
+            .ok_or_else(|| "render worker: preview_source is required for page output".to_string())?;
+        validate_preview_area(
+            Path::new(preview_source),
+            Path::new(&job.thumb),
+            Path::new(pages_dir),
+        )?;
+    }
     let pdfium = pdfium_in(Path::new(&job.lib_dir))?;
     let doc = pdfium
         .load_pdf_from_file(&job.src, None)
@@ -528,6 +572,7 @@ pub fn office_previews(
         src: pdf.to_string_lossy().into_owned(),
         thumb: thumb.to_string(),
         pages_dir: pages_dir.map(str::to_string),
+        preview_source: pages_dir.map(|_| src.to_string()),
         width,
         quality,
         limit,
@@ -549,6 +594,7 @@ pub fn pdf_previews(
         src: src.to_string(),
         thumb: thumb.to_string(),
         pages_dir: pages_dir.map(str::to_string),
+        preview_source: pages_dir.map(|_| src.to_string()),
         width,
         quality,
         limit,
@@ -996,10 +1042,28 @@ mod tests {
             src: src.to_string_lossy().into_owned(),
             thumb: thumb.to_string_lossy().into_owned(),
             pages_dir: pages_dir.map(|p| p.to_string_lossy().into_owned()),
+            preview_source: pages_dir.map(|_| src.to_string_lossy().into_owned()),
             width: 320,
             quality: 70,
             limit,
         }
+    }
+
+    #[test]
+    fn preview_area_is_the_exact_source_sidecar() {
+        let src = Path::new("/approved/Deck.pdf");
+        assert!(validate_preview_area(
+            src,
+            Path::new("/approved/Deck-thumb.webp"),
+            Path::new("/approved/Deck-thumb"),
+        )
+        .is_ok());
+        assert!(validate_preview_area(
+            src,
+            Path::new("/approved/Deck-thumb.webp"),
+            Path::new("/outside/delete-me"),
+        )
+        .is_err());
     }
 
     /// The bundled PDFium, or None when `npm run deps:native` has not been run.
@@ -1124,8 +1188,8 @@ mod tests {
         let Some(lib_dir) = pdfium_lib_dir() else { return };
         let work = TempDir::new("sotto-pages-cap").unwrap();
         let src = work.path().join("in.pdf");
-        let thumb = work.path().join("t.webp");
-        let pages = work.path().join("p");
+        let thumb = work.path().join("in-thumb.webp");
+        let pages = work.path().join("in-thumb");
         std::fs::write(&src, minimal_pdf()).unwrap();
 
         // limit 0 renders nothing, yet `total` must still describe the document — that difference is
@@ -1144,8 +1208,8 @@ mod tests {
         let Some(lib_dir) = pdfium_lib_dir() else { return };
         let work = TempDir::new("sotto-pages-stale").unwrap();
         let src = work.path().join("in.pdf");
-        let thumb = work.path().join("t.webp");
-        let pages = work.path().join("p");
+        let thumb = work.path().join("in-thumb.webp");
+        let pages = work.path().join("in-thumb");
         std::fs::write(&src, minimal_pdf()).unwrap();
         std::fs::create_dir_all(&pages).unwrap();
         let orphan = pages.join("007.webp");
