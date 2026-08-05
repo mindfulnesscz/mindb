@@ -14,8 +14,8 @@
  */
 
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
-import type { Asset, FilterState, Role } from '@dc-hub/asset-library'
-import { MOCK_ASSETS, applyFilters, filterCacheKey } from '@dc-hub/asset-library'
+import type { Asset, FilterState, Role } from '@sotto/asset-library'
+import { MOCK_ASSETS, applyFilters, filterCacheKey } from '@sotto/asset-library'
 import { fetchAssets } from '../services/assetService'
 import { isConfigured } from '../lib/supabase'
 

@@ -33,8 +33,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
-import { applyFilters, type Asset, type FilterState, type Role } from '@dc-hub/asset-library';
-import { DEFAULT_DIMENSION_LABELS } from '@dc-hub/database';
+import { applyFilters, type Asset, type FilterState, type Role } from '@sotto/asset-library';
+import { DEFAULT_DIMENSION_LABELS } from '@sotto/database';
 
 /* ── Fixtures ──────────────────────────────────────────────────────────────────
  * Names are deliberately distinct from every tag label, so `getByText('Sofa')` can only be the

@@ -79,7 +79,7 @@ fn handle_request(req: &str) -> (u16, String) {
     }
 
     if first.starts_with("GET /health") {
-        return (200, r#"{"ok":true,"service":"dc-hub-reveal"}"#.into());
+        return (200, r#"{"ok":true,"service":"sotto-reveal"}"#.into());
     }
 
     if !(first.starts_with("POST /reveal") || first.starts_with("GET /reveal")) {
@@ -168,7 +168,7 @@ fn reveal_package(client_id: &str, stable_id: &str) -> Result<String, String> {
         map.get(client_id).cloned()
     };
     let root = root.ok_or_else(|| {
-        "Desktop app has no source folder for this client — open the client in DC Hub desktop first.".to_string()
+        "Desktop app has no source folder for this client — open the client in Sotto desktop first.".to_string()
     })?;
     let root_path = PathBuf::from(&root);
     if !root_path.is_dir() {

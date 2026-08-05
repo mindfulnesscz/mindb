@@ -111,7 +111,7 @@ async function main() {
   const appName = app.split('/').pop();
   const version = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8')).version;
   const arch = process.arch === 'arm64' ? 'aarch64' : 'x64';
-  const dmgName = `DC Hub_${version}_${arch}.dmg`;
+  const dmgName = `Sotto_${version}_${arch}.dmg`;
 
   /* The source must be the ABSOLUTE path to the .app: Tauri stages the bundle before calling this
      script, so a bare name resolves for Tauri and not for us. Passing the name alone failed with a
@@ -120,7 +120,7 @@ async function main() {
      volume rather than a path on disk. */
   await run('bash', [
     script,
-    '--volname', 'DC Hub',
+    '--volname', 'Sotto',
     '--icon', appName, '180', '170',
     '--app-drop-link', '480', '170',
     '--window-size', '660', '400',

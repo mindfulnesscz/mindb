@@ -8,7 +8,7 @@
 
 import type { AppSettings } from '../store/settingsStore';
 import type { LogType, RunStats } from '../store/pipelineStore';
-import { type VocabularyData, type VocabTag } from '@dc-hub/domain';
+import { type VocabularyData, type VocabTag } from '@sotto/domain';
 
 export const SRC = '/src';
 export const DST = '/dst';
@@ -119,11 +119,11 @@ export const R2 = {
   accessKeyId: 'ak',
   secretKey: 'sk',
   sessionToken: 'st',
-  bucket: 'dchub-test',
+  bucket: 'sotto-test',
   publicDomain: 'https://cdn.example.com',
   keyPrefix: 'client-abc/',
   clientId: 'client-abc',
-  gatedBucket: 'dchub-test-gated',
+  gatedBucket: 'sotto-test-gated',
   gatedDomain: 'https://files.example.com',
   gatedAccessKeyId: 'gated-ak',
   gatedSecretKey: 'gated-sk',

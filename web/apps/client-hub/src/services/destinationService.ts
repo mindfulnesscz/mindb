@@ -3,7 +3,7 @@
  * OAuth tokens stay on desktop only — never written from the web.
  */
 import { supabase } from '../lib/supabase'
-import { isStaff, type Role } from '@dc-hub/asset-library'
+import { isStaff, type Role } from '@sotto/asset-library'
 
 export type DestType = 'local' | 'dropbox' | 'onedrive' | 'gdrive'
 /** Pipeline audience: internal tools vs client-facing share links. */

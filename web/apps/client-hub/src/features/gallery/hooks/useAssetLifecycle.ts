@@ -16,7 +16,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import type { Asset } from '@dc-hub/asset-library'
+import type { Asset } from '@sotto/asset-library'
 import { updateAssetStatus, updateAssetPerm, deleteAssetAndMedia } from '../../../services/assetService'
 import { StreamReleaseError } from '../../../services/streamRelease'
 import { reconcileCdnObjects } from '../../../services/cdnReconcile'

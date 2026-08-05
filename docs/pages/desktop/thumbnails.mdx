@@ -60,7 +60,7 @@ still fails, because the crate's mutex guards the bindings, not PDFium's cross-c
 Pushed harder, the process segfaults.
 
 So the unit of isolation is a **process**. `render::pdf_to_thumb` re-invokes this same executable
-with a hidden `--dchub-render-worker` flag (see `WORKER_FLAG`), which `run()` intercepts before Tauri
+with a hidden `--sotto-render-worker` flag (see `WORKER_FLAG`), which `run()` intercepts before Tauri
 builds a webview. One render, one short-lived worker, no IPC beyond argv and an exit code.
 
 This is not a regression in shape: the code it replaced spawned `pdftoppm` **and** `cwebp` per file,

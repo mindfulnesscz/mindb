@@ -1,9 +1,9 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
-import type { Role, Client } from '@dc-hub/asset-library'
-import { MOCK_CLIENTS } from '@dc-hub/asset-library'
+import type { Role, Client } from '@sotto/asset-library'
+import { MOCK_CLIENTS } from '@sotto/asset-library'
 import { supabase, isConfigured } from '../lib/supabase'
 import { toClient } from '../services/clientService'
-import type { ClientRow } from '@dc-hub/database'
+import type { ClientRow } from '@sotto/database'
 import { asRole } from '../services/userService'
 import { useAuth } from './AuthContext'
 

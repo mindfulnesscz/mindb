@@ -1,15 +1,22 @@
 # Authentication
 
-The portal offers **OAuth sign-in (Microsoft, Google, GitHub)** plus **email magic link / OTP** as a fallback — no passwords anywhere in the system. OAuth is preferred for corporate users: it avoids the email step entirely, so link-scanners like Microsoft Safe Links can't consume a one-time link before the user clicks. The desktop app remains on magic link.
+The portal offers **OAuth sign-in (Microsoft, Google, GitHub)** plus an **email magic link** fallback — no passwords anywhere in the system. OAuth is preferred for corporate users: it avoids the email step entirely, so link-scanners like Microsoft Safe Links cannot interfere with sign-in. The desktop app remains on magic link.
 
 ## OAuth providers
 
-The portal sign-in shows **Continue with Microsoft / Google / GitHub** above the email option. Provisioning is identical to the email path: OAuth returns the user's verified email, so the domain-whitelist trigger below still maps them to a client and role. A first-time OAuth user on a non-whitelisted domain lands as `public` and is assigned by an admin. OAuth can't carry a portal `client_id` into user metadata, so whitelist matching is by email domain.
+The portal sign-in shows **Continue with Microsoft / Google / GitHub** above the email option. Provisioning is identical to the email path: OAuth returns the user's verified email, so the domain-whitelist trigger below still maps them to a client and role. A first-time OAuth user on a non-whitelisted domain lands as `public` and is assigned by an admin. Neither OAuth nor magic-link signup uses portal `client_id` metadata for access; whitelist matching is by verified email domain.
 
-The Supabase callback URL is the redirect URI for every provider:
+The Supabase callback URL is the redirect URI for every provider. It is **one per Supabase project**, so there are three — local, staging, production — and none of them is a portal domain:
 
-- Local: `http://127.0.0.1:54321/auth/v1/callback`
-- Prod: `https://<project-ref>.supabase.co/auth/v1/callback`
+| Environment | Redirect URI to register with the provider |
+|---|---|
+| Local | `http://localhost:54321/auth/v1/callback` |
+| Staging | `https://<staging-ref>.supabase.co/auth/v1/callback` |
+| Production | `https://<prod-ref>.supabase.co/auth/v1/callback` |
+
+The two hosted refs are committed in `scripts/environments/staging.public.env` and `production.public.env`.
+
+**Local is `localhost`, not `127.0.0.1`.** `auth.external_url` in `supabase/config.toml` is pinned to `localhost` on purpose — Entra rejects a raw IP on a **Web** redirect URI — and that pin is what GoTrue uses to build the `redirect_uri` it sends to the provider. Register the IP form and Microsoft answers `AADSTS50011` (redirect URI mismatch).
 
 Confirm the portal origins are in **Auth → URL Configuration → Redirect URLs** (e.g. `https://hub.disruptcollective.com/**`).
 
@@ -17,40 +24,66 @@ Confirm the portal origins are in **Auth → URL Configuration → Redirect URLs
 
 Use a **multi-tenant** app so any client organization can sign in. This can be the *same* Entra app used for SharePoint uploads — see [Microsoft & SharePoint setup](/cloud-storage/microsoft-setup).
 
-1. Entra ID → **App registrations → New registration**; supported account types **Accounts in any organizational directory (multi-tenant)**.
-2. Add a **Web** redirect URI = the Supabase callback URL.
-3. **Certificates & secrets → New client secret**; copy the *Value*.
-4. Copy the **Application (client) ID**.
-5. Supabase → **Auth → Providers → Azure**: enable, paste Client ID + secret, set **Azure Tenant URL** to `https://login.microsoftonline.com/common`.
+1. Entra ID → **App registrations → New registration**; supported account types **Accounts in any organizational directory (multi-tenant)**. `/common` (below) also admits personal Microsoft accounts — use `/organizations` to exclude them.
+2. Add a **Web** redirect URI for **each** environment's Supabase callback — one app can hold all three.
+3. **API permissions** (Microsoft Graph, delegated): `openid`, `email`, `profile`, `User.Read`. Entra returns no email address without `email`, and the domain whitelist needs it. Grant admin consent for your own tenant.
+4. **Certificates & secrets → New client secret**; copy the *Value* (shown once) and note its **expiry date**.
+5. Copy the **Application (client) ID**.
+6. Enable the provider per environment — local in `supabase/.env.local`, staging/production in the dashboard — with **Azure Tenant URL** = `https://login.microsoftonline.com/common`. See [Where provider credentials live](#where-provider-credentials-live-per-environment).
 
-Multi-tenant apps may require one-time **admin consent** from each client organization's IT.
+Multi-tenant apps may require one-time **admin consent** from each client organization's IT. Nothing about a client organization is configured in the app registration.
+
+> **The client secret expires** (Entra offers 6 / 12 / 24 months) and all three environments share one app, so a single expiry breaks Microsoft sign-in everywhere at once. The failure is late and confusing: the user authenticates with Microsoft normally, then the callback fails at the token exchange — `AADSTS7000222`, surfaced in the portal as "Unable to exchange external code". Rotate the secret in the app registration and paste the new value into each environment.
 
 ### Google
 
 1. Google Cloud Console → **APIs & Services → Credentials → Create OAuth client ID** (configure the consent screen first if prompted). Application type **Web**.
 2. Authorized redirect URI = the Supabase callback URL.
-3. Supabase → **Auth → Providers → Google**: enable, paste Client ID + secret.
+3. Enable per environment as above (dashboard: **Authentication → Sign In / Providers → Google**), pasting Client ID + secret.
 
 ### GitHub
 
 1. GitHub → **Settings → Developer settings → OAuth Apps → New OAuth App**.
 2. Authorization callback URL = the Supabase callback URL.
-3. Supabase → **Auth → Providers → GitHub**: enable, paste Client ID + secret.
+3. Enable per environment as above (dashboard: **Authentication → Sign In / Providers → GitHub**), pasting Client ID + secret. A GitHub OAuth App allows only **one** callback, so each environment needs its own app.
 
-### Local development
+## Where provider credentials live (per environment)
 
-`supabase/config.toml` enables `azure`, `google`, and `github` with `env(...)` secret substitution. Export the credentials before `supabase start`:
+Local, staging, and production are **three separate Supabase projects, each holding its own copy of every provider credential**. Nothing is shared between them, and — unlike the schema — hosted provider config is *not* in the repo. Where you put a Client ID and secret depends on the tier:
 
+| Environment | Provider config lives in | Applied by |
+|---|---|---|
+| **Local** | `[auth.external.*]` in `supabase/config.toml` (committed, no secrets) + credentials in `supabase/.env.local` (gitignored) | `env(...)` substitution, read from the **shell** at `supabase start` |
+| **Staging** | The staging project's dashboard → **Authentication → Sign In / Providers** | Saved in the dashboard; nothing in the repo |
+| **Production** | The production project's dashboard, same page | Same |
+
+The **provider app** (Entra registration, Google Web client) can be a single app serving all three tiers, because it just lists all three callbacks. Only GitHub forces one app per environment. So "three environments" means three sets of *Supabase-side* settings, not necessarily three provider apps.
+
+Two things routinely cost people an hour here:
+
+- **Local Studio (`http://localhost:54323`) has no provider screen.** For local, the config file is the only interface — there is nothing to click.
+- **The hosted page was renamed.** It is **Authentication → Sign In / Providers**, not "Providers", at `https://supabase.com/dashboard/project/<project-ref>/auth/providers`. The Microsoft card is listed as **Azure**.
+
+### Local setup
+
+`config.toml` already enables `azure`, `google`, and `github` with `env(...)` substitution, so no secret is committed. Copy `supabase/.env.local.example` to `supabase/.env.local`, fill in the credentials of your *local* provider apps, then **source it before starting the stack** — the CLI reads these from the shell, not from the file:
+
+```bash
+set -a; source supabase/.env.local; set +a
+supabase stop && npm run db:start     # preserves data; picks up env(...)
 ```
-export SUPABASE_AUTH_EXTERNAL_AZURE_CLIENT_ID=…
-export SUPABASE_AUTH_EXTERNAL_AZURE_SECRET=…
-export SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID=…
-export SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET=…
-export SUPABASE_AUTH_EXTERNAL_GITHUB_CLIENT_ID=…
-export SUPABASE_AUTH_EXTERNAL_GITHUB_SECRET=…
+
+Verify what the running stack actually enabled — this reads the live GoTrue config, so it distinguishes "enabled" from "enabled and credentialed":
+
+```bash
+curl -s http://localhost:54321/auth/v1/settings | grep -o '"azure":[a-z]*'
 ```
 
-Until a provider's credentials are set, its button appears but errors; email sign-in still works.
+Until a provider's credentials are set, its button appears but errors; email sign-in still works. **A forgotten `set -a; source …` looks exactly like bad credentials** — the provider comes up enabled with an empty client ID, and the provider rejects the redirect.
+
+### ⛔ Never `supabase config push` at staging or production
+
+`config.toml` describes the **local** stack: `site_url` is `http://localhost:5173` and `additional_redirect_urls` is localhost-only. Pushing it to a shared project overwrites that project's Site URL and redirect allowlist, which breaks every magic link and OAuth return on it — including for live clients. Change shared tiers in the dashboard.
 
 ## Adding a client domain
 
@@ -59,7 +92,7 @@ The OAuth provider callback is **always the Supabase project's callback** (`…/
 After auth, Supabase redirects the user back to wherever the portal runs (the `redirectTo` passed to sign-in, which defaults to the current portal URL). That target only has to be in **Supabase's redirect allowlist**:
 
 - **Local** — `supabase/config.toml` → `auth.additional_redirect_urls`, already wildcarded for `http://localhost:5173/**` and `http://127.0.0.1:5173/**`.
-- **Staging / production** — the project's **Auth → URL Configuration → Redirect URLs** in the dashboard, or keep the list in `config.toml` and run `supabase config push` for that project so it stays version-controlled.
+- **Staging / production** — the project's **Authentication → URL Configuration → Redirect URLs** in the dashboard (`…/auth/url-configuration`). Not `supabase config push` — see the warning above.
 
 To onboard a new client portal (e.g. `https://hub.acme.com`), add one entry to that environment's redirect allowlist:
 
@@ -75,9 +108,63 @@ https://*.disruptcollective.com/**
 
 The trailing `/**` matters: it matches any path under the origin, so a redirect back to `/:slug` or a share link resolves. A bare origin (`https://hub.acme.com`) only matches that exact URL.
 
-## Email magic link / OTP
+## Email magic link
 
-Users can still receive a one-time email link (or OTP code) that signs them in automatically.
+Supabase's `signInWithOtp` API sends users a one-time email link that signs them in without a
+password. Despite the API name, Sotto's current email template sends a link, not a code.
+
+### Scanner-safe confirmation
+
+The email does **not** contain Supabase's spendable `ConfirmationURL`. Microsoft Safe Links and
+similar corporate scanners are allowed to open the email URL without consuming the login:
+
+1. The custom template opens the public `/auth/confirm` portal route with `TokenHash` and
+   `RedirectTo` in the URL fragment. Fragments are not sent to the web server or included in request
+   logs.
+2. The confirmation page performs no verification on load and does not render the Supabase verify
+   URL in an anchor.
+3. Only the person's explicit **Continue signing in** click constructs
+   `<supabase-url>/auth/v1/verify` and navigates to it.
+4. Supabase spends the token and redirects to the original allowlisted destination. Web returns to
+   the browser that holds the PKCE verifier; desktop returns to its `localhost:7623` listener.
+
+The version-controlled source of truth is `supabase/templates/magic_link.html`. Local Auth loads it through
+`[auth.email.template.magic_link]` in `supabase/config.toml`.
+
+Hosted Auth configuration is not deployed by migrations. In **each** staging and production project:
+
+1. Deploy the portal version that serves `/auth/confirm`. Do this before changing the template or
+   newly issued emails will point at a route the deployed portal does not have yet.
+2. Open **Authentication → Email Templates → Magic Link**.
+3. Set the subject to `Sign in to Sotto` and paste the contents of
+   `supabase/templates/magic_link.html`.
+4. Confirm **Authentication → URL Configuration → Site URL** is an HTTPS Sotto portal origin that
+   serves `/auth/confirm`. `RedirectTo` still carries the requested client portal or desktop callback.
+5. Disable link tracking in the SMTP provider; tracking rewrites authentication links and is separate
+   from Safe Links scanning.
+
+Local desktop testing now needs the web portal running at the configured Site URL
+(`http://localhost:5173` by default), because that portal hosts the confirmation page.
+
+### Rollout verification and rollback
+
+Verify each hosted environment immediately after changing its template:
+
+1. Request a link from a portal deep URL such as `/:slug?entity=Sofa` and inspect the received email.
+   Its only action must start with that environment's Site URL plus `/auth/confirm`; the email must
+   not contain `/auth/v1/verify` or `ConfirmationURL`.
+2. Open the email action once without selecting **Continue signing in**. No Auth verification should
+   occur and the page must say the link has not been used.
+3. Select **Continue signing in** and confirm the browser returns to the complete original portal URL,
+   including its query parameters.
+4. Request a desktop link and confirm the same button returns through
+   `http://localhost:7623/auth-callback` and unlocks the waiting desktop window.
+5. Request a fresh link for an Outlook/Microsoft 365 mailbox after the preceding checks pass.
+
+If the confirmation route has a production problem, restore the previous hosted Magic Link template
+**before** rolling back the portal. That temporarily restores direct Supabase confirmation links (and
+their scanner limitation), but it prevents newly issued emails from pointing to a route that no longer
+exists. The local template changes only when the local Auth stack is restarted.
 
 ## Sign-in flow
 
@@ -95,12 +182,19 @@ check_email_auth RPC (anonymous call)
 ```
 
 The sign-in form is different depending on where the user accesses the app:
-- **Root `/`** — DC Hub admin sign-in. Only accepts `staff` emails; shows an error for anyone else.
+- **Root `/`** — Sotto admin sign-in. Only accepts `staff` emails; shows an error for anyone else.
 - **Portal `/:slug`** — Client portal sign-in. Accepts anyone; unknown users fill in a profile form to request access.
 
 ## Portal context at sign-in
 
-When a user signs in from a client portal (`/:slug`), the portal's `client_id` is embedded in the magic link metadata. If the user is new and their email domain isn't in any domain whitelist, the trigger still assigns the correct `client_id` to their profile based on which portal they signed in from.
+The portal path (`/:slug`) controls the return destination and branding, **not membership**. The
+portal does not put `client_id` into signup metadata. More importantly, the database trigger ignores
+`raw_user_meta_data.client_id` even if a caller talks to Supabase Auth directly and supplies it: that
+field is caller-controlled and is not proof that the person belongs to a tenant.
+
+A first-time user receives automatic tenant access only when their verified email domain matches an
+administrator-managed `clients.domain_whitelist`. Otherwise they land as `public` with
+`client_id = NULL` until an administrator assigns them in **Users**.
 
 ## Profile auto-creation
 
@@ -108,8 +202,8 @@ A Postgres trigger (`handle_new_auth_user`) fires on `auth.users` INSERT — i.e
 
 1. Reads `name`, `company`, `country`, `industry` from magic link metadata (filled in by unknown users)
 2. Checks `clients.domain_whitelist` for the email domain → sets `role = 'member'` and `client_id`
-3. Falls back to `client_id` passed in the link metadata (from the portal)
-4. If neither matches → `role = 'public'`, `client_id = NULL`
+3. If there is no domain match → `role = 'public'`, `client_id = NULL`; caller-supplied
+   `client_id` metadata is ignored
 
 For returning users (subsequent sign-ins), the trigger does **not** fire — their existing profile is unchanged.
 
@@ -138,7 +232,7 @@ No admin approval needed — access is instant on first click of the magic link.
 
 For users whose email domain isn't whitelisted:
 1. They sign in via the portal and fill in the profile form
-2. Profile is created with `role = 'public'`
+2. Profile is created with `role = 'public'` and no tenant access; choosing a portal does not assign it
 3. An admin promotes them in the **Users** tab of the admin dashboard
 
 ## Supabase configuration
@@ -147,4 +241,7 @@ In **Authentication → URL Configuration**:
 - **Site URL**: `http://localhost:5173` (dev) / production domain
 - **Allowed Redirect URLs**: `http://localhost:5173/**` (dev) / `https://yourdomain.com/**` (prod)
 
-Without the redirect URLs, clicking the magic link shows "Email link is invalid or has expired". The same message also appears when a **corporate mail scanner (Microsoft Safe Links) pre-clicks and consumes the one-time link** before the user does — the fix is to use OAuth (above) for those users, and to run a custom SMTP for deliverability.
+Without the redirect URLs, completing the magic link shows "Email link is invalid or has expired".
+The scanner-safe confirmation page above prevents a corporate mail scanner from spending the token
+on page load. OAuth remains the simplest option for corporate users, while custom SMTP improves
+deliverability but does not by itself prevent Safe Links prefetching.

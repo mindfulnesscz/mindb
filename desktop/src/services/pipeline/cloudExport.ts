@@ -9,7 +9,7 @@
 
 import { stat, readFile, readTextFile, writeTextFile, exists } from '@tauri-apps/plugin-fs';
 import { join, appDataDir } from '@tauri-apps/api/path';
-import { buildVocabMap, translateExportName, stripWorkflowPrefix } from '@dc-hub/domain';
+import { buildVocabMap, translateExportName, stripWorkflowPrefix } from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
 import { resolveExportShape } from '../../domain/client';
 import { uploadDropboxFile, uploadOneDriveFile, uploadGDriveFile } from '../cloudService';

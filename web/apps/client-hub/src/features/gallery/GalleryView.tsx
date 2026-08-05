@@ -11,7 +11,7 @@
 import { useState, useMemo, useEffect } from 'react'
 import { useNavigate, useLocation, useParams } from 'react-router-dom'
 import { useRole } from '../../context/RoleContext'
-import { getDefaultFilters, type Asset } from '@dc-hub/asset-library'
+import { getDefaultFilters, type Asset } from '@sotto/asset-library'
 import { useFilterParams } from '../../hooks/useFilterParams'
 import { useAssets } from '../../hooks/useAssets'
 import { useTags, type TagsByDimension } from '../../hooks/useTags'
@@ -25,7 +25,7 @@ import { useOpenAsset } from './hooks/useOpenAsset'
 import { FiltersRail } from './FiltersRail'
 import { useStreamMedia } from './hooks/useStreamMedia'
 import { STATUS_KEYS_STAFF, STATUS_KEYS_CLIENT } from './statusLabels'
-import { DEFAULT_DIMENSION_LABELS } from '@dc-hub/database'
+import { DEFAULT_DIMENSION_LABELS } from '@sotto/database'
 
 /** How long typing has to stop before the search reaches the URL. */
 const SEARCH_DEBOUNCE_MS = 250

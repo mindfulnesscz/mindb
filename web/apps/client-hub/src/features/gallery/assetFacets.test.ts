@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { labelSet, sharedLabels, uniqueLabel, matchesActiveFacets } from './assetFacets'
-import type { Asset } from '@dc-hub/asset-library'
+import type { Asset } from '@sotto/asset-library'
 
 const asset = (over: Partial<Asset> = {}): Asset => ({
   id: 'a1', clientId: 'c1', name: 'Product Slides — Deck',

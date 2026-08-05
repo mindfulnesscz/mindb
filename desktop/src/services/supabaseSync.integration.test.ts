@@ -58,7 +58,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 vi.mock('./authService', () => ({ getAccessToken: async () => SERVICE_KEY }));
 
 const { exportAssetsToSupabase } = await import('./supabaseService');
-const { groupAssets } = await import('@dc-hub/domain');
+const { groupAssets } = await import('@sotto/domain');
 
 const config = { url: API, anonKey: SERVICE_KEY };
 const vocab = {

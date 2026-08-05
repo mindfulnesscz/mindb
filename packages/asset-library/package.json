@@ -1,5 +1,5 @@
 {
-  "name": "@dc-hub/asset-library",
+  "name": "@sotto/asset-library",
   "version": "3.2.0",
   "private": false,
   "type": "module",
@@ -9,7 +9,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@dc-hub/database": "*"
+    "@sotto/database": "*"
   },
   "peerDependencies": {
     "react": "^19.2.8"

@@ -4,7 +4,7 @@
  * derivation lives in ./taxonomyKeys because the portal must derive the same keys.
  */
 
-import type { VocabularyData } from '@dc-hub/domain';
+import type { VocabularyData } from '@sotto/domain';
 import type { SupabaseConfig } from './rest';
 import { makeHeaders, sbFetch, fetchAllForClient } from './rest';
 import { slugifyKeyPart, parentKeyForLeaf } from './taxonomyKeys';

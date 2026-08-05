@@ -2,7 +2,7 @@
  *
  * A drop-in for `useState<FilterState>` in GalleryView — same `[value, setter]` shape, including the
  * updater form, so the call site changes by one line. The encoding itself lives in
- * `@dc-hub/asset-library/filterUrl`, which is pure; this file is only the React binding.
+ * `@sotto/asset-library/filterUrl`, which is pure; this file is only the React binding.
  *
  * REPLACE, NOT PUSH. A filter change is a refinement of where you are, not a new place. Pushing
  * would add one history entry per checkbox and per debounced keystroke, so Back would become a slow
@@ -34,7 +34,7 @@ import { useCallback, useMemo, useRef } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
   FILTER_PARAMS, filtersToSearchParams, searchParamsToFilters, type FilterState,
-} from '@dc-hub/asset-library'
+} from '@sotto/asset-library'
 
 type SetFilters = (next: FilterState | ((current: FilterState) => FilterState)) => void
 

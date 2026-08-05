@@ -256,7 +256,7 @@ export async function uploadGDriveFile(
   getBytes:      () => Promise<Uint8Array<ArrayBuffer>>,
   mimeType:      string,
   fileName:      string,
-  folderPath:    string,   // e.g. "DC Hub/ESS"
+  folderPath:    string,   // e.g. "Sotto/ESS"
   getLink:       boolean,
   sharedDriveId: string = '',
 ): Promise<{ url: string | null; skipped: boolean }> {
@@ -307,7 +307,7 @@ export async function uploadGDriveFile(
   }
 
   // Multipart create: metadata + file bytes
-  const boundary = '----dc_hub_boundary';
+  const boundary = '----sotto_boundary';
   const meta     = JSON.stringify({ name: fileName, parents: [folderId] });
   const encoder  = new TextEncoder();
   const parts    = [

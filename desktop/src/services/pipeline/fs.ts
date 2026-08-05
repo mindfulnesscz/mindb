@@ -12,7 +12,7 @@ import { join } from '@tauri-apps/api/path';
 import type { AppSettings } from '../../store/settingsStore';
 import type { LogType } from '../../store/pipelineStore';
 import { shouldSkip, isPackageFolder, isPublishableFile } from './naming';
-import { isPreviewArtifact } from '@dc-hub/domain';
+import { isPreviewArtifact } from '@sotto/domain';
 
 export async function listDir(path: string): Promise<DirEntry[]> {
   try {

@@ -22,7 +22,7 @@ const local = (path: string, id = 'l1'): CloudDestination => ({
 } as CloudDestination);
 
 const cloud = (type: 'dropbox' | 'onedrive' | 'gdrive', id = 'c1'): CloudDestination => ({
-  id, name: type, enabled: true, config: { type, remotePath: `/DC Hub/${type}` },
+  id, name: type, enabled: true, config: { type, remotePath: `/Sotto/${type}` },
 } as CloudDestination);
 
 describe('resolveRunPlan — the export target', () => {

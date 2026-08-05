@@ -30,7 +30,7 @@ export const ENTITY_TYPES = ['product', 'customer', 'partner', 'event', 'company
 export type EntityType = typeof ENTITY_TYPES[number]
 
 /**
- * A client's portal-owned identity. Defined once, in @dc-hub/database, next to the generated row type
+ * A client's portal-owned identity. Defined once, in @sotto/database, next to the generated row type
  * it is projected from — this used to be a second, hand-maintained declaration of the same fields,
  * free to drift from both the schema and desktop's copy. Re-exported under its original name so
  * consumers are unaffected.
@@ -38,7 +38,7 @@ export type EntityType = typeof ENTITY_TYPES[number]
  * Note `dimensionLabels` is now REQUIRED and always fully populated: `toClientIdentity` defaults each
  * label individually, so callers no longer have to repeat the fallbacks at every use site.
  */
-export type { ClientIdentity as Client } from '@dc-hub/database'
+export type { ClientIdentity as Client } from '@sotto/database'
 
 export interface Asset {
   id: string

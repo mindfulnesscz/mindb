@@ -11,7 +11,7 @@ import { join } from '@tauri-apps/api/path';
 import type { AppSettings } from '../../store/settingsStore';
 import {
   parseFilename, isVideoFile, isPreviewArtifact, type VocabMap,
-} from '@dc-hub/domain';
+} from '@sotto/domain';
 import {
   relativeTo, pathParts, isPublishable,
 } from './paths';

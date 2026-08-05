@@ -47,7 +47,7 @@ No auth. Portal defines the destination; on desktop open it and **Browse…** to
    http://localhost:7623/callback
    ```
 
-**2. Connect in DC Hub:**
+**2. Connect in Sotto:**
 
 1. Portal: add a Dropbox destination (remote path, role, minRole, generate link).
 2. Desktop: Settings → Cloud Destinations → **Sync** → open the destination → paste App key if needed → **Connect**.
@@ -62,13 +62,13 @@ Uploads and the existence/sharing-link checks run through a native Rust command 
 **1. Register the app** in [Azure Portal](https://portal.azure.com) → **Microsoft Entra ID** → **App registrations** → **New registration**:
 
 1. **Supported account types** — pick based on who needs to connect:
-   - *Personal Microsoft accounts only*, or a multi-tenant option → in DC Hub, leave the **Azure Tenant ID** field as `common`.
-   - *Accounts in this organizational directory only* (single tenant) → enter the Directory (tenant) ID into DC Hub's **Azure Tenant ID** field. Single-tenant apps reject the generic `/common` endpoint with `AADSTS50059`.
+   - *Personal Microsoft accounts only*, or a multi-tenant option → in Sotto, leave the **Azure Tenant ID** field as `common`.
+   - *Accounts in this organizational directory only* (single tenant) → enter the Directory (tenant) ID into Sotto's **Azure Tenant ID** field. Single-tenant apps reject the generic `/common` endpoint with `AADSTS50059`.
 2. **Authentication** blade → **Advanced settings** → turn **Allow public client flows** to **Yes**. Required for the device-code flow.
 3. **API permissions** → add Microsoft Graph **delegated** permissions: `Files.ReadWrite`, `offline_access`, `User.Read`. Grant admin consent if your tenant requires it.
 4. Copy the **Application (client) ID** from the Overview page (and the Directory/tenant ID, if single-tenant).
 
-**2. Connect in DC Hub:**
+**2. Connect in Sotto:**
 
 1. Portal: add OneDrive destination.
 2. Desktop: Sync → open destination → Client ID + Tenant ID → **Connect** (device code flow).
@@ -78,7 +78,7 @@ Known gotchas:
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `TypeError: Load failed` immediately on Connect | Microsoft's device-code endpoints don't send CORS headers for the app's `tauri://localhost` origin | Already fixed — device-code requests run through native Rust (`reqwest`) |
-| `AADSTS50059: No tenant-identifying information...` | App is single-tenant but DC Hub used `/common` | Enter the app's Directory (tenant) ID |
+| `AADSTS50059: No tenant-identifying information...` | App is single-tenant but Sotto used `/common` | Enter the app's Directory (tenant) ID |
 | Error code `53003`, "Device state: Unregistered" during sign-in | Tenant Conditional Access | Needs an Azure AD admin — not fixable from the app |
 
 ---
@@ -100,7 +100,7 @@ Known gotchas:
 
 Paste the Shared Drive ID into the portal destination so every teammate’s uploads land in one place.
 
-**3. Connect in DC Hub:**
+**3. Connect in Sotto:**
 
 1. Portal: add Google Drive destination (client id, shared drive id, remote path).
 2. Desktop: Sync → open destination → enter **Client Secret** → **Connect**.

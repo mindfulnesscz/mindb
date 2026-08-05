@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase'
-import type { TagRow, TablesUpdate, Json } from '@dc-hub/database'
+import type { TagRow, TablesUpdate, Json } from '@sotto/database'
 
 export interface Tag {
   id: string

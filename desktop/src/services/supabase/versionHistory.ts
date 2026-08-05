@@ -4,7 +4,7 @@
  * can see an asset's history without those files competing as current deliverables.
  */
 
-import { type VocabularyData, buildVocabMap, parseFilename } from '@dc-hub/domain';
+import { type VocabularyData, buildVocabMap, parseFilename } from '@sotto/domain';
 import type { SupabaseConfig } from './rest';
 import { makeHeaders, sbFetch, fetchAllForClient, BATCH } from './rest';
 import { fetchVHForAssets } from './assetQueries';

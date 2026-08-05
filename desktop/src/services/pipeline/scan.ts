@@ -14,7 +14,7 @@ import { join } from '@tauri-apps/api/path';
 import type { AppSettings } from '../../store/settingsStore';
 import {
   type VocabularyData, buildVocabMap, parseFilename, extractStableId,
-} from '@dc-hub/domain';
+} from '@sotto/domain';
 import { shouldSkip, isPackageFolder, isOutFolder, isPublishableFile } from './naming';
 import { listDir } from './fs';
 import type { VersionEntry, AssetVersions } from './types';

@@ -22,7 +22,7 @@
  */
 
 import { mkdir, writeTextFile } from '@tauri-apps/plugin-fs';
-import { generateStableId, appendStableId, type Slot, type VocabTag } from '@dc-hub/domain';
+import { generateStableId, appendStableId, type Slot, type VocabTag } from '@sotto/domain';
 import { createDraftAsset, fetchExistingStableIds } from '../../services/supabaseService';
 import { writeReadme, README_FILENAME } from '../../services/readmeService';
 

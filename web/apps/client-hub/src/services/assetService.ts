@@ -1,6 +1,6 @@
 import { supabase } from '../lib/supabase'
-import type { Asset, FilterState, Role, AssetStatus, AssetPerm } from '@dc-hub/asset-library'
-import type { AssetRow, AssetStats } from '@dc-hub/database'
+import type { Asset, FilterState, Role, AssetStatus, AssetPerm } from '@sotto/asset-library'
+import type { AssetRow, AssetStats } from '@sotto/database'
 import { releaseStreamVideo } from './streamRelease'
 import { reportError } from '../lib/reportError'
 

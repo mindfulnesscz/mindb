@@ -3,7 +3,7 @@
  * SHARED-READY: pure functions over strings and a vocabulary object. No transport, no
  * filesystem, no Supabase client. This is the half of the old supabaseService that the web
  * portal needs too — it renders the same shortcodes, names and taxonomy arrays the desktop
- * pipeline writes. Moving it into @dc-hub/domain is a file move once the portal needs it.
+ * pipeline writes. Moving it into @sotto/domain is a file move once the portal needs it.
  *
  * Two rules here pull in opposite directions, deliberately:
  *   - the display NAME de-duplicates by label, so two shortcodes sharing one display name
@@ -14,7 +14,7 @@
  * supabaseMapping.characterization.test.ts.
  */
 
-import { parseFilename, buildVocabMap, type VocabularyData } from '@dc-hub/domain';
+import { parseFilename, buildVocabMap, type VocabularyData } from '@sotto/domain';
 
 export function stripVersionSuffix(stem: string): string {
   return stem.replace(/\s+[vV]\d+(?:[-._]\d+)*\s*$/, '').trim();

@@ -1,6 +1,6 @@
-# DC Hub Desktop
+# Sotto Desktop
 
-Tauri 2 desktop app for the DC Hub asset pipeline (see the [monorepo README](../README.md) for the product overview). Processes, versions, distributes, and syncs marketing assets across cloud storage and a Supabase DAM backend.
+Tauri 2 desktop app for the Sotto asset pipeline (see the [monorepo README](../README.md) for the product overview). Processes, versions, distributes, and syncs marketing assets across cloud storage and a Supabase DAM backend.
 
 Version history lives in the root [CHANGELOG.md](../CHANGELOG.md); the version workflow in [VERSIONING.md](../VERSIONING.md).
 

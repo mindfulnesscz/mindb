@@ -7,7 +7,7 @@
 
 import type { AppSettings } from '../../store/settingsStore';
 import type { LogType, RunStats } from '../../store/pipelineStore';
-import type { VocabularyData } from '@dc-hub/domain';
+import type { VocabularyData } from '@sotto/domain';
 import type { CloudDestination, DestExportLayout } from '../../domain/client';
 
 export interface CloudUrlEntry {
@@ -18,7 +18,7 @@ export interface CloudUrlEntry {
 }
 
 /* Two tiers of delivery. Which one an object goes to is decided per asset from its effective
-   level (see @dc-hub/domain `storageTarget`), so the pipeline holds credentials for both. */
+   level (see @sotto/domain `storageTarget`), so the pipeline holds credentials for both. */
 export interface R2Config {
   endpoint:     string;
   accessKeyId:  string;

@@ -49,18 +49,21 @@ jobs:
         run: npm run lint:rust
 
   # Separate job: it needs a database and a browser, and the main gate should stay fast.
-  # The suite creates its own tenant and deletes it afterwards, so it can run against a
-  # stack seeded from the migrations without depending on what the seed happens to contain.
+  # Pull requests already exercise the merge candidate, so do not repeat this isolated local-stack
+  # run after that PR lands on dev. Staging/main pushes still run it alongside their deploy workflows.
+  # The suite creates its own tenant and deletes it afterwards, so it can run against a stack seeded
+  # from the migrations without depending on what the seed happens to contain.
   e2e:
+    if: github.event_name == 'pull_request' || github.ref != 'refs/heads/dev'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-      - uses: supabase/setup-cli@v2
+      - uses: supabase/setup-cli@v3
         with:
-          version: latest
+          version: '2.109.1'
       - run: supabase db start
       - run: npm ci
       # Do the edge functions BOOT? Nothing else in CI type-checks or runs them — they are Deno

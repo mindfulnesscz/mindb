@@ -14,7 +14,7 @@
 --
 -- No URL column. There is one object per page, so storing 50 URLs per asset would be absurd; the
 -- portal derives each page's address from the asset's identity and level the same way the pipeline
--- does. See `pageTarget` in @dc-hub/domain.
+-- does. See `pageTarget` in @sotto/domain.
 
 alter table public.clients
   add column preview_page_limit integer not null default 50

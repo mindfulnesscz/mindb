@@ -10,7 +10,7 @@
  */
 
 import type { Dispatch, SetStateAction } from 'react'
-import { canDownload, type Asset, type Role } from '@dc-hub/asset-library'
+import { canDownload, type Asset, type Role } from '@sotto/asset-library'
 import type { DetailFocus } from '../hooks/useDetailFocus'
 import { AssetImage } from '../../../components/AssetImage'
 import type { PortalDestination } from '../../../services/destinationService'

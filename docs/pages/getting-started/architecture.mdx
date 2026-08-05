@@ -1,6 +1,6 @@
 # Architecture
 
-DC Hub is one Git monorepo and one coordinated product release. Two applications — a Tauri desktop
+Sotto is one Git monorepo and one coordinated product release. Two applications — a Tauri desktop
 publisher and a React portal — share a Supabase backend and a set of packages holding everything the
 two must agree about.
 
@@ -44,12 +44,12 @@ The packages answer one question: when both apps need the same rule, where does 
 
 | Package | Holds | Rule |
 |---|---|---|
-| `@dc-hub/domain` | `stableId`, `naming`, `version`, `vocabulary`, `filenameTranslator`, `assetGrouping` | **No** `react`, `@tauri-apps/*`, `@supabase/*` or `node:*` — CI-enforced by `no-restricted-imports` |
-| `@dc-hub/database` | Generated types, `toClientIdentity`, `CLIENT_IDENTITY_SELECT`, dimension labels | Types are generated, never hand-written; CI fails on drift from the schema |
-| `@dc-hub/auth` | `createAuthClient`, `checkEmailAuth` | Transport differs per platform; the flow does not |
-| `@dc-hub/asset-library` | `Client`, filters, permissions, `ErrorBoundary` | May depend on React |
+| `@sotto/domain` | `stableId`, `naming`, `version`, `vocabulary`, `filenameTranslator`, `assetGrouping` | **No** `react`, `@tauri-apps/*`, `@supabase/*` or `node:*` — CI-enforced by `no-restricted-imports` |
+| `@sotto/database` | Generated types, `toClientIdentity`, `CLIENT_IDENTITY_SELECT`, dimension labels | Types are generated, never hand-written; CI fails on drift from the schema |
+| `@sotto/auth` | `createAuthClient`, `checkEmailAuth` | Transport differs per platform; the flow does not |
+| `@sotto/asset-library` | `Client`, filters, permissions, `ErrorBoundary` | May depend on React |
 
-A client's identity is projected **once**, in `@dc-hub/database`. Desktop's `Client` extends
+A client's identity is projected **once**, in `@sotto/database`. Desktop's `Client` extends
 `ClientIdentity` with machine-local state (folder paths, per-machine destination toggles, OAuth
 tokens); the portal's `Client` *is* `ClientIdentity`. That follows the standing direction — the portal
 as a slightly limited desktop, not a parallel implementation of the same row.
