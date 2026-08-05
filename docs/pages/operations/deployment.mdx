@@ -58,6 +58,10 @@ Schema-dependent UI: merge the migration first (or in the same merge — migrati
 - Production project: Site URL `https://hub.disruptcollective.com`; redirect list adds the staging domain is NOT needed here.
 - Staging project: Site URL `https://staging.hub.disruptcollective.com`; add `https://*.vercel.app/**` to redirects so ephemeral previews can sign in.
 - Both: keep `http://localhost:7623/auth-callback` for desktop sign-in.
+- After the portal version containing `/auth/confirm` is deployed, set **Authentication → Email
+  Templates → Magic Link** to the subject and HTML in `supabase/templates/magic_link.html`. This is
+  dashboard configuration per project; migrations and Vercel do not deploy it. See the ordered
+  [scanner-safe magic-link rollout](/auth#scanner-safe-confirmation).
 
 **Supabase function secrets** (per project, once): `R2_BUCKET`, `R2_PUBLIC_DOMAIN`, `CF_R2_TOKEN`, `CF_ACCOUNT_ID`, `R2_PARENT_ACCESS_KEY_ID` — see [Database environments](/operations/database-environments#storage-tiers--environment-level-r2) and [Team staging setup](/getting-started/team-dev-setup).
 
@@ -107,6 +111,9 @@ The one deliberate exception is the `*.vercel.app` suffix rule in the CORS helpe
 2. Cloudflare R2: create **both** buckets. The public one gets a public domain (r2.dev or custom) and CORS `GET`/`HEAD` from `*`. The gated one gets **no public access and no custom domain of its own** — the Worker binding being its only door is what makes a broken route fail closed instead of publishing the library. Then create an account-scoped R2 API token and put its Token value + Access Key ID into `supabase/functions/.env` before running (or re-run after).
 3. Vercel: point a project/branch at the site URL with this environment's URL + anon key.
 4. DNS for any custom domain.
+5. After Vercel serves `/auth/confirm`, paste `supabase/templates/magic_link.html` into Supabase
+   **Authentication → Email Templates → Magic Link** and verify the flow. `bootstrap-env.mjs` sets
+   Auth URLs but does not deploy hosted email templates.
 
 After the script runs and the manual list is done, an editor adds the environment in the desktop (Settings → Environments) and signs in. Nothing else is hand-assembled.
 
@@ -118,6 +125,9 @@ After the script runs and the manual list is done, an editor adds the environmen
 2. Environment variables: `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` — production values for **Production**, staging values for **Preview**. Branch builds also bake `.env.staging` / `.env.production` via `build:vercel`.
 3. **Domains** → add the custom domain, create the CNAME it asks for in Cloudflare DNS.
 4. Supabase → Auth → URL Configuration: set **Site URL** to that environment's portal domain and add it to the redirect allow-list — otherwise magic links fall back to the wrong host (staging → prod).
+5. Once that deployment serves `/auth/confirm`, paste `supabase/templates/magic_link.html` into
+   **Authentication → Email Templates → Magic Link**. Apply the portal first and template second;
+   reversing the order makes newly issued emails point at a route that is not live yet.
 
 From then on every push to `main` redeploys the portal automatically, and pull requests get preview URLs. No GitHub Action is involved; Vercel's git integration is the pipeline.
 

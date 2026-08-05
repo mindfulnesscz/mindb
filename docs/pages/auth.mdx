@@ -1,6 +1,6 @@
 # Authentication
 
-The portal offers **OAuth sign-in (Microsoft, Google, GitHub)** plus **email magic link / OTP** as a fallback — no passwords anywhere in the system. OAuth is preferred for corporate users: it avoids the email step entirely, so link-scanners like Microsoft Safe Links can't consume a one-time link before the user clicks. The desktop app remains on magic link.
+The portal offers **OAuth sign-in (Microsoft, Google, GitHub)** plus an **email magic link** fallback — no passwords anywhere in the system. OAuth is preferred for corporate users: it avoids the email step entirely, so link-scanners like Microsoft Safe Links cannot interfere with sign-in. The desktop app remains on magic link.
 
 ## OAuth providers
 
@@ -108,9 +108,63 @@ https://*.disruptcollective.com/**
 
 The trailing `/**` matters: it matches any path under the origin, so a redirect back to `/:slug` or a share link resolves. A bare origin (`https://hub.acme.com`) only matches that exact URL.
 
-## Email magic link / OTP
+## Email magic link
 
-Users can still receive a one-time email link (or OTP code) that signs them in automatically.
+Supabase's `signInWithOtp` API sends users a one-time email link that signs them in without a
+password. Despite the API name, Sotto's current email template sends a link, not a code.
+
+### Scanner-safe confirmation
+
+The email does **not** contain Supabase's spendable `ConfirmationURL`. Microsoft Safe Links and
+similar corporate scanners are allowed to open the email URL without consuming the login:
+
+1. The custom template opens the public `/auth/confirm` portal route with `TokenHash` and
+   `RedirectTo` in the URL fragment. Fragments are not sent to the web server or included in request
+   logs.
+2. The confirmation page performs no verification on load and does not render the Supabase verify
+   URL in an anchor.
+3. Only the person's explicit **Continue signing in** click constructs
+   `<supabase-url>/auth/v1/verify` and navigates to it.
+4. Supabase spends the token and redirects to the original allowlisted destination. Web returns to
+   the browser that holds the PKCE verifier; desktop returns to its `localhost:7623` listener.
+
+The version-controlled source of truth is `supabase/templates/magic_link.html`. Local Auth loads it through
+`[auth.email.template.magic_link]` in `supabase/config.toml`.
+
+Hosted Auth configuration is not deployed by migrations. In **each** staging and production project:
+
+1. Deploy the portal version that serves `/auth/confirm`. Do this before changing the template or
+   newly issued emails will point at a route the deployed portal does not have yet.
+2. Open **Authentication → Email Templates → Magic Link**.
+3. Set the subject to `Sign in to Sotto` and paste the contents of
+   `supabase/templates/magic_link.html`.
+4. Confirm **Authentication → URL Configuration → Site URL** is an HTTPS Sotto portal origin that
+   serves `/auth/confirm`. `RedirectTo` still carries the requested client portal or desktop callback.
+5. Disable link tracking in the SMTP provider; tracking rewrites authentication links and is separate
+   from Safe Links scanning.
+
+Local desktop testing now needs the web portal running at the configured Site URL
+(`http://localhost:5173` by default), because that portal hosts the confirmation page.
+
+### Rollout verification and rollback
+
+Verify each hosted environment immediately after changing its template:
+
+1. Request a link from a portal deep URL such as `/:slug?entity=Sofa` and inspect the received email.
+   Its only action must start with that environment's Site URL plus `/auth/confirm`; the email must
+   not contain `/auth/v1/verify` or `ConfirmationURL`.
+2. Open the email action once without selecting **Continue signing in**. No Auth verification should
+   occur and the page must say the link has not been used.
+3. Select **Continue signing in** and confirm the browser returns to the complete original portal URL,
+   including its query parameters.
+4. Request a desktop link and confirm the same button returns through
+   `http://localhost:7623/auth-callback` and unlocks the waiting desktop window.
+5. Request a fresh link for an Outlook/Microsoft 365 mailbox after the preceding checks pass.
+
+If the confirmation route has a production problem, restore the previous hosted Magic Link template
+**before** rolling back the portal. That temporarily restores direct Supabase confirmation links (and
+their scanner limitation), but it prevents newly issued emails from pointing to a route that no longer
+exists. The local template changes only when the local Auth stack is restarted.
 
 ## Sign-in flow
 
@@ -180,4 +234,7 @@ In **Authentication → URL Configuration**:
 - **Site URL**: `http://localhost:5173` (dev) / production domain
 - **Allowed Redirect URLs**: `http://localhost:5173/**` (dev) / `https://yourdomain.com/**` (prod)
 
-Without the redirect URLs, clicking the magic link shows "Email link is invalid or has expired". The same message also appears when a **corporate mail scanner (Microsoft Safe Links) pre-clicks and consumes the one-time link** before the user does — the fix is to use OAuth (above) for those users, and to run a custom SMTP for deliverability.
+Without the redirect URLs, completing the magic link shows "Email link is invalid or has expired".
+The scanner-safe confirmation page above prevents a corporate mail scanner from spending the token
+on page load. OAuth remains the simplest option for corporate users, while custom SMTP improves
+deliverability but does not by itself prevent Safe Links prefetching.

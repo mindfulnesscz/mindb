@@ -71,7 +71,9 @@ export function AdminSignIn() {
             <p className="font-sans text-sm text-text-muted mb-1">
               We sent a magic link to <span className="font-mono text-cosmos-black">{email}</span>
             </p>
-            <p className="text-[11px] font-sans text-text-subtle mb-4">Click the link to sign in. It expires in 1 hour.</p>
+            <p className="text-[11px] font-sans text-text-subtle mb-4">
+              Open the link, then select Continue to sign in. It expires in 1 hour.
+            </p>
             <button
               onClick={() => { setStep('email'); setEmail(''); setError('') }}
               className="text-[11px] font-sans text-text-muted hover:text-cosmos-black underline transition-colors"
@@ -127,4 +129,3 @@ export function AdminSignIn() {
     </div>
   )
 }
-

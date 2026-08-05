@@ -211,7 +211,7 @@ export default function SignInModal({ redirectTo, clientId, onClose }: SignInMod
                   <path d="M2 4l6 5 6-5M2 4h12v9H2V4Z" />
                 </svg>
                 <p className="text-sm font-sans text-cosmos-black">
-                  Click the link in your email to sign in. It expires in 1 hour.
+                  Open the link in your email, then select Continue to sign in. It expires in 1 hour.
                   <br />
                   <span className="text-text-muted text-[11px]">If you don't see it, check your spam folder.</span>
                 </p>

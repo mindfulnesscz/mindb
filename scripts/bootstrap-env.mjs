@@ -20,7 +20,8 @@
  *   invite founding admin + role=admin · optional first client + storage.
  *
  * The platform-account steps it does NOT do (create the Supabase project, the
- * R2 bucket/token/public-domain, Vercel, DNS) are printed as a checklist.
+ * R2 bucket/token/public-domain, Vercel, DNS, hosted Auth email template) are
+ * printed as a checklist.
  */
 import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
@@ -244,5 +245,7 @@ try {
 console.log(`─── Remaining manual steps (platform accounts) ───
   1. Cloudflare R2: bucket "${cfg.R2_BUCKET || '<bucket>'}" with a public domain + CORS GET/HEAD from *.  (You said staging R2 is already set up.)
   2. Vercel: point a project/branch at ${cfg.SITE_URL} with this env's URL + anon key.
-  3. Desktop: Settings → Environments → add ${supabaseUrl} + the publishable/anon key; sign in as ${cfg.ADMIN_EMAIL}.
+  3. DNS: point the environment's custom portal/CDN domains at Vercel and Cloudflare as applicable.
+  4. Supabase Auth: AFTER /auth/confirm is live, paste supabase/templates/magic_link.html into Authentication → Email Templates → Magic Link.
+  5. Desktop: Settings → Environments → add ${supabaseUrl} + the publishable/anon key; sign in as ${cfg.ADMIN_EMAIL}.
 `);
