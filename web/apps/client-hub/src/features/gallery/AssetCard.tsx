@@ -101,6 +101,8 @@ export function AssetCard({
               alt={asset.name}
               className="relative z-[1] w-full h-full object-cover cursor-pointer"
               fallbackClassName="relative z-[1] w-full h-full"
+              fileName={asset.name}
+              downloadUrl={asset.downloadUrl}
             />
           )
           : <div className="relative z-[1] w-full h-full bg-gray-150" />

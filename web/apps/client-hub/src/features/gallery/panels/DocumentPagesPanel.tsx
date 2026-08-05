@@ -15,6 +15,7 @@ import { useState } from 'react'
 import { pageUrlsFromThumbnail } from '@sotto/domain'
 import type { Asset } from '@sotto/asset-library'
 import { ImageLightbox, type LightboxItem } from '../ImageLightbox'
+import { AssetImage } from '../../../components/AssetImage'
 
 export function DocumentPagesPanel({
   asset,
@@ -65,15 +66,15 @@ export function DocumentPagesPanel({
               aria-label={`Open page ${i + 1} of ${total}`}
               className="group block w-full overflow-hidden rounded-sm border border-border bg-surface-sunken transition-colors hover:border-cosmos-black focus:outline-none focus-visible:border-cosmos-black"
             >
-              <img
+              {/* AssetImage rather than a bare <img>: a page that 401s or 404s would otherwise show
+                  the browser's broken-image glyph, which reads as a broken product. Compact — the
+                  tile is too small for a label, and the heading above already names the document. */}
+              <AssetImage
                 src={src}
                 alt={`Page ${i + 1}`}
-                /* Pages are small and numerous; letting the browser defer the ones below the fold
-                   keeps a forty-page document from firing forty requests on open. */
-                loading="lazy"
-                decoding="async"
-                referrerPolicy="no-referrer"
                 className="block w-full h-auto"
+                fallbackClassName="w-full aspect-[3/4]"
+                compact
               />
               <span className="block px-1 py-0.5 text-[9px] font-mono text-text-muted text-center">
                 {i + 1}

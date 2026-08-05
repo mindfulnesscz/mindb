@@ -83,6 +83,18 @@ Two stored keys are **migrated**, not just renamed, because a rename alone reads
   page files are `001.webp` and carry no `-thumb`. Two walkers checked only files: `pipeline/fs.ts`
   would have packaged and uploaded the pages as assets, and `dam/scan.ts` would have given every
   previewed document a spurious vault note.
+- **A large image failed to thumbnail with "Memory limit exceeded".** The `image` crate's default
+  decode budget is 512 MiB, which a real asset exceeded: `falling-up@600x.tif`, 9922x14104 RGB, needs
+  534 MiB for its final buffer alone and more again for TIFF strips. Raised to 2 GiB — measured: 1024
+  MiB still failed, 1536 succeeded in ~100ms. Deliberately bounded rather than unlimited, and large
+  decodes now take a gate so only one runs at a time: the pipeline renders eight thumbnails in ONE
+  process, so a 2 GiB per-image budget would otherwise be a 16 GiB peak and kill the app instead of
+  reporting one asset. Compile-time assertions keep the budget above the measured floor.
+- **A failed thumbnail showed the browser's broken-image glyph**, which reads as a broken product
+  rather than a missing preview. Any thumbnail that 401s or 404s — or was never generated — now
+  degrades to a placeholder naming the asset with a **Download** link, because a missing preview is
+  not a missing asset. Adopted at the four places that still rendered a bare `<img>`: gallery cards,
+  the hover strip, disconnected sub-assets, and the document page strip.
 - **An environment without the migration could not sync assets at all.** PostgREST rejects the whole
   write when one column is unknown (`PGRST204`), so sending the new page-count fields to a database
   that had not had the migration failed the **parent** row — and every child then skipped for want of
