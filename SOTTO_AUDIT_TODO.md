@@ -46,7 +46,7 @@ Structured findings from a full read of `/Users/petrmucha/Sites/localhost/dc-hub
         
 - [ ] **Stop button doesn't stop.** `desktop/src/store/pipelineStore.ts:103`. `stopRun` only sets status `stopping`; no stage checks it. UI shows "Stopping…" while uploads/purges/DB writes finish.  
         
-- [ ] **Admin UI fails open when Supabase env is absent.** `web/apps/client-hub/src/features/admin/AdminLandingPage.tsx:183`. Missing env → full admin dashboard renders with `isAdmin=true` (`RoleContext` defaults role to `editor`). Bounded to mock data \+ a "type your own Supabase creds" form, but the default direction is wrong — fail closed.  
+- [x] **Admin UI fails open when Supabase env is absent.** Fixed: missing configuration now renders a locked state and role defaults fail closed.
         
 - [ ] **Google Drive duplicate-folder race \+ weak skip.** `desktop/src/services/cloud/gdrive.ts:108-148,267`. Concurrent uploads (CONCURRENCY=8) into a new path each miss the cache and CREATE → up to 8 duplicate same-named Drive folders; remote skip is name+byte-size only (no hash/mtime).  
         
@@ -58,7 +58,7 @@ Structured findings from a full read of `/Users/petrmucha/Sites/localhost/dc-hub
         
 - [ ] **CORS trusts any `*.vercel.app` origin.** `supabase/functions/_shared/cors.ts:64`. Impact is limited (bearer-header auth, no `Allow-Credentials`), but tighten to an exact allow-list.  
         
-- [ ] **Docs/permissions model drift.** `docs/pages/web-portal/permissions.mdx:8,11` contradicts `packages/asset-library/src/permissions.ts` (permission control is editor+, not admin-only; members can't comment/approve). A reviewer trusting the table will build the wrong gate.  
+- [x] **Docs/permissions model drift.** Corrected to match `packages/asset-library/src/permissions.ts` (permission control is editor+; members cannot comment or approve).
         
 - [ ] **README materially stale.** `README.md:49-51` says "no automated test suite" and cites a "2.3.0 … five known typecheck errors" baseline at v3.2.0 with CI gating `npm run check` — actively misleading a new contributor to skip tests and tolerate red typechecks. VERSIONING.md (`:16-19`) also lists files `version.mjs` doesn't touch and omits `workers/cdn-gate/package.json`.  
         
@@ -70,23 +70,23 @@ Structured findings from a full read of `/Users/petrmucha/Sites/localhost/dc-hub
 
 ## ⚪ P3 — Low (hardening, hygiene, cleanup)
 
-- [ ] Plaintext OAuth tokens \+ GDrive client secret persisted in `client-local.json` (`desktop/src/services/clientService.ts:79-87`; also the Rust store, `lib.rs:197`). Move to OS keychain.  
+- [x] Plaintext OAuth tokens \+ GDrive client secret persisted in `client-local.json` (`desktop/src/services/clientService.ts:79-87`; also the Rust store, `lib.rs:197`). Moved to the OS keychain with loss-safe migration.
 - [ ] `csp: null` in `desktop/src-tauri/tauri.conf.json:23-25` disables the webview CSP while the command surface includes an open HTTP proxy and arbitrary-path fs — a minor injection becomes full local exfiltration. Set a real CSP.  
 - [ ] `supabase_request` is an open HTTP proxy exposed to the webview (`desktop/src-tauri/src/supabase.rs:14-45`) — SSRF (loopback / cloud-metadata) \+ header exfiltration. Restrict to the Supabase origin.  
 - [ ] `generate_document_previews` recursively deletes a caller-supplied `pages_dir` (`render.rs:378-381`) and thumbnail/upload commands take arbitrary read/write paths (`lib.rs:29-131`, `r2.rs:240`, `cloud.rs:117`) not covered by the fs capability scope. Confine to app dirs.  
 - [ ] `fs` capability scoped to `**` with dotfiles included (`capabilities/default.json:12-51`).  
 - [ ] Reveal bridge on `127.0.0.1:7624` returns `Access-Control-Allow-Origin:*` with no auth (`reveal.rs:60-73`) — any website can trigger Finder/Explorer opens as an existence oracle; also a single 8 KB read (`:56-59`) drops multi-segment requests, and a substring manifest fallback (`:191-201`) can match the wrong package.  
-- [ ] `destinationsVisibleToRole` fails open for `super_admin`\-gated destinations (`web/.../destinationService.ts:102` — missing from the rank allow-list).  
-- [ ] "No preview" fallback and sibling panels render a Download link ignoring `canDownload` (`AssetImage.tsx:71-79`, `AssetPreviewPanel.tsx:186`) — UI-only; delivery still gated server-side.  
-- [ ] `super_admin` can't use the admin magic-link path (`check_email_auth` staff branch omits it, `baseline.sql:263-264`).  
+- [x] `destinationsVisibleToRole` now preserves `super_admin`-gated destinations.
+- [x] "No preview" fallback and sibling download links now use `canDownload` with the correct asset.
+- [x] `super_admin` is included in `check_email_auth`'s staff magic-link path.
 - [ ] Workflows lack `permissions:` blocks (5 of 6\) → default write-all `GITHUB_TOKEN`.  
 - [ ] Reconcile workflow defaults `dry_run:false` → a manual "just to see" dispatch moves prod objects (`reconcile-cdn-keys.yml:38-42`).  
 - [ ] Readme lookup hardcodes `:c1` (`assetExport.ts:189`) → skips readme for packages whose primary isn't c1.  
-- [ ] Version-history writes machine-local `file://` paths to the shared DB (`versionHistory.ts:101`).  
-- [ ] mime gaps: `.xlsm/.docm/.tif/.tiff` served as `application/octet-stream` (`cdnUpload.ts:589-610`).  
-- [ ] Dead/stale: `reconcileCdn` unwired and drifted (`cdnCleanup.ts:18-58`); `keepHighestVersion` / `preserveStructure` / `onedriveFlatFolder` toggles rendered but never read; stale root `CLAUDE_CODE_PROMPT_*.md` / `CLAUDE_CODE_LOG_*.md` clutter describing pre-3.x architecture.  
-- [ ] `onedrive_poll_token` polls forever on an unparseable OAuth error body (`cloud.rs:389-407`).  
-- [ ] Node-version inconsistency: README says 22, most workflows use 24 (`db.yml`, `worker.yml`, etc.).
+- [x] Version-history writes machine-local `file://` paths to the shared DB (`versionHistory.ts:101`). Removed the machine-local URL write.
+- [x] MIME gaps: `.xlsm/.docm/.tif/.tiff` served as `application/octet-stream` (`cdnUpload.ts:589-610`). Added explicit mappings.
+- [x] Dead/stale: removed unwired `reconcileCdn`, unused settings toggles, and confirmed no root `CLAUDE_CODE_PROMPT_*.md` / `CLAUDE_CODE_LOG_*.md` files remain.
+- [x] `onedrive_poll_token` polls forever on an unparseable OAuth error body (`cloud.rs:389-407`). Only documented transient responses retry now.
+- [x] Node-version inconsistency: README says 22, most workflows use 24 (`db.yml`, `worker.yml`, etc.). Standardized on Node 24.
 
 ---
 
@@ -96,5 +96,4 @@ Structured findings from a full read of `/Users/petrmucha/Sites/localhost/dc-hub
 - `asset_events` impersonation \+ per-asset rate limit; ratings **write** scoping; `asset_stats` view `security_invoker=on`; `app_errors` rate-limit counter.  
 - God-file decomposition is real: `pipelineService.ts` 1,846→98 lines; `supabaseService.ts` 1,693→52-line barrel over \~23 modules.  
 - Tests went \~0 → \~382 `it()` blocks \+ characterization tests pinning the destructive paths; `guardrail.ts` blast-radius tripwire; `reportError.ts` chokepoint; `no-console` enforced.  
-- Credential posture: no service key on desktop; `validateAnonKey` rejects service-role keys; short-lived R2 grants; secret-free client exports. (Residual: plaintext OAuth tokens — P3 above.)
-
+- Credential posture: no service key on desktop; `validateAnonKey` rejects service-role keys; short-lived R2 grants; secret-free client exports; provider credentials persist in the OS keychain.

@@ -1,6 +1,6 @@
 /**
  * Portal-managed export destinations (structure in clients.cloud_destinations).
- * OAuth tokens stay on desktop only — never written from the web.
+ * OAuth tokens persist in the desktop workstation's OS keychain — never written from the web.
  */
 import { supabase } from '../lib/supabase'
 import { isStaff, type Role } from '@sotto/asset-library'
