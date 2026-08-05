@@ -99,7 +99,7 @@ function normalizeDest(raw: Record<string, unknown>): PortalDestination {
     id: String(raw.id ?? crypto.randomUUID()),
     name: String(raw.name ?? ''),
     role: (raw.role === 'internal' ? 'internal' : 'client'),
-    minRole: (['public', 'member', 'editor', 'admin'].includes(String(raw.minRole))
+    minRole: (['public', 'member', 'editor', 'admin', 'super_admin'].includes(String(raw.minRole))
       ? (raw.minRole as Role)
       : 'member'),
     exportLayout: shape.exportLayout,

@@ -176,11 +176,25 @@ function EditorRouter() {
 
 // ── Main page ─────────────────────────────────────────────────
 
+function AdminConfigurationRequired() {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center bg-bg px-4 text-center">
+      <DCMark size="lg" />
+      <h1 className="font-serif text-2xl font-medium text-cosmos-black mt-6 mb-2">
+        Admin unavailable
+      </h1>
+      <p className="font-sans text-sm text-text-muted max-w-sm">
+        This deployment is not configured for Supabase sign-in. Contact the site administrator.
+      </p>
+    </div>
+  )
+}
+
 export default function AdminLandingPage() {
   const configured = isConfigured()
   const { session, profile, loading, signOut } = useAuth()
 
-  if (!configured) return <AdminDashboard isAdmin />
+  if (!configured) return <AdminConfigurationRequired />
 
   if (loading) {
     return (
@@ -224,4 +238,3 @@ export default function AdminLandingPage() {
     </div>
   )
 }
-

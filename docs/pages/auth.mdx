@@ -177,7 +177,7 @@ User enters email
       ▼
 check_email_auth RPC (anonymous call)
       │
-      ├── 'staff'       → send link immediately  (existing admin/editor profile)
+      ├── 'staff'       → send link immediately  (existing editor/admin/super_admin profile)
       ├── 'returning'   → send link immediately  (existing member profile)
       ├── 'whitelisted' → send link immediately  (email domain in client's domain_whitelist)
       └── 'unknown'     → show profile form → send link
@@ -216,7 +216,7 @@ Called anonymously by the sign-in modal to determine which flow to show.
 
 | Result | Meaning |
 |---|---|
-| `'staff'` | Profile exists with `role = 'editor'` or `'admin'` |
+| `'staff'` | Profile exists with `role = 'editor'`, `'admin'`, or `'super_admin'` |
 | `'returning'` | Profile exists with `role = 'member'` or `'public'` |
 | `'whitelisted'` | No profile yet, but email domain is in a `clients.domain_whitelist` |
 | `'unknown'` | No profile, domain not whitelisted — will see the profile form |
