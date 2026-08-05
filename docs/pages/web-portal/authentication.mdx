@@ -2,10 +2,18 @@
 
 > This page covers the **email** path. The portal also offers **OAuth sign-in with Microsoft, Google, and GitHub**, which is preferred for corporate users — provider apps, the per-environment credentials, and the redirect/callback rules all live in [Authentication](/auth). Provisioning is identical either way: OAuth returns a verified email, so the same trigger and domain whitelist described below apply. The desktop app is email-only.
 
-Sotto uses Supabase email OTP/magic links. Before sending a link, `check_email_auth` categorizes an address as staff, returning, whitelisted, or unknown. Root staff sign-in and client-portal sign-in use this result differently; unknown portal users can submit profile metadata and portal client ID in auth user metadata.
+Sotto uses Supabase email magic links through the `signInWithOtp` API. Before sending a link,
+`check_email_auth` categorizes an address as staff, returning, whitelisted, or unknown. Root staff
+sign-in and client-portal sign-in use this result differently; unknown portal users can submit profile
+metadata and portal client ID in auth user metadata.
 
 On first authentication, the database trigger creates the profile, checks the email domain against client whitelists, and otherwise uses the portal client ID fallback. Subsequent logins do not rerun first-user assignment automatically.
 
-The browser asks Supabase to redirect to the current origin or supplied portal URL. Production Site URL and allowed redirects must include every deployed origin/path. Magic links are short-lived and browser/session handling can affect whether they open in the expected context.
+The email first opens the inert `/auth/confirm` route. That page does not spend the token on load;
+only its **Continue signing in** button constructs the Supabase verification URL. This protects the
+link from Microsoft Safe Links and similar prefetch scanners. Supabase then redirects to the current
+origin or supplied portal URL, so the Site URL and allowed redirects must include every deployed
+origin/path. The template, hosted rollout order, desktop callback, and verification procedure are
+documented in [Authentication → Scanner-safe confirmation](/auth#scanner-safe-confirmation).
 
 Security note: domain whitelisting is automatic membership, not proof of a particular person’s authorization beyond control of that domain mailbox. Use narrow client domains and manual review for agencies, free-mail domains, or shared domains.

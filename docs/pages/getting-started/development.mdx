@@ -44,7 +44,7 @@ npm run db:start
 npm run db:reset      # FIRST TIME ONLY — see the warning below
 ```
 
-To use **Continue with Microsoft / Google / GitHub** locally, also copy `supabase/.env.local.example` to `supabase/.env.local`, fill it in, and source it before starting the stack — provider credentials are per environment and the CLI reads them from the shell ([Authentication → Where provider credentials live](/auth)). Email magic link works without them; locally those emails land in Mailpit (`http://localhost:54324`).
+To use **Continue with Microsoft / Google / GitHub** locally, also copy `supabase/.env.local.example` to `supabase/.env.local`, fill it in, and source it before starting the stack — provider credentials are per environment and the CLI reads them from the shell ([Authentication → Where provider credentials live](/auth)). Email magic link works without provider credentials; locally those emails land in Mailpit (`http://localhost:54324`). Keep `npm run dev:web` running because the link first opens the scanner-safe confirmation page at `http://localhost:5173/auth/confirm`, including when signing into the local desktop app.
 
 ### ⛔ `db:reset` destroys local data — local is not scratch space
 

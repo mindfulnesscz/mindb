@@ -7,6 +7,7 @@ import AdminLandingPage from './features/admin/AdminLandingPage'
 import ClientPortalPage from './features/portal/ClientPortalPage'
 import SettingsView from './features/settings/SettingsView'
 import { RouteErrorBoundary } from './components/RouteErrorBoundary'
+import MagicLinkConfirmationPage from './features/auth/MagicLinkConfirmationPage'
 
 // ── Standalone settings page ──────────────────────────────────
 
@@ -95,6 +96,10 @@ export default function App() {
 
       {/* Settings — accessible to any logged-in user */}
       <Route path="settings" element={<SettingsPage />} />
+
+      {/* Email scanners may load the URL in the message. This route is deliberately inert until
+          the person selects Continue; only then is the one-time Supabase URL constructed. */}
+      <Route path="auth/confirm" element={<MagicLinkConfirmationPage />} />
 
       {/* Public asset share links */}
       <Route path="share/:id" element={<AssetDetailPage />} />

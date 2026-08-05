@@ -159,7 +159,7 @@ export function LoginView() {
           <>
             <p className={css.sub}>
               We sent a sign-in link to <strong>{email.trim()}</strong>.
-              Open it in your browser — this window will unlock automatically.
+              Open it in your browser and select Continue — this window will unlock automatically.
             </p>
             <div className={css.waiting}>
               <div className={css.spinner} />
