@@ -102,7 +102,7 @@ export function AssetCard({
               className="relative z-[1] w-full h-full object-cover cursor-pointer"
               fallbackClassName="relative z-[1] w-full h-full"
               fileName={asset.name}
-              downloadUrl={asset.downloadUrl}
+              downloadUrl={canDownload(role, asset) ? asset.downloadUrl : undefined}
             />
           )
           : <div className="relative z-[1] w-full h-full bg-gray-150" />
@@ -220,4 +220,3 @@ export function AssetCard({
 }
 
 // ── Skeletons ─────────────────────────────────────────────────
-

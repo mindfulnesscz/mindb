@@ -13,7 +13,10 @@
 | Set status | — | — | ✓ | ✓ | ✓ |
 | Control asset permission | — | — | ✓ | ✓ | ✓ |
 
-For members, `canViewAsset` additionally checks that the asset belongs to the client currently being viewed. Editors, admins, and super admins can switch clients. `public` is also the fallback role while a configured user profile is missing/loading.
+For members, `canViewAsset` additionally checks that the asset belongs to the client currently being
+viewed. Editors, admins, and super admins can switch clients. `public` is also the fallback role while
+a configured user profile is missing/loading. Without Supabase configuration, the role remains
+`public` with no active client and the root admin route renders a locked state.
 
 These TypeScript checks express product behavior, not a security perimeter. Every table, view, storage URL strategy, and RPC must enforce equivalent or stricter rules in Supabase. Public R2/provider bearer URLs cannot be revoked merely by changing a database role.
 

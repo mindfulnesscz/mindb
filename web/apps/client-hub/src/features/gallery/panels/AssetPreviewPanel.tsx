@@ -178,16 +178,19 @@ export function AssetPreviewPanel({
                   if (!dest) return isStaff
                   return true
                 })
+                const downloadable = canDownload(role, a)
                 return {
                   src: a.downloadUrl || a.thumbnailUrl || '',
                   thumbSrc: a.thumbnailUrl,
                   alt: a.name,
                   title: a.name,
-                  downloadUrl: canDownload(role, asset) ? a.downloadUrl : undefined,
-                  cloudLinks: links.map(l => ({
-                    label: l.name || l.provider || 'Cloud',
-                    url: l.url,
-                  })),
+                  downloadUrl: downloadable ? a.downloadUrl : undefined,
+                  cloudLinks: downloadable
+                    ? links.map(l => ({
+                        label: l.name || l.provider || 'Cloud',
+                        url: l.url,
+                      }))
+                    : [],
                   assetId: a.id,
                 }
               })
