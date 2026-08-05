@@ -1,7 +1,8 @@
 /* R2 over the S3 API, signed with short-lived credentials.
  *
- * The same mechanism r2-grant uses: the Cloudflare API mints a temporary, bucket-scoped key pair
- * from the parent key, so nothing long-lived is held here.
+ * The same temporary-credential API r2-grant uses. These credentials remain inside authenticated
+ * edge functions that reconcile across tenants, so they are bucket-scoped; the caller-facing
+ * r2-grant credentials are separately narrowed to one tenant's object-key prefixes.
  *
  * Deliberately Web Crypto rather than a Node shim — this runs on Deno, and the async HMAC is the
  * only real difference from the copy in scripts/rekey-gated-objects.mjs.

@@ -319,7 +319,6 @@ export default function ClientPortalPage() {
         {showModal && (
           <SignInModal
             redirectTo={window.location.href}
-            clientId={client.id}
             onClose={() => setShowModal(false)}
           />
         )}

@@ -26,12 +26,11 @@
  * nothing server-side to see.
  */
 
+import { isAllowedOrigin, parseAllowedOrigins } from './cors-policy.ts';
+
 /* Read once. Deno.env.get is cheap but this is called on every request, and a value that changed
    mid-instance would make two requests to the same worker disagree. */
-const CONFIGURED = (Deno.env.get('ALLOWED_ORIGINS') ?? '')
-  .split(',')
-  .map(o => o.trim().replace(/\/+$/, ''))
-  .filter(Boolean);
+const CONFIGURED = parseAllowedOrigins(Deno.env.get('ALLOWED_ORIGINS') ?? '');
 
 /* The pre-configuration list. Kept verbatim so an unset ALLOWED_ORIGINS is a no-op rather than an
    outage — see the header. Localhost is in here because the portal's dev server is a first-class
@@ -56,14 +55,7 @@ const ALLOWED_ORIGINS = new Set(ORIGINS);
 export function corsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get('Origin') ?? '';
   let allow = ORIGINS[0];
-  if (origin) {
-    try {
-      // Vercel previews are a moving set of hostnames, so they are matched by suffix rather than
-      // enumerated — a platform fact rather than a per-deployment choice, hence still in code.
-      const host = new URL(origin).hostname;
-      if (ALLOWED_ORIGINS.has(origin) || host.endsWith('.vercel.app')) allow = origin;
-    } catch { /* malformed Origin — fall through to the default */ }
-  }
+  if (origin && isAllowedOrigin(origin, ALLOWED_ORIGINS)) allow = origin;
   return {
     'Access-Control-Allow-Origin': allow,
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',

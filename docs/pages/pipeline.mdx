@@ -2,7 +2,9 @@
 
 The asset pipeline is a **desktop application** (`desktop`) built with [Tauri 2](https://tauri.app/) — a Rust backend with a React/TypeScript frontend. It runs on a signed-in staff machine (**editor** or **admin**) and processes creative files for the platform.
 
-All Supabase access uses the signed-in user's JWT under RLS. There is no service-role key on the desktop. CDN access uses short-lived `r2-grant` credentials when the environment is provisioned.
+All Supabase access uses the signed-in user's JWT under RLS. There is no service-role key on the
+desktop. CDN access uses short-lived `r2-grant` credentials when the environment is provisioned;
+Cloudflare scopes those credentials to the selected client's public and gated key namespaces.
 
 ## Steps, in run order
 
@@ -32,7 +34,11 @@ For each collected asset, the Rust backend renders a WebP thumbnail (PPTX/PDF vi
 
 ### CDN upload
 
-Runs only when thumbnails are enabled **and** the Control API grant succeeds (`r2-grant`). Uploads each thumbnail and original to Cloudflare R2 under `{client_id}/thumbnails/` or `{client_id}/originals/`.
+Runs only when thumbnails are enabled **and** the Control API grant succeeds (`r2-grant`). Uploads
+each thumbnail and original to Cloudflare R2 under `{client_id}/thumbnails/` or
+`{client_id}/originals/` on the public tier, or `{effective_level}/{client_id}/…` on the gated tier.
+The temporary credentials carry matching Cloudflare `prefixes`, so another client's key is denied
+independently of the desktop's key-building logic.
 
 **Only the highest version uploads.** When several version files of one asset sit in the same folder (`v0-3-7` next to `v0-3-8`), only the highest per base+extension is eligible — they all share one version-stable object key, so uploading more than one would make them overwrite each other every run. The log reports older versions excluded from CDN.
 

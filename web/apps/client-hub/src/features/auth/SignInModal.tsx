@@ -82,11 +82,10 @@ const inputCls =
 
 interface SignInModalProps {
   redirectTo?: string
-  clientId?: string     // portal's client id — stored on the new user's profile
   onClose?: () => void
 }
 
-export default function SignInModal({ redirectTo, clientId, onClose }: SignInModalProps = {}) {
+export default function SignInModal({ redirectTo, onClose }: SignInModalProps = {}) {
   const { checkEmail, sendMagicLink, signInWithProvider } = useAuth()
 
   const [step,     setStep]     = useState<Step>('email')
@@ -153,7 +152,7 @@ export default function SignInModal({ redirectTo, clientId, onClose }: SignInMod
     type: EmailAuthType,
     userData?: Record<string, string>,
   ) {
-    const err = await sendMagicLink(email, userData, redirectTo, clientId)
+    const err = await sendMagicLink(email, userData, redirectTo)
     if (err) {
       setError(err)
       setStep(type === 'unknown' ? 'extra' : 'email')

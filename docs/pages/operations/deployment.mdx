@@ -99,11 +99,14 @@ No source file names a domain any more. Everything that used to is configuration
 |---|---|---|
 | CDN cookie scope | `COOKIE_DOMAIN` in `workers/cdn-gate/wrangler.jsonc`, per env | Must be the registrable domain shared by portal and CDN |
 | CDN origin allow-list | `ALLOWED_ORIGINS`, same file | Exact origins; `*` is invalid alongside credentials |
-| Edge-function origin allow-list | `ALLOWED_ORIGINS` secret, from `<env>.public.env` | Falls back to a built-in list when unset, so an un-migrated environment does not lock its own portal out |
+| Edge-function origin allow-list | `ALLOWED_ORIGINS` secret, from `<env>.public.env` | Exact origins only; falls back to a built-in exact list when unset |
 | Gate hostname | `R2_GATED_DOMAIN` | Also what the pipeline writes into `download_url` |
 | Bucket names | `wrangler.jsonc` + `<env>.public.env` | Must match each other |
 
-The one deliberate exception is the `*.vercel.app` suffix rule in the CORS helpers: that is a platform fact about preview hostnames, not a per-deployment choice, so it stays in code.
+There is no wildcard exception for Vercel previews. Auth redirect configuration and function CORS
+are separate controls: `https://*.vercel.app/**` may be present in Supabase Auth redirects, but a
+preview can call browser-facing edge functions only when its exact origin is deliberately added to
+`ALLOWED_ORIGINS`. Unknown `*.vercel.app` projects are refused.
 
 **The manual half** (platform-account actions the script deliberately doesn't automate — it prints this list at the end):
 
@@ -143,7 +146,11 @@ The web app reads Supabase URL/anon key from environment (Vercel env vars in pro
 
 Desktop workstations need filesystem permissions plus native dependencies for requested thumbnail formats. Port 7623 must be available for OAuth and sign-in callbacks. OneDrive device flow needs outbound HTTPS but no callback listener.
 
-R2 storage is **environment-level**: bucket and public domain are edge secrets (`R2_BUCKET`, `R2_PUBLIC_DOMAIN`); object keys are prefixed `{client_id}/`. Credentials are minted per run by `r2-grant` (see [R2 CDN](/desktop/cdn)). Deploy migrations before UI that depends on them; regenerate types with `npm run db:types` into `@sotto/database`.
+R2 storage is **environment-level**: bucket and public domain are edge secrets (`R2_BUCKET`,
+`R2_PUBLIC_DOMAIN`); object keys carry the client UUID (after the level on the gated tier).
+Credentials are minted per run by `r2-grant` and Cloudflare limits them to that client's exact key
+prefixes (see [R2 CDN](/desktop/cdn)). Deploy migrations before UI that depends on them; regenerate
+types with `npm run db:types` into `@sotto/database`.
 
 ### Adding a column: the desktop talks to every environment at once
 

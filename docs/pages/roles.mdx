@@ -77,7 +77,8 @@ Use the web **Users** tab for privileged changes. It calls the security-definer 
 There is no self-service sign-up for `editor`, `admin`, or `super_admin`. The flow is:
 
 1. The person signs in via the root `/` admin page (or portal → admin if already staff).
-2. A profile is auto-created, often as `public` (or `member` when OTP carries portal `client_id` / domain whitelist).
+2. A profile is auto-created as `public`, or as `member` only when the verified email domain matches
+   an administrator-managed client allow-list. Signup metadata never assigns a tenant.
 3. An admin promotes and assigns member/editor access on the **Users** tab. A super admin is required for admin-level grants.
 
 ## Editor portal access
