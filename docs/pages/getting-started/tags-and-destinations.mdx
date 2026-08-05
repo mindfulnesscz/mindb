@@ -11,7 +11,7 @@ Where taxonomy and cloud delivery are edited, what each surface owns, and how po
 | Leaf tags (have shortcode) | `tags` rows | Portal **Tags**, or desktop Vocabulary (then Sync) | Parses filenames; may publish dirty leaves |
 | Export destination structure | `clients.cloud_destinations` | Portal **Export destinations** | Sync / pull; connect OAuth |
 | Local destination filesystem path | Machine-local only | Desktop Cloud destinations → Browse | Never written to Supabase |
-| OAuth tokens & Google client secret | Machine-local only | Desktop Settings → Cloud destinations | Never written to Supabase |
+| OAuth tokens & Google client secret | OS keychain only | Desktop Settings → Cloud destinations | Never written to Supabase or `client-local.json` |
 | Source / vault folders | Machine-local | Desktop Pipeline / Settings | Reveal bridge uses `sourceFolder` |
 
 **Rule:** never treat desktop as the admin UI for portal-owned columns. Desktop may *publish leaf tags* and *store secrets*; it must not invent parent groups or destination definitions.

@@ -2,6 +2,7 @@ use std::io::{BufReader, Read};
 
 mod r2;
 mod cloud;
+mod keychain;
 mod supabase;
 mod reveal;
 mod native;
@@ -288,6 +289,9 @@ pub fn run() {
             cloud::onedrive_device_code,
             cloud::onedrive_poll_token,
             cloud::onedrive_refresh_token,
+            keychain::keychain_set_secret,
+            keychain::keychain_get_secret,
+            keychain::keychain_delete_secret,
             supabase::supabase_request,
         ])
         .run(tauri::generate_context!())

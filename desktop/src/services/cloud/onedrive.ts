@@ -37,7 +37,6 @@ export async function pollOneDriveToken(
   clientId:   string,
   tenantId:   string,
   deviceCode: string,
-  _intervalSecs: number,
   signal: { cancelled: boolean },
 ): Promise<CloudToken | null> {
   const result = await invoke<{ accessToken: string; refreshToken: string; expiresIn: number } | null>(
@@ -206,4 +205,3 @@ export async function uploadOneDriveFile(
   if (!getLink) return null;
   return onedriveCreateLink(driveBase, encodedPath, accessToken);
 }
-

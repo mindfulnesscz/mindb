@@ -10,7 +10,7 @@
  *   thumbnails    generate the -thumb.webp beside each thumbnable asset
  *   cdnUpload     publish thumbnails + originals to R2 under identity-derived keys
  *   pagesUpload   publish per-page document previews (portal page viewer only)
- *   cdnCleanup    remove R2 objects with no live asset behind them
+ *   cdnCleanup    remove R2 objects identified as stale by the database sync
  *   cloudExport   push to Dropbox / OneDrive / Google Drive
  *
  * Stage ORDER is load-bearing, not incidental — see the comments inline.
@@ -39,7 +39,7 @@ export type {
   RunContext, CloudUrlEntry, R2Config, VersionEntry, AssetVersions,
 } from './pipeline/types';
 export { scanVersionMap } from './pipeline/scan';
-export { reconcileCdn, deleteCdnObjects } from './pipeline/cdnCleanup';
+export { deleteCdnObjects } from './pipeline/cdnCleanup';
 
 /* ── Main entry point ─────────────────────────────────────────────────────── */
 

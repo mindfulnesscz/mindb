@@ -18,7 +18,6 @@ export function makeSettings(over: Partial<AppSettings> = {}): AppSettings {
   return {
     sourceFolder: SRC,
     targetFolder: DST,
-    onedriveFlatFolder: '',
     vaultFolder: '',
 
     doThumbnails: false,
@@ -29,8 +28,6 @@ export function makeSettings(over: Partial<AppSettings> = {}): AppSettings {
     doCdnOriginals: false,
 
     dryRun: false,
-    keepHighestVersion: true,
-    preserveStructure: false,
     // Off, so the tests exercise the guardrail rather than bypassing it.
     allowLargeDeletions: false,
 

@@ -75,14 +75,14 @@ export async function syncVersionHistory(
       continue;
     }
 
-    const desired = new Map<string, { status: 'Active' | 'History'; file: string }>();
-    if (av.current) desired.set(av.current.version, { status: 'Active',   file: av.current.file });
-    for (const h of av.history) desired.set(h.version, { status: 'History', file: h.file });
+    const desired = new Map<string, 'Active' | 'History'>();
+    if (av.current) desired.set(av.current.version, 'Active');
+    for (const h of av.history) desired.set(h.version, 'History');
 
     const existingVersions = existingVH.get(assetId) ?? new Map();
 
     // Versions to create or update status on
-    for (const [version, { status, file }] of desired) {
+    for (const [version, status] of desired) {
       const existing = existingVersions.get(version);
       if (!existing || existing.status !== status) {
         const parsed    = parseFilename(sc, vocabCtx);
@@ -99,7 +99,6 @@ export async function syncVersionHistory(
           version,
           version_label: version ? `${name} ${version}` : name,
           status,
-          file_url:      `file://${file}`,
           date:          today,
         });
       }
