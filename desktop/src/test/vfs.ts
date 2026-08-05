@@ -133,6 +133,13 @@ export class Vfs {
     return this.dirs.has(norm(path));
   }
 
+  sameContent(left: string, right: string): boolean {
+    const a = this.files.get(norm(left))?.content;
+    const b = this.files.get(norm(right))?.content;
+    if (!a || !b || a.byteLength !== b.byteLength) return false;
+    return a.every((byte, i) => byte === b[i]);
+  }
+
   removed(): string[] {
     return this.ops.filter(o => o.kind === 'remove').map(o => (o as { path: string }).path).sort();
   }

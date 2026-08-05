@@ -88,20 +88,43 @@ export async function exportAssetsToSupabase(
   }
 
   if (identified.stableSingles.length || identified.stableGalleries.length) {
+    // A run carrying page counts probes before it writes. Other runs avoid that extra round trip
+    // and optimistically select the count for disconnect cleanup, with a legacy-schema retry below.
+    let pagePreviewColumns = pageCounts?.size ? await hasPagePreviewColumns(base, headers) : true;
     // Existing rows, keyed the same way the plan keys its writes.
     const existing = new Map<string, StableRow>();
-    let readFailed = false;
     try {
       // perm/status come along for readme.md only — the pipeline reports them, never rewrites
       // perm on an existing row (see stripPortalOwnedFields).
-      const rows = await fetchAllForClient<StableRow>(
-        base, 'assets?status=neq.archived', clientId,
-        'id,stable_id,child_id,thumbnail_url,parent_id,variant_of,perm,status', headers,
-      );
+      const optionalPageSelect = pagePreviewColumns ? ',preview_page_count' : '';
+      let rows: StableRow[];
+      try {
+        rows = await fetchAllForClient<StableRow>(
+          base, 'assets?status=neq.archived', clientId,
+          `id,stable_id,child_id,thumbnail_url,download_url,download_key,parent_id,variant_of,perm,status${optionalPageSelect}`,
+          headers,
+        );
+      } catch (error) {
+        const missingOptionalColumn = pagePreviewColumns
+          && !pageCounts?.size
+          && String(error).includes('preview_page_count');
+        if (!missingOptionalColumn) throw error;
+        pagePreviewColumns = false;
+        rows = await fetchAllForClient<StableRow>(
+          base, 'assets?status=neq.archived', clientId,
+          'id,stable_id,child_id,thumbnail_url,download_url,download_key,parent_id,variant_of,perm,status',
+          headers,
+        );
+      }
       for (const r of rows) existing.set(`${r.stable_id}:${r.child_id}`, r);
     } catch (e) {
       appendLog('error', `  ✕  Could not fetch existing stable-identity records: ${e}`);
-      readFailed = true;
+      appendLog('error', '  ✕  Supabase export aborted before planning or writes — existing identity state is unknown.');
+      result.errors += 1;
+      appendLog('section',
+        `━━━ SUPABASE DONE — ${result.created} new · ${result.updated} updated · ${result.disconnected} disconnected · ${result.errors} errors ━━━`,
+      );
+      return result;
     }
     const existingByStableId = new Map<string, StableRow[]>();
     for (const row of existing.values()) {
@@ -116,7 +139,7 @@ export async function exportAssetsToSupabase(
        `stripAbsentUrls` removes the fields, which is the same no-opinion path a run with thumbnails
        disabled already takes. One probe per run, not per row. */
     let writablePageCounts = pageCounts;
-    if (pageCounts?.size && !(await hasPagePreviewColumns(base, headers))) {
+    if (pageCounts?.size && !pagePreviewColumns) {
       writablePageCounts = undefined;
       appendLog('warn',
         '  ⚠  This environment has no page-preview columns yet — page counts not synced. '
@@ -178,11 +201,9 @@ export async function exportAssetsToSupabase(
     }
 
     /* ── 4. Disconnect ────────────────────────────────────────────────────── */
-    // Skipped when the read failed: "no row for this key" would then mean "unknown", not
-    // "absent", and treating an empty result as truth would disconnect every asset.
-    if (!readFailed && !shouldStop?.()) {
+    if (!shouldStop?.()) {
       await disconnectStaleRows(
-        existing, plan.currentStableKeys, base, headers, result, appendLog,
+        existing, plan.currentStableKeys, clientId, base, headers, result, appendLog,
         allowLargeDeletions, dryRun, shouldStop, sourceFresh,
       );
     }
@@ -215,14 +236,14 @@ async function writeReadmes(
   if (!targets.length) return;
 
   const primaryIds = targets
-    .map(t => parentIdByKey.get(`${t.stableId}:c1`))
+    .map(t => parentIdByKey.get(t.primaryKey))
     .filter((id): id is string => !!id);
   const statsMap = await fetchAssetStats(primaryIds, config);
   const vocabCtx = buildVocabMap(vocab);
 
   let written = 0;
   for (const t of targets) {
-    const primaryId = parentIdByKey.get(`${t.stableId}:c1`);
+    const primaryId = parentIdByKey.get(t.primaryKey);
     if (!primaryId) continue;
     try {
       const parsed = parseFilename(t.stem, vocabCtx);

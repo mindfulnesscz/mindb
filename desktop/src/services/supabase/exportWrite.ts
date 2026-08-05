@@ -40,6 +40,7 @@ export function stripAbsentUrls(record: Record<string, unknown>): Record<string,
   const out = { ...record };
   if (out.thumbnail_url == null) delete out.thumbnail_url;
   if (out.download_url == null) delete out.download_url;
+  if (out.download_key == null) delete out.download_key;
   if (Array.isArray(out.download_urls) && out.download_urls.length === 0) delete out.download_urls;
   /* Same reasoning for the page counts: a run with thumbnails disabled, or one where this asset was
      not re-rendered, has NO OPINION about them. Sending null would blank the count the portal reads
@@ -105,6 +106,8 @@ export async function writeParents(
               stable_id: rawRecord.stable_id as string,
               child_id: rawRecord.child_id as string,
               thumbnail_url: (rawRecord.thumbnail_url as string | null) ?? null,
+              download_url: (rawRecord.download_url as string | null) ?? null,
+              download_key: (rawRecord.download_key as string | null) ?? null,
               parent_id: null, variant_of: null,
             });
           }
@@ -156,6 +159,8 @@ export async function writeChildren(
             stable_id: record.stable_id as string,
             child_id: record.child_id as string,
             thumbnail_url: (record.thumbnail_url as string | null) ?? null,
+            download_url: (record.download_url as string | null) ?? null,
+            download_key: (record.download_key as string | null) ?? null,
             parent_id: (withParent.parent_id as string | null) ?? null,
             variant_of: (withParent.variant_of as string | null) ?? null,
           });

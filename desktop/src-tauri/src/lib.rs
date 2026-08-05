@@ -1,3 +1,4 @@
+use std::io::{BufReader, Read};
 use std::path::Path;
 
 mod r2;
@@ -20,8 +21,43 @@ const OFFICE_EXTS: &[&str] = &[
 /// Extensions decoded directly by the `image` crate.
 const RASTER_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "bmp"];
 
+/// Exact, streaming content comparison for local publish/cache decisions.
+///
+/// Size + mtime is the cheap gate in TypeScript; this closes the restored-backup case where the
+/// source is older than the destination but its bytes changed without changing length. Streaming
+/// avoids loading two large creative files into the webview at once.
+#[tauri::command]
+fn files_equal(source_path: String, destination_path: String) -> Result<bool, String> {
+    const CHUNK: usize = 64 * 1024;
+    let source = std::fs::File::open(&source_path)
+        .map_err(|e| format!("open {source_path}: {e}"))?;
+    let destination = std::fs::File::open(&destination_path)
+        .map_err(|e| format!("open {destination_path}: {e}"))?;
+    if source.metadata().map_err(|e| e.to_string())?.len()
+        != destination.metadata().map_err(|e| e.to_string())?.len()
+    {
+        return Ok(false);
+    }
+
+    let mut left = BufReader::new(source);
+    let mut right = BufReader::new(destination);
+    let mut left_buf = [0_u8; CHUNK];
+    let mut right_buf = [0_u8; CHUNK];
+    loop {
+        let left_len = left.read(&mut left_buf).map_err(|e| e.to_string())?;
+        let right_len = right.read(&mut right_buf).map_err(|e| e.to_string())?;
+        if left_len != right_len || left_buf[..left_len] != right_buf[..right_len] {
+            return Ok(false);
+        }
+        if left_len == 0 {
+            return Ok(true);
+        }
+    }
+}
+
 /// Generate a WebP thumbnail for a given source file.
-/// Returns Ok(true) if created, Ok(false) if skipped (already exists), Err(msg) on failure.
+/// Returns Ok(true) if created, Ok(false) if the source fingerprint/settings are current,
+/// Err(msg) on failure.
 ///
 /// Rendering is in-process — see `render`. Nothing here shells out to a tool the user had to
 /// install, except LibreOffice until it is bundled.
@@ -33,9 +69,11 @@ fn generate_thumbnail(
     width: u32,
     quality: u32,
 ) -> Result<bool, String> {
-    if Path::new(&dest).exists() { return Ok(false); }
+    let src_path = Path::new(&src);
+    let dest_path = Path::new(&dest);
+    if render::thumbnail_current(src_path, dest_path, width, quality) { return Ok(false); }
 
-    if let Some(parent) = Path::new(&dest).parent() {
+    if let Some(parent) = dest_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
@@ -43,14 +81,18 @@ fn generate_thumbnail(
         .and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
 
     if ext == "pdf" {
-        render::pdf_to_thumb(&app, &src, &dest, width, quality).map(|_| true)
+        render::pdf_to_thumb(&app, &src, &dest, width, quality)?;
     } else if OFFICE_EXTS.contains(&ext.as_str()) {
-        render::office_to_thumb(&app, &src, &dest, width, quality).map(|_| true)
+        render::office_to_thumb(&app, &src, &dest, width, quality)?;
     } else if RASTER_EXTS.contains(&ext.as_str()) {
-        render::image_to_thumb(&src, &dest, width, quality).map(|_| true)
+        render::image_to_thumb(&src, &dest, width, quality)?;
     } else {
-        Err(format!("Unsupported thumbnail format: {ext}"))
+        return Err(format!("Unsupported thumbnail format: {ext}"));
     }
+    // Written last: a failed render can leave the previous thumbnail in place, but not a fresh
+    // manifest that would incorrectly mark it current on the next run.
+    render::write_thumbnail_manifest(src_path, dest_path, width, quality)?;
+    Ok(true)
 }
 
 /// Extensions that get per-page previews at all. Images are a single page by definition.
@@ -212,6 +254,7 @@ pub fn run() {
            `pubkey`/`endpoints` back, have release-desktop.yml emit updater artifacts, and restore
            this line. */
         .invoke_handler(tauri::generate_handler![
+            files_equal,
             generate_thumbnail,
             generate_document_previews,
             wait_for_oauth_redirect,

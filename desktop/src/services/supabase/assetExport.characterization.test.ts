@@ -20,8 +20,12 @@ vi.mock('@tauri-apps/api/path', async () => (await import('../../test/vfs')).vfs
 vi.mock('./rest', async () => (await import('../../test/restStub')).restStub.api());
 // readme.md generation and stats are separate concerns with their own paths; stub them so a
 // failure there cannot look like a sync failure here.
-vi.mock('../readmeService', () => ({ writeReadme: async () => {} }));
-vi.mock('./assetQueries', () => ({ fetchAssetStats: async () => new Map() }));
+const readmeStubs = vi.hoisted(() => ({
+  writeReadme: vi.fn(),
+  fetchAssetStats: vi.fn(async () => new Map<string, never>()),
+}));
+vi.mock('../readmeService', () => ({ writeReadme: readmeStubs.writeReadme }));
+vi.mock('./assetQueries', () => ({ fetchAssetStats: readmeStubs.fetchAssetStats }));
 
 const { vfs } = await import('../../test/vfs');
 const { restStub } = await import('../../test/restStub');
@@ -52,21 +56,29 @@ const VOCAB: VocabularyData = {
 async function sync(paths: string[], opts: {
   cdnUrls?: Map<string, string>;
   pageCounts?: Map<string, { total: number; rendered: number }>;
+  originalUrls?: Map<string, string>;
   dryRun?: boolean;
   sourceFresh?: boolean;
+  allowLargeDeletions?: boolean;
 } = {}) {
   const { singles, galleries } = groupAssets(paths, 'OUT');
   const logs: Array<{ type: string; msg: string }> = [];
   const result = await exportAssetsToSupabase(
     singles, CLIENT, VOCAB, config,
     (type, msg) => { logs.push({ type, msg }); },
-    opts.cdnUrls, undefined, galleries, undefined, false, opts.pageCounts, opts.dryRun,
+    opts.cdnUrls, undefined, galleries, opts.originalUrls, opts.allowLargeDeletions,
+    opts.pageCounts, opts.dryRun,
     undefined, opts.sourceFresh,
   );
   return { result, logs, logged: (n: string) => logs.some(l => l.msg.includes(n)) };
 }
 
-beforeEach(() => { vfs.reset(); restStub.reset(); });
+beforeEach(() => {
+  vfs.reset();
+  restStub.reset();
+  readmeStubs.writeReadme.mockReset().mockResolvedValue(undefined);
+  readmeStubs.fetchAssetStats.mockReset().mockResolvedValue(new Map());
+});
 
 describe('assetExport — a fresh package folder', () => {
   it('dry-runs the complete export without rows, manifests, or readmes being mutated', async () => {
@@ -125,6 +137,31 @@ describe('assetExport — a fresh package folder', () => {
     expect(result.created).toBe(0);
     expect(result.updated).toBe(1);
     expect(restStub.byMethod('PATCH')[0].url).toContain('id=eq.row-existing');
+  });
+
+  it('attaches readme stats to the planner primary when its child id is not c1', async () => {
+    const packageDir = `${SRC}/Asset __a1000004`;
+    const p = `${packageDir}/OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.put(p, 'pdf');
+    vfs.put(`${packageDir}/.dchub.json`, JSON.stringify({
+      stable_id: 'a1000004',
+      children: {
+        '(PRD)(SlD) Deck.pdf': { child_id: 'c7', sha256: 'known' },
+      },
+      updated_at: '',
+    }));
+    restStub.existingRows = [{
+      id: 'row-seven', stable_id: 'a1000004', child_id: 'c7',
+      parent_id: null, variant_of: null, perm: 'client', status: 'published',
+    }];
+
+    await sync([p]);
+
+    expect(readmeStubs.fetchAssetStats).toHaveBeenCalledWith(['row-seven'], config);
+    expect(readmeStubs.writeReadme).toHaveBeenCalledWith(
+      packageDir,
+      expect.objectContaining({ stableId: 'a1000004', stats: null }),
+    );
   });
 
   it('refuses to sync a folder with no identity, and reports it', async () => {
@@ -395,12 +432,47 @@ describe('assetExport — disconnecting what is gone', () => {
     vfs.put(p, 'pdf');
     restStub.existingRows = [
       { id: 'row-live', stable_id: 'a5000002', child_id: 'c1' },
-      { id: 'row-gone', stable_id: 'a5000002', child_id: 'c9', download_key: 'originals/a5000002/c9.pdf' },
+      {
+        id: 'row-gone', stable_id: 'a5000002', child_id: 'c9',
+        status: 'published', perm: 'public',
+        thumbnail_url: 'https://public.example/client-1/thumbnails/a5000002/c9.webp?v=abc',
+        download_url: 'https://public.example/client-1/originals/a5000002/c9.pdf?v=abc',
+        preview_page_count: 2,
+      },
     ];
 
     const { result } = await sync([p]);
 
-    expect(result.staleObjectKeys).toEqual(['originals/a5000002/c9.pdf']);
+    expect(result.staleObjectKeys).toEqual([
+      'client-1/thumbnails/a5000002/c9.webp',
+      'client-1/originals/a5000002/c9.pdf',
+      'client-1/pages/a5000002/c9/001.webp',
+      'client-1/pages/a5000002/c9/002.webp',
+    ]);
+  });
+
+  it('derives gated cleanup keys from stable identity and the row access level', async () => {
+    const p = `${SRC}/Asset __a5000004/OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.put(p, 'pdf');
+    restStub.existingRows = [
+      { id: 'row-live', stable_id: 'a5000004', child_id: 'c1' },
+      {
+        id: 'row-gone', stable_id: 'a5000004', child_id: 'c9',
+        status: 'published', perm: 'client',
+        thumbnail_url: 'https://gated.example/client/client-1/thumbnails/a5000004/c9.webp?v=abc',
+        download_key: 'client/client-1/originals/a5000004/c9.png',
+        download_url: 'https://gated.example/client/client-1/originals/a5000004/c9.png?v=abc',
+        preview_page_count: 1,
+      },
+    ];
+
+    const { result } = await sync([p]);
+
+    expect(result.staleObjectKeys).toEqual([
+      'client/client-1/thumbnails/a5000004/c9.webp',
+      'client/client-1/originals/a5000004/c9.png',
+      'client/client-1/pages/a5000004/c9/001.webp',
+    ]);
   });
 
   it('disconnects nothing when every row is still on disk', async () => {
@@ -454,6 +526,18 @@ describe('assetExport — guards', () => {
     expect(restStub.patched()[0].thumbnail_url).toBe('https://cdn/x.webp');
   });
 
+  it('writes the exact identity-derived original key alongside its URL', async () => {
+    const p = `${SRC}/Asset __a6000007/OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.put(p, 'pdf');
+
+    await sync([p], {
+      originalUrls: new Map([[p, 'https://gated.example/client/client-1/originals/a6000007/c1.pdf?v=abc']]),
+    });
+
+    expect(restStub.inserted()[0].download_key)
+      .toBe('client/client-1/originals/a6000007/c1.pdf');
+  });
+
   it('always clears both relation fields on a primary', async () => {
     // A row synced by an earlier build may carry a stale parent_id or variant_of; an omitted
     // field would leave it in place.
@@ -483,8 +567,13 @@ describe('assetExport — guards', () => {
     vfs.put(p, 'pdf');
     const { result, logged } = await sync([p]);
 
+    expect(restStub.byMethod('POST')).toEqual([]);
+    expect(restStub.byMethod('PATCH')).toEqual([]);
+    expect(vfs.hasFile(`${SRC}/Asset __a6000006/.dchub.json`)).toBe(false);
     expect(result.disconnected).toBe(0);
+    expect(result.errors).toBe(1);
     expect(logged('Could not fetch existing stable-identity records')).toBe(true);
+    expect(logged('export aborted before planning or writes')).toBe(true);
   });
 
   it('does nothing at all when there is nothing on disk', async () => {

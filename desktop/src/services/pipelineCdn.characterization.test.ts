@@ -32,7 +32,7 @@ vi.mock('@tauri-apps/plugin-shell', () => ({ open: async () => {} }));
 
 const { vfs } = await import('../test/vfs');
 const { invokeStub } = await import('../test/invokeStub');
-const { runPipeline } = await import('./pipelineService');
+const { deleteCdnObjects, runPipeline } = await import('./pipelineService');
 const { makeSettings, makeCtx, SRC, R2 } = await import('../test/pipelineHarness');
 import type { AppSettings } from '../store/settingsStore';
 
@@ -239,8 +239,9 @@ describe('CDN — object key construction', () => {
     await cdn({ doThumbnails: false });
 
     expect(invokeStub.uploadedKeys()).toEqual([
-      'client/client-abc/originals/a1000007/c1.pdf',
-      'client/client-abc/originals/a1000007/c2.jpg',
+      // Fresh ids follow the shared lexical path order, independent of filesystem scan order.
+      'client/client-abc/originals/a1000007/c1.jpg',
+      'client/client-abc/originals/a1000007/c2.pdf',
     ]);
   });
 
@@ -256,6 +257,40 @@ describe('CDN — object key construction', () => {
     const keys = invokeStub.uploadedKeys();
     expect(keys).toHaveLength(2);
     expect(new Set(keys.map(k => k.split('/').pop()!.split('.')[0])).size).toBe(2);
+  });
+});
+
+describe('THUMBNAILS — source fingerprint cache', () => {
+  it('regenerates a raster whose content changed even when the restored source is older', async () => {
+    const source = `${SRC}/Asset __a1000099/[03] OUT/(PRD) Product.png`;
+    const first = 'first image bytes';
+    vfs.put(source, first);
+    await cdn({ doCdnOriginals: false });
+
+    // A backup restore can move the source clock backwards. Existence/newer-destination checks used
+    // to keep the old thumbnail forever; the recorded source fingerprint must invalidate it.
+    vfs.put(source, first.replace('first', 'other'), 500);
+    const second = await cdn({ doCdnOriginals: false });
+
+    expect(invokeStub.argsFor('generate_thumbnail')).toHaveLength(2);
+    expect(second.stats.thumbnails).toBe(1);
+  });
+});
+
+describe('CDN — disconnect cleanup routing', () => {
+  it('deletes public and gated identity keys from their respective buckets', async () => {
+    const keys = [
+      'client-abc/thumbnails/a1000001/c1.webp',
+      'client/client-abc/originals/a1000002/c2.pdf',
+    ];
+
+    await deleteCdnObjects(R2, keys, () => {}, 2);
+
+    const deletions = invokeStub.argsFor('delete_r2_object');
+    expect(deletions).toEqual([
+      expect.objectContaining({ objectKey: keys[0], bucket: R2.bucket }),
+      expect.objectContaining({ objectKey: keys[1], bucket: R2.gatedBucket }),
+    ]);
   });
 });
 
