@@ -602,7 +602,7 @@ pub fn manifest_path(pages_dir: &Path) -> PathBuf {
 }
 
 /// mtime (ms since epoch) and size of a file — the cheap fingerprint.
-fn fingerprint(src: &Path) -> Result<(i64, u64), String> {
+pub(crate) fn fingerprint(src: &Path) -> Result<(i64, u64), String> {
     let meta = std::fs::metadata(src).map_err(|e| format!("stat {}: {e}", src.display()))?;
     let mtime_ms = meta
         .modified()
@@ -611,6 +611,75 @@ fn fingerprint(src: &Path) -> Result<(i64, u64), String> {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(-1);
     Ok((mtime_ms, meta.len()))
+}
+
+/* ── Single-thumbnail manifest ───────────────────────────────────────────── */
+
+/// Source fingerprint and output settings for a plain `<stem>-thumb.webp`.
+///
+/// Existence used to be the entire cache key, so replacing/restoring a source file never refreshed
+/// its thumbnail. This mirrors the document-preview manifest's size+mtime decision while keeping
+/// the generated sidecar beside the thumbnail (and therefore covered by every `-thumb` exclusion).
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ThumbnailManifest {
+    pub version: u32,
+    pub src_mtime_ms: i64,
+    pub src_size: u64,
+    pub width: u32,
+    pub quality: u32,
+}
+
+pub const THUMBNAIL_MANIFEST_VERSION: u32 = 1;
+
+pub fn thumbnail_manifest_path(dest: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.json", dest.display()))
+}
+
+pub fn thumbnail_current(
+    src: &Path,
+    dest: &Path,
+    width: u32,
+    quality: u32,
+) -> bool {
+    if !dest.is_file() { return false; }
+    let manifest: ThumbnailManifest = match std::fs::read(thumbnail_manifest_path(dest))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    {
+        Some(manifest) => manifest,
+        None => return false,
+    };
+    let (src_mtime_ms, src_size) = match fingerprint(src) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    manifest == ThumbnailManifest {
+        version: THUMBNAIL_MANIFEST_VERSION,
+        src_mtime_ms,
+        src_size,
+        width,
+        quality,
+    }
+}
+
+pub fn write_thumbnail_manifest(
+    src: &Path,
+    dest: &Path,
+    width: u32,
+    quality: u32,
+) -> Result<(), String> {
+    let (src_mtime_ms, src_size) = fingerprint(src)?;
+    let manifest = ThumbnailManifest {
+        version: THUMBNAIL_MANIFEST_VERSION,
+        src_mtime_ms,
+        src_size,
+        width,
+        quality,
+    };
+    let bytes = serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?;
+    std::fs::write(thumbnail_manifest_path(dest), bytes)
+        .map_err(|e| format!("write thumbnail manifest for {}: {e}", dest.display()))
 }
 
 /// Are the previews in `pages_dir` still valid for `src` under these settings?
@@ -765,6 +834,22 @@ mod tests {
         // PDFium rasterises to the target width; re-filtering would soften text for nothing.
         let out = downscale(&solid(320, 180), 320);
         assert_eq!((out.width(), out.height()), (320, 180));
+    }
+
+    #[test]
+    fn thumbnail_cache_tracks_source_fingerprint_and_render_settings() {
+        let work = TempDir::new("sotto-thumbnail-manifest").unwrap();
+        let src = work.path().join("asset.png");
+        let dest = work.path().join("asset-thumb.webp");
+        std::fs::write(&src, b"source bytes").unwrap();
+        std::fs::write(&dest, b"thumbnail bytes").unwrap();
+        write_thumbnail_manifest(&src, &dest, 320, 70).unwrap();
+
+        assert!(thumbnail_current(&src, &dest, 320, 70));
+        assert!(!thumbnail_current(&src, &dest, 640, 70));
+
+        std::fs::write(&src, b"restored source with changed bytes").unwrap();
+        assert!(!thumbnail_current(&src, &dest, 320, 70));
     }
 
 

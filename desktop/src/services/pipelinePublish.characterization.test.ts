@@ -14,10 +14,13 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('@tauri-apps/plugin-fs', async () => (await import('../test/vfs')).vfs.fsApi());
 vi.mock('@tauri-apps/api/path', async () => (await import('../test/vfs')).vfs.pathApi());
-vi.mock('@tauri-apps/api/core', () => ({ invoke: async () => ({}) }));
+vi.mock('@tauri-apps/api/core', async () => ({
+  invoke: (await import('../test/invokeStub')).invokeStub.invoke,
+}));
 vi.mock('@tauri-apps/plugin-shell', () => ({ open: async () => {} }));
 
 const { vfs } = await import('../test/vfs');
+const { invokeStub } = await import('../test/invokeStub');
 const { runPipeline } = await import('./pipelineService');
 const { makeSettings, makeCtx, SRC, DST } = await import('../test/pipelineHarness');
 import type { AppSettings } from '../store/settingsStore';
@@ -41,7 +44,10 @@ async function publish(
   return { ...run, stats };
 }
 
-beforeEach(() => vfs.reset());
+beforeEach(() => {
+  vfs.reset();
+  invokeStub.reset();
+});
 
 describe('publish — folders layout', () => {
   it('mirrors the OUT tree, stripping stable ids from folder names', async () => {

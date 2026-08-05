@@ -4,11 +4,12 @@
  * abort a whole run. listDirResult preserves the error for destructive walks that must distinguish
  * an empty directory from an unreadable one.
  * 
- * isUnchanged is the copy/skip decision for every stage. It compares mtimes and treats a missing
- * destination as "changed", so a failed read always errs toward copying rather than skipping.
+ * isUnchanged is the copy/skip decision for every stage. It compares size as well as mtimes and
+ * treats a missing destination as "changed", so a failed read always errs toward copying.
  */
 
 import { readDir, stat, type DirEntry } from '@tauri-apps/plugin-fs';
+import { invoke } from '@tauri-apps/api/core';
 import { join } from '@tauri-apps/api/path';
 import type { AppSettings } from '../../store/settingsStore';
 import { shouldSkip, isPackageFolder, isPublishableFile } from './naming';
@@ -60,12 +61,18 @@ export async function collectFiles(dir: string, s: AppSettings, directOnly = fal
   return results;
 }
 
-/* ── Unchanged check (mtime — dest missing/older → copy, dest newer-or-same → skip) ── */
+/* ── Unchanged check (size + mtime fast gate, exact byte comparison before skipping) ── */
 
 export async function isUnchanged(src: string, dest: string): Promise<boolean> {
   try {
     const [ss, ds] = await Promise.all([stat(src), stat(dest)]);
-    if (ss.mtime && ds.mtime) return ds.mtime.getTime() >= ss.mtime.getTime();
-    return ss.size === ds.size; // mtime unavailable on this filesystem — fall back to size
+    if (ss.size !== ds.size) return false;
+    if (ss.mtime && ds.mtime && ds.mtime.getTime() < ss.mtime.getTime()) return false;
+    // A destination newer than a restored source is not proof of equality. Compare in Rust so a
+    // same-size content swap republishes without loading both large files into the webview.
+    return await invoke<boolean>('files_equal', {
+      sourcePath: src,
+      destinationPath: dest,
+    });
   } catch { return false; } // dest missing (or unreadable) — not unchanged, copy it
 }

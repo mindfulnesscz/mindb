@@ -19,10 +19,13 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('@tauri-apps/plugin-fs', async () => (await import('../test/vfs')).vfs.fsApi());
 vi.mock('@tauri-apps/api/path', async () => (await import('../test/vfs')).vfs.pathApi());
-vi.mock('@tauri-apps/api/core', () => ({ invoke: async () => ({}) }));
+vi.mock('@tauri-apps/api/core', async () => ({
+  invoke: (await import('../test/invokeStub')).invokeStub.invoke,
+}));
 vi.mock('@tauri-apps/plugin-shell', () => ({ open: async () => {} }));
 
 const { vfs } = await import('../test/vfs');
+const { invokeStub } = await import('../test/invokeStub');
 const { runPipeline } = await import('./pipelineService');
 const { makeSettings, makeCtx, SRC, DST } = await import('../test/pipelineHarness');
 import type { AppSettings } from '../store/settingsStore';
@@ -46,7 +49,10 @@ async function collect(over: Partial<AppSettings> = {}) {
   return { ...run, stats };
 }
 
-beforeEach(() => vfs.reset());
+beforeEach(() => {
+  vfs.reset();
+  invokeStub.reset();
+});
 
 describe('collect — filling a package anchor', () => {
   it('copies the highest version of each OUT deliverable in, under its translated name', async () => {
@@ -99,6 +105,20 @@ describe('collect — filling a package anchor', () => {
     expect(second.stats.copied).toBe(1);
     expect(second.stats.skipped).toBe(1);
     expect(vfs.text(`${PKG}/Product Slides — Deck v2.pdf`)).toBe('revised');
+  });
+
+  it('re-copies changed content restored with an older mtime', async () => {
+    seedCampaign();
+    await collect();
+
+    const source = `${SRC}/Campaign/Asset One __a1b2c3d4/[03] OUT/(PRD)(SlD) Deck v2.pdf`;
+    const sameSizeReplacement = vfs.text(source).replace('Deck', 'Dusk');
+    vfs.put(source, sameSizeReplacement, 500);
+    const second = await collect();
+
+    expect(second.stats.copied).toBe(1);
+    expect(vfs.text(`${PKG}/Product Slides — Deck v2.pdf`))
+      .toBe(sameSizeReplacement);
   });
 
   it('harvests OUT from siblings AND from nested identity folders, but never through another package', async () => {

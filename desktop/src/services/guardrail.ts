@@ -10,9 +10,10 @@
  *
  *   F-9  an integration test synced a seven-asset fixture against a client that owned seventeen real
  *        assets. Stage 4 disconnected all seventeen. Working exactly as designed, on the wrong input.
- *   F-5  a failed read of existing rows would have made "no row for this key" mean "absent" rather
- *        than "unknown", disconnecting every asset. That one is now gated on `readFailed` — this is
- *        the same class of failure, caught by shape instead of by cause.
+ *   F-5  a failed read of existing rows made "no row for this key" mean "new"/"absent" rather than
+ *        "unknown", risking duplicate inserts and client-wide disconnects. The export now aborts
+ *        before planning or writes — this is the same class of failure, caught by shape instead of
+ *        by cause.
  *
  * So the ratio is the signal. A healthy run destroys a little and writes a lot; a run that destroys
  * far more than it wrote is either operating on the wrong tenant, or was handed a partial view of the
