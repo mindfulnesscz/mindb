@@ -82,6 +82,8 @@ Note that `db:reset` wipes users along with everything else — manually created
 
   Mode files override `.env.local` (Vite precedence) and contain only public values. Restart the dev server when changing env files — Vite reads them at startup.
 
+- **OAuth sign-in providers** (Microsoft / Google / GitHub) — configured **per environment, never shared**. Local reads `supabase/.env.local` (copy `.env.local.example`) via `env(...)` substitution in `config.toml`, and the file must be sourced into the shell before `db:start`; staging and production each hold their own credentials in that project's dashboard, with nothing in the repo. Full table and the setup click-paths: [Authentication → Where provider credentials live](/auth). Email magic link needs none of this and works out of the box.
+
 - **Desktop app** — environments are first-class: *Configure server* / Settings → Environment holds each environment's URL and anon key. The desktop holds no service-role or permanent R2 keys; sync and grants run as the signed-in user under RLS. After sign-in it fetches that environment's **client list from the database** (editors: `client_members`; admins: all). Only **folder paths and OAuth tokens** attach per `(environment, client)` in `client-local.json`. Switching environment re-authenticates against the other backend.
 
 ### Troubleshooting
