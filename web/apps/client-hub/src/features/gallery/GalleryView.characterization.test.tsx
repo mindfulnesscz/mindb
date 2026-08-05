@@ -229,8 +229,10 @@ describe('GalleryView — the grid reflects the filters', () => {
     fireEvent.change(search, { target: { value: 'delta' } });
     await waitFor(() => expect(cardNames()).toHaveLength(1));
 
+    // The first debounced URL write may only just have rendered. Its acknowledgement must not
+    // restore "delta" over this newer empty draft before the clearing debounce can run.
     fireEvent.change(search, { target: { value: '' } });
-    await waitFor(() => expect(cardNames()).toHaveLength(4));
+    await waitFor(() => expect(cardNames()).toHaveLength(4), { timeout: 2_000 });
   });
 
   it('latestOnly drops superseded versions', async () => {
