@@ -171,9 +171,9 @@ mod tests {
        the test does not depend on what the host has installed. */
     #[test]
     fn system_tool_searches_path_entries() {
-        let tmp = std::env::temp_dir().join(format!("dchub-native-test-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("sotto-native-test-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
-        let stem = "dchub-fake-tool";
+        let stem = "sotto-fake-tool";
         let file = tmp.join(exe_name(stem));
         std::fs::write(&file, b"#!/bin/sh\n").unwrap();
 
@@ -191,6 +191,6 @@ mod tests {
 
     #[test]
     fn system_tool_returns_none_for_a_tool_that_is_not_there() {
-        assert!(system_tool("dchub-definitely-not-installed-anywhere").is_none());
+        assert!(system_tool("sotto-definitely-not-installed-anywhere").is_none());
     }
 }

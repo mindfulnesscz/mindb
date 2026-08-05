@@ -18,7 +18,7 @@ import { writeTextFile, readTextFile, copyFile, mkdir, rename, remove } from '@t
 import { join } from '@tauri-apps/api/path';
 import type { RunStats } from '../store/pipelineStore';
 import type { RunContext } from './pipeline/types';
-import { buildVocabMap, parseFilename, buildNoteName, translateExportName } from '@dc-hub/domain';
+import { buildVocabMap, parseFilename, buildNoteName, translateExportName } from '@sotto/domain';
 import { pathParts, safeName, isPublishable } from './dam/paths';
 import { listDir, fileExists, isUnchanged, shouldSkip } from './dam/fs';
 import { findPackageAnchors } from './dam/scope';
@@ -41,6 +41,11 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
 
   appendLog('section', '━━━ DAM / OBSIDIAN ━━━');
   appendLog('dim', `  → ${settings.vaultFolder}`);
+
+  if (settings.dryRun) {
+    appendLog('dim', '  [DRY] would rebuild DAM notes, attachments, and canvases');
+    return;
+  }
 
   const vocabMap = buildVocabMap(vocab);
   const damFolder = await join(settings.vaultFolder, '05 DAM');
@@ -72,6 +77,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
   const noteBases     = new Set<string>(); // one canvas per scope anchor
 
   for (let idx = 0; idx < outDirs.length; idx++) {
+    if (ctx.isStopping?.()) return;
     const { outPath, isOrphan, noteBase, projRel, clusterKey, sortKey } = outDirs[idx];
     noteBases.add(noteBase);
     appendLog('info', `  📁 ${projRel || '(root)'} → ${noteBase.split('/').pop()}`);
@@ -94,6 +100,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
 
     // ── Gallery notes ─────────────────────────────────────────────────────
     for (const gName of galleryNames) {
+      if (ctx.isStopping?.()) return;
       const gPath      = await join(outPath, gName);
       const gParsed    = parseFilename(gName, vocabMap);
       const title      = buildNoteName(gParsed);
@@ -164,6 +171,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
     }
 
     for (const file of assetFiles) {
+      if (ctx.isStopping?.()) return;
       const stem       = file.name.includes('.') ? file.name.slice(0, file.name.lastIndexOf('.')) : file.name;
       const ext        = file.name.includes('.') ? file.name.slice(file.name.lastIndexOf('.')) : '';
       const parsed     = parseFilename(stem, vocabMap);
@@ -343,4 +351,3 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
     `━━━ OBSIDIAN DONE — ${stats.notes} notes · ${stats.disconnected} disconnected · ${stats.errors} errors ━━━`
   );
 }
-

@@ -4,7 +4,7 @@
  * can see an asset's history without those files competing as current deliverables.
  */
 
-import { type VocabularyData, buildVocabMap, parseFilename } from '@dc-hub/domain';
+import { type VocabularyData, buildVocabMap, parseFilename } from '@sotto/domain';
 import type { SupabaseConfig } from './rest';
 import { makeHeaders, sbFetch, fetchAllForClient, BATCH } from './rest';
 import { fetchVHForAssets } from './assetQueries';
@@ -18,6 +18,7 @@ export async function syncVersionHistory(
   vocab:      VocabularyData,
   config:     SupabaseConfig,
   appendLog:  (type: string, msg: string) => void,
+  options:    { dryRun?: boolean; shouldStop?: () => boolean } = {},
 ): Promise<void> {
   appendLog('section', '━━━ VERSION HISTORY SYNC ━━━');
 
@@ -124,8 +125,18 @@ export async function syncVersionHistory(
 
   appendLog('info', `  ${toUpsert.length} to upsert · ${toDisconnect.length} to disconnect · ${toRemove.length} to remove`);
 
+  if (options.dryRun) {
+    appendLog('dim',
+      `  [DRY] would upsert ${toUpsert.length}, disconnect ${toDisconnect.length}, ` +
+      `and remove ${toRemove.length} version-history record(s)`,
+    );
+    appendLog('section', '━━━ VH DRY RUN DONE ━━━');
+    return;
+  }
+
   // Step 4: Upsert
   for (let i = 0; i < toUpsert.length; i += BATCH) {
+    if (options.shouldStop?.()) return;
     const batch    = toUpsert.slice(i, i + BATCH);
     const batchNum = Math.floor(i / BATCH) + 1;
     try {
@@ -147,6 +158,7 @@ export async function syncVersionHistory(
   // Step 5: Status patches (Disconnected, Removed)
   async function patchVHStatus(ids: string[], status: string, label: string) {
     for (let i = 0; i < ids.length; i += BATCH) {
+      if (options.shouldStop?.()) return;
       const batch = ids.slice(i, i + BATCH);
       try {
         const res = await sbFetch(`${base}/version_history?id=in.(${batch.join(',')})`, {
@@ -172,4 +184,3 @@ export async function syncVersionHistory(
     `━━━ VH DONE — ${toUpsert.length} upserted · ${toDisconnect.length} disconnected · ${toRemove.length} removed ━━━`,
   );
 }
-

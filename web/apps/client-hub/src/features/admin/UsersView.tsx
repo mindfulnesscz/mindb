@@ -1,7 +1,7 @@
 /* The users table — role changes and client assignment. */
 
 import { useState, useEffect, useCallback } from 'react'
-import {  canManageAdmins } from '@dc-hub/asset-library'
+import {  canManageAdmins } from '@sotto/asset-library'
 import { useAuth } from '../../context/AuthContext'
 import { useClients } from '../../hooks/useClients'
 import { fetchAllUsers, updateUserAccess, asRole, type UserProfile } from '../../services/userService'

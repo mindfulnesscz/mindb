@@ -14,16 +14,22 @@ import { join } from '@tauri-apps/api/path';
 import type { AppSettings } from '../../store/settingsStore';
 import {
   type VocabularyData, buildVocabMap, parseFilename, extractStableId,
-} from '@dc-hub/domain';
+} from '@sotto/domain';
 import { shouldSkip, isPackageFolder, isOutFolder, isPublishableFile } from './naming';
-import { listDir } from './fs';
+import { listDir, listDirResult } from './fs';
 import type { VersionEntry, AssetVersions } from './types';
 
-export async function scanAllAssets(root: string, s: AppSettings): Promise<string[]> {
+export async function scanAllAssets(
+  root: string,
+  s: AppSettings,
+  onReadError?: (path: string, error: unknown) => void,
+): Promise<string[]> {
   const results: string[] = [];
 
   async function walkForOut(dir: string) {
-    const entries = await listDir(dir);
+    const read = await listDirResult(dir);
+    if (read.error) onReadError?.(dir, read.error);
+    const entries = read.entries;
     const hasOut  = entries.some(e => e.isDirectory && isOutFolder(e.name, s));
     const dirs    = entries.filter(e => e.isDirectory && !shouldSkip(e.name, s) && !isPackageFolder(e.name, s));
     await Promise.all(dirs.map(async e => {
@@ -37,7 +43,9 @@ export async function scanAllAssets(root: string, s: AppSettings): Promise<strin
   }
 
   async function collectInOut(dir: string) {
-    const entries = await listDir(dir);
+    const read = await listDirResult(dir);
+    if (read.error) onReadError?.(dir, read.error);
+    const entries = read.entries;
     await Promise.all(entries.map(async e => {
       if (e.name.startsWith('.') || shouldSkip(e.name, s) || e.name.includes('-thumb')) return;
       if (e.isDirectory && e.name.toLowerCase() === 'versions') return; // versions/ handled separately in VH sync
@@ -154,7 +162,6 @@ export async function scanVersionMap(
   await walkForVH(root);
   return vmap;
 }
-
 
 
 

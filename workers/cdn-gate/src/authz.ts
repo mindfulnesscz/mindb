@@ -7,7 +7,7 @@
  * access level, and a `perm` or `status` change MOVES the object rather than changing a lookup.
  * That cost was bought deliberately.
  *
- * The key parser lives in @dc-hub/domain, imported rather than restated — this Worker used to
+ * The key parser lives in @sotto/domain, imported rather than restated — this Worker used to
  * carry its own copy because it is a separate bundle, until workers/cdn-gate joined the npm
  * workspace. One definition now serves the pipeline, the re-key script, the reconcile function and
  * this.
@@ -24,9 +24,9 @@
  * same value in a generated column, so discovery and delivery cannot disagree.
  */
 
-import { parseObjectPath, type AccessLevel, type ParsedObjectPath } from '@dc-hub/domain/assetStorage';
+import { parseObjectPath, type AccessLevel, type ParsedObjectPath } from '@sotto/domain/assetStorage';
 
-/** The four levels, defined once in @dc-hub/domain. Aliased so this module reads as it always did. */
+/** The four levels, defined once in @sotto/domain. Aliased so this module reads as it always did. */
 export type Level = AccessLevel;
 
 /** Claims carried by the signed CDN cookie. Names are short because this cookie rides on every
@@ -40,7 +40,7 @@ export interface CdnClaims {
   exp: number;
 }
 
-/** An object key, split into the parts authorization cares about. Defined in @dc-hub/domain, so
+/** An object key, split into the parts authorization cares about. Defined in @sotto/domain, so
  *  the shape this Worker authorizes on is the same one the writers construct. */
 export type GatedKey = ParsedObjectPath;
 

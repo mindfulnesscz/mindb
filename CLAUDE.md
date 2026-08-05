@@ -1,4 +1,4 @@
-# Project rules — DC Hub
+# Project rules — Sotto
 
 ## ⛔ NEVER RESET OR WIPE A DATABASE WITHOUT ASKING FIRST
 
@@ -33,6 +33,14 @@ to a shared environment to "see if it works".
 - **PDFium cannot be used concurrently in one process.** Not slow — it fails (8 threads on 8 distinct documents: 160/160 `FormatError`, then segfaults). Every PDF rasterisation runs in a one-shot worker process (`render::WORKER_FLAG`). Do not "simplify" this back into threads.
 - **Thumbnail speed depends on the build profile**, now that rendering is Rust rather than `cwebp`. `[profile.dev.package."*"] opt-level = 3` in `desktop/src-tauri/Cargo.toml` is load-bearing — without it a large JPEG takes 21s instead of 0.25s. Do not remove it.
 - LibreOffice is bundled (MPL-2.0, ~800MB) on macOS/Windows and a package dependency on Linux. Bundled resolution must win over any host install: the shipped version is the one whose deck rendering was reviewed. See `docs/pages/reference/third-party-engines.mdx` for licence obligations and the macOS signing order.
+
+## Native command security (2026-08-05)
+
+- Path-taking Rust commands must pass canonical paths through `desktop/src-tauri/src/path_policy.rs`. The allowed roots are app data plus folders approved through a Tauri folder picker; persisted machine-local client roots are restored by Rust at startup. Never replace this with an arbitrary IPC-supplied root or a lexical `starts_with` check.
+- Per-page previews may only replace the exact `<source-stem>-thumb/` sidecar. `render::validate_preview_area` runs in both the Tauri command and the one-shot PDFium worker immediately before `remove_dir_all`; keep that worker-local check.
+- `supabase_request` is restricted to the active origin in the persisted environment configuration and does not follow redirects. Adding another native proxy must preserve the same destination binding before it forwards authorization headers.
+- The reveal bridge accepts JSON `POST /reveal` only from the production, staging, and local portal origins. Its manifest lookup is an exact parsed `stable_id` match. Update the bridge allowlist when a new portal origin is deployed; never restore wildcard CORS or substring identity matching.
+- The desktop CSP has an explicit network allowlist. When a provider endpoint changes, update `connect-src` narrowly and document why; do not set CSP back to `null` or broaden it to all HTTPS origins.
 
 ## Storage / delivery model (as of 2026-07-31)
 

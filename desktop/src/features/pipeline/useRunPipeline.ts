@@ -26,7 +26,7 @@ import {
 } from '../../services/supabaseService';
 import { loadVocabulary } from '../../services/vocabService';
 import { notifyRunComplete } from '../../services/notifyService';
-import { groupAssets, type VocabularyData } from '@dc-hub/domain';
+import { groupAssets, type VocabularyData } from '@sotto/domain';
 import { resolveRunPlan } from './runPlan';
 
 export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise<void> {
@@ -41,6 +41,7 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
     const { effectiveSettings, localDest: runLocalDest, cloudDests } = resolveRunPlan(settings, selectedDests);
 
     const collectedAssets: string[] = [];
+    const sourceReadErrors = new Set<string>();
     const cdnUrls      = new Map<string, string>();
     const originalUrls = new Map<string, string>();
     const cloudUrls    = new Map<string, CloudUrlEntry[]>();
@@ -65,10 +66,16 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
     const vocabDirty =
       useVocabularyStore.getState().dirty || !!useVocabularyStore.getState().data?._unpublished;
     let vocabData = vocab ?? { _schema_version: '2.1.0', _comment: '', tags: [] };
+    let vocabFresh = false;
     if (clientId && !vocabDirty) {
       try {
-        const fresh = await loadVocabulary(clientId, { forceFromDb: true });
+        const fresh = await loadVocabulary(clientId, {
+          forceFromDb: true,
+          persistCache: !effectiveSettings.dryRun,
+          requireDb: true,
+        });
         vocabData = fresh;
+        vocabFresh = true;
         useVocabularyStore.getState().setData(fresh, { dirty: false });
         log('dim', '  Vocabulary refreshed from portal');
       } catch (e) {
@@ -81,7 +88,8 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
     let r2Config: RunContext['r2'];
     let assetLevels: Map<string, string> | undefined;
     let previewPageLimit: number | undefined;
-    if (sbConfig && clientId && (settings.doThumbnails || settings.doCdnOriginals)) {
+    if (sbConfig && clientId && !effectiveSettings.dryRun
+        && (effectiveSettings.doThumbnails || effectiveSettings.doCdnOriginals)) {
       try {
         const grant = await requestR2Grant(sbConfig, clientId);
         // A pipeline grant without the gated half means the environment is half-provisioned.
@@ -136,6 +144,7 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
       vocab:    vocabData,
       appendLog, addIssue, setProgress, finishRun,
       collectedAssets,
+      sourceReadErrors,
       cdnUrls,
       originalUrls,
       assetLevels,
@@ -146,16 +155,28 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
       localExportLayout:    resolveExportShape(runLocalDest ?? {}).exportLayout,
       localIncludePackages: resolveExportShape(runLocalDest ?? {}).includePackages,
       r2: r2Config,
+      isStopping: () => usePipelineStore.getState().runStatus === 'stopping',
+      deferFinish: true,
     });
 
     /* ── Post-run: Supabase sync, targeted CDN cleanup, version history ──────── */
-    if (sbConfig && clientId) {
-      await syncRunToPortal({
-        effectiveSettings, collectedAssets, clientId, sbConfig, vocabData, vocabDirty,
-        cdnUrls, cloudUrls, originalUrls, pageCounts, r2Config, log, appendLog, setSupabaseSync,
-      });
+    try {
+      if (sbConfig && clientId && usePipelineStore.getState().runStatus !== 'stopping') {
+        await syncRunToPortal({
+          effectiveSettings, collectedAssets, clientId, sbConfig, vocabData, vocabDirty, vocabFresh,
+          cdnUrls, cloudUrls, originalUrls, pageCounts, r2Config, log, appendLog, setSupabaseSync,
+          isStopping: () => usePipelineStore.getState().runStatus === 'stopping',
+          sourceFresh: sourceReadErrors.size === 0,
+        });
+      } else if (usePipelineStore.getState().runStatus === 'stopping') {
+        log('warn', '  ⏹  Stop requested — portal sync skipped.');
+      }
+    } catch (e) {
+      log('error', `  ✕  Post-run sync failed: ${e}`);
+      stats.errors += 1;
     }
 
+    finishRun(stats, stats.errors > 0 || stats.skipped > 0);
     notifyRunComplete(stats, stats.errors > 0 || stats.skipped > 0);
   };
 }
@@ -168,6 +189,7 @@ async function syncRunToPortal(a: {
   sbConfig: { url: string; anonKey: string };
   vocabData: VocabularyData;
   vocabDirty: boolean;
+  vocabFresh: boolean;
   cdnUrls: Map<string, string>;
   cloudUrls: Map<string, CloudUrlEntry[]>;
   originalUrls: Map<string, string>;
@@ -177,6 +199,8 @@ async function syncRunToPortal(a: {
   log: (type: string, msg: string) => void;
   appendLog: ReturnType<typeof usePipelineStore.getState>['appendLog'];
   setSupabaseSync: ReturnType<typeof usePipelineStore.getState>['setSupabaseSync'];
+  isStopping: () => boolean;
+  sourceFresh: boolean;
 }): Promise<void> {
   const outFolder = a.effectiveSettings.outFolder ?? 'OUT';
   const { singles, galleries, unpackaged } = groupAssets(a.collectedAssets, outFolder);
@@ -193,6 +217,9 @@ async function syncRunToPortal(a: {
       a.cdnUrls, a.cloudUrls, galleries, a.originalUrls,
       a.effectiveSettings.allowLargeDeletions,
       a.pageCounts,
+      a.effectiveSettings.dryRun,
+      a.isStopping,
+      a.sourceFresh,
     );
     a.setSupabaseSync({
       created:      sbResult.created,
@@ -202,37 +229,65 @@ async function syncRunToPortal(a: {
     });
 
     // Stale CDN objects come from the Supabase diff, so no R2 listing is needed.
-    if (a.r2Config && sbResult.staleObjectKeys.length > 0) {
+    if (!a.isStopping() && a.r2Config && sbResult.staleObjectKeys.length > 0) {
       // A deleted object is unrecoverable, so it is judged against the same write count.
       await deleteCdnObjects(
         a.r2Config, sbResult.staleObjectKeys, a.log,
         sbResult.created + sbResult.updated, a.effectiveSettings.allowLargeDeletions,
+        a.effectiveSettings.dryRun, a.isStopping,
       );
     }
 
     /* This run changed `status` — new rows published, absent files disconnected — and status is
        half of the access level, so some objects now belong at a different key. The trigger queued
        them; drain it here rather than leaving it for whoever next opens the portal. */
-    await reconcileCdnObjects(a.sbConfig, a.log);
+    if (!a.isStopping()) {
+      if (a.effectiveSettings.dryRun) a.log('dim', '  [DRY] would drain CDN reconcile tasks');
+      else await reconcileCdnObjects(a.sbConfig, a.log);
+    }
 
     /* Videos onto Stream. AFTER the export, because a video is attached to an asset row and a
        brand-new asset has none until the export creates it; and after reconcile, so the master is
        already at the key its access level requires rather than one about to move. */
-    await syncStreamVideos(a.sbConfig, a.clientId, a.log);
+    if (!a.isStopping()) {
+      await syncStreamVideos(a.sbConfig, a.clientId, a.log, {
+        dryRun: a.effectiveSettings.dryRun,
+        shouldStop: a.isStopping,
+      });
+    }
 
-    await processRenameTasks(a.sbConfig, a.clientId, a.log);
+    if (!a.isStopping()) {
+      await processRenameTasks(a.sbConfig, a.clientId, a.log, {
+        dryRun: a.effectiveSettings.dryRun,
+        shouldStop: a.isStopping,
+      });
+    }
     // Only push leaves when desktop has unpublished edits — otherwise portal renames (the label
     // source of truth) would be overwritten by a stale local cache.
-    if (a.vocabDirty) {
-      await syncTagsFromVocabulary(a.vocabData, a.clientId, a.sbConfig, a.log);
-      useVocabularyStore.getState().markClean();
+    if (a.vocabDirty && !a.isStopping()) {
+      const tagResult = await syncTagsFromVocabulary(
+        a.vocabData, a.clientId, a.sbConfig, a.log,
+        {
+          dryRun: a.effectiveSettings.dryRun,
+          sourceFresh: a.vocabFresh && !a.vocabDirty,
+          allowLargeDeletions: a.effectiveSettings.allowLargeDeletions,
+          shouldStop: a.isStopping,
+        },
+      );
+      if (!a.effectiveSettings.dryRun && !tagResult.deletionRefused) {
+        useVocabularyStore.getState().markClean();
+      }
     } else {
       a.log('dim', '  Tag sync skipped — portal vocabulary is already authoritative');
     }
   }
 
-  if (a.effectiveSettings.sourceFolder) {
+  if (a.effectiveSettings.sourceFolder && !a.isStopping()) {
     const versionMap = await scanVersionMap(a.effectiveSettings.sourceFolder, a.vocabData, a.effectiveSettings);
-    await syncVersionHistory(versionMap, a.clientId, a.vocabData, a.sbConfig, a.log);
+    await syncVersionHistory(versionMap, a.clientId, a.vocabData, a.sbConfig, a.log, {
+      dryRun: a.effectiveSettings.dryRun,
+      shouldStop: a.isStopping,
+    });
   }
+  if (a.isStopping()) a.log('warn', '  ⏹  Stop requested — remaining portal work skipped.');
 }

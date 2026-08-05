@@ -91,7 +91,7 @@ export function LoginView() {
     try {
       const type = await checkEmail(trimmed);
       if (type !== 'staff') {
-        setError('The desktop app is restricted to DC Hub staff (editor/admin).');
+        setError('The desktop app is restricted to Sotto staff (editor/admin).');
         setStep('email');
         return;
       }
@@ -121,12 +121,12 @@ export function LoginView() {
         className={css.card}
         onSubmit={step === 'server' ? handleServerSave : handleEmailSubmit}
       >
-        <h1 className={css.brand}>DC Hub</h1>
+        <h1 className={css.brand}>Sotto</h1>
 
         {step === 'server' ? (
           <>
             <p className={css.sub}>
-              Connect this app to your DC Hub server. Both values come from your
+              Connect this app to your Sotto server. Both values come from your
               administrator (or `supabase status` for the local stack).
             </p>
             <label className={css.label}>Environment name</label>
@@ -159,7 +159,7 @@ export function LoginView() {
           <>
             <p className={css.sub}>
               We sent a sign-in link to <strong>{email.trim()}</strong>.
-              Open it in your browser — this window will unlock automatically.
+              Open it in your browser and select Continue — this window will unlock automatically.
             </p>
             <div className={css.waiting}>
               <div className={css.spinner} />

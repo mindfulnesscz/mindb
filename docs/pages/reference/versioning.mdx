@@ -1,6 +1,8 @@
 # Versioning and releases
 
-DC Hub uses one semantic version for the entire monorepo. The root `package.json` is the single source of truth; component manifests are synchronized outputs.
+Sotto uses one semantic application release version. The root `package.json` is the single source of
+truth for the release-bearing manifests managed by `scripts/version.mjs`; internal packages not
+listed below keep their own package versions.
 
 ## Why one version
 
@@ -20,10 +22,13 @@ npm run version:set -- 3.0.0
 
 The bump commands synchronize:
 
-- root, desktop, web workspace, and docs `package.json` files;
-- all three npm lockfiles and web workspace entries;
-- Tauri configuration;
-- Cargo manifest and lockfile;
+- `package.json`, `desktop/package.json`, `web/apps/client-hub/package.json`,
+  `packages/asset-library/package.json`, `docs/package.json`, and
+  `workers/cdn-gate/package.json`;
+- the matching entries in the two lockfiles, `package-lock.json` and
+  `docs/package-lock.json`;
+- `desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/Cargo.toml`, and the `sotto-app` package in
+  `desktop/src-tauri/Cargo.lock`;
 - the first changelog release heading.
 
 When the target version has no changelog section, the script inserts one with a placeholder. Replace it with a useful release summary before committing.
@@ -36,20 +41,24 @@ When the target version has no changelog section, the script inserts one with a 
 | Minor | Backward-compatible user-facing capability, meaningful workflow or schema addition |
 | Major | Deliberate compatibility break, migration that operators/clients must coordinate |
 
-The repository is still pre-stable operationally despite using `2.x`; choose bumps based on release impact rather than commit count.
+Choose bumps based on release impact rather than commit count; the major version alone is not an
+operational-maturity claim.
 
 ## Release routine
 
 ```bash
-git switch main
-git pull --ff-only
+git switch -c release/vX.Y.Z
 npm run version:minor
 # edit CHANGELOG.md and review generated files
 npm run check
 git diff --check
 git commit -am "release: vX.Y.Z"
+git push -u origin release/vX.Y.Z
+# merge its PR to staging, verify, then merge staging to main
+git switch main
+git pull --ff-only
 git tag vX.Y.Z
-git push origin main --tags
+git push origin vX.Y.Z
 ```
 
 Version commands intentionally do not commit, tag, or push. This keeps generated changes reviewable and prevents an accidental command from publishing a release.

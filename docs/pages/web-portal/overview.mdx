@@ -23,7 +23,7 @@ overlays. The full parameter table is in [Client Portals](/portals).
 Filters, the open asset, the focused child or variant, and the lightbox are all derived from the
 address — not from `useState`. So a view is something you can send to someone, and it survives a
 reload and a magic-link round trip. `useFilterParams` binds `FilterState` to the query string;
-`filterUrl.ts` in `@dc-hub/asset-library` does the encoding and is pure, so it is tested without a
+`filterUrl.ts` in `@sotto/asset-library` does the encoding and is pure, so it is tested without a
 browser.
 
 `filtersToSearchParams` produces a **canonical** string — fixed key order, arrays sorted and
@@ -34,6 +34,10 @@ surface, not a dashboard.
 
 ## Modes, roles, services
 
-When no Supabase configuration exists, the application uses mock clients and a switchable demo role. In configured mode, `AuthProvider` restores the Supabase session and loads `profiles`; `RoleProvider` derives role/user and optionally loads the profile’s assigned client. A portal slug can explicitly set the active client for staff navigation.
+When no Supabase configuration exists, `RoleProvider` fails closed to `public` with no active client,
+and the root admin route shows a configuration-locked state instead of a demo staff dashboard. In
+configured mode, `AuthProvider` restores the Supabase session and loads `profiles`; `RoleProvider`
+derives role/user and optionally loads the profile’s assigned client. A portal slug can explicitly
+set the active client for staff navigation.
 
 Service modules isolate PostgREST calls for assets, clients, comments, ratings, tags, users, and events. Client-side permission helpers control UI behavior, but database RLS must remain the authoritative security layer because browser code can be bypassed. Nothing in the URL is ever authorization: a per-user token in a query string would fragment the edge cache to near zero and defeat `?v=<hash>` immutability, and it is not what decides access in any case.

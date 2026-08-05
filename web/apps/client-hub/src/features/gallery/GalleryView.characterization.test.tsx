@@ -33,8 +33,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
-import { applyFilters, type Asset, type FilterState, type Role } from '@dc-hub/asset-library';
-import { DEFAULT_DIMENSION_LABELS } from '@dc-hub/database';
+import { applyFilters, type Asset, type FilterState, type Role } from '@sotto/asset-library';
+import { DEFAULT_DIMENSION_LABELS } from '@sotto/database';
 
 /* ── Fixtures ──────────────────────────────────────────────────────────────────
  * Names are deliberately distinct from every tag label, so `getByText('Sofa')` can only be the
@@ -229,8 +229,10 @@ describe('GalleryView — the grid reflects the filters', () => {
     fireEvent.change(search, { target: { value: 'delta' } });
     await waitFor(() => expect(cardNames()).toHaveLength(1));
 
+    // The first debounced URL write may only just have rendered. Its acknowledgement must not
+    // restore "delta" over this newer empty draft before the clearing debounce can run.
     fireEvent.change(search, { target: { value: '' } });
-    await waitFor(() => expect(cardNames()).toHaveLength(4));
+    await waitFor(() => expect(cardNames()).toHaveLength(4), { timeout: 2_000 });
   });
 
   it('latestOnly drops superseded versions', async () => {

@@ -96,7 +96,7 @@ export async function checkDropboxConnection(accessToken: string): Promise<{ ema
 export async function uploadDropboxFile(
   accessToken: string,
   filePath:     string,   // local absolute path to the file
-  remotePath:   string,   // full Dropbox path, e.g. "/DC Hub/ESS/file.pdf"
+  remotePath:   string,   // full Dropbox path, e.g. "/Sotto/ESS/file.pdf"
   getLink:      boolean,
 ): Promise<{ url: string | null; skipped: boolean }> {
   return invoke<{ url: string | null; skipped: boolean }>('upload_to_dropbox', {

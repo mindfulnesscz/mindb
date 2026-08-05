@@ -6,17 +6,17 @@
 2. Choose account type deliberately. For a single-tenant organization, copy its Directory (tenant) ID. For multi-tenant/personal access, `common` is supported.
 3. Under Authentication enable **Allow public client flows**; the desktop connector uses device authorization and has no client secret.
 4. Add delegated Graph permissions `Files.ReadWrite`, `Sites.ReadWrite.All` (SharePoint libraries), `offline_access`, and `User.Read`; grant administrator consent if policy requires it.
-5. Enter Application client ID and tenant ID in DC Hub, then Connect.
+5. Enter Application client ID and tenant ID in Sotto, then Connect.
 
 ## SharePoint shared library (recommended)
 
-Uploading to a shared SharePoint document library — rather than the connecting user's personal OneDrive — keeps delivery links working across staff changes and uses shared storage. After connecting, paste the **SharePoint site URL** (e.g. `https://contoso.sharepoint.com/sites/Clients`) into the destination and click **Resolve drive**. DC Hub resolves the site's default Documents library to a `driveId` and uploads to `/drives/{driveId}/…`. Leave the site URL blank to fall back to the signed-in user's personal drive.
+Uploading to a shared SharePoint document library — rather than the connecting user's personal OneDrive — keeps delivery links working across staff changes and uses shared storage. After connecting, paste the **SharePoint site URL** (e.g. `https://contoso.sharepoint.com/sites/Clients`) into the destination and click **Resolve drive**. Sotto resolves the site's default Documents library to a `driveId` and uploads to `/drives/{driveId}/…`. Leave the site URL blank to fall back to the signed-in user's personal drive.
 
 ## Background flow
 
-The native Rust backend posts to `/<tenant>/oauth2/v2.0/devicecode`, because Microsoft's endpoint does not allow the Tauri webview origin through CORS. DC Hub shows the returned code/verification URL and repeatedly invokes a single native token poll. Success stores access/refresh tokens and expiry; refresh also runs natively.
+The native Rust backend posts to `/<tenant>/oauth2/v2.0/devicecode`, because Microsoft's endpoint does not allow the Tauri webview origin through CORS. Sotto shows the returned code/verification URL and repeatedly invokes a single native token poll. Success stores access/refresh tokens and expiry; refresh also runs natively.
 
-For each export, files up to 4 MB are PUT to `…/root:/<encoded path>:/content` (simple upload, overwrite). **Larger files use a resumable upload session** (`createUploadSession`) sent in 10 MiB chunks, so large video/design assets no longer hit the simple-upload ceiling. When link generation is enabled, DC Hub requests an `anonymous` view link and **falls back to `organization` scope** when the tenant blocks anonymous sharing.
+For each export, files up to 4 MB are PUT to `…/root:/<encoded path>:/content` (simple upload, overwrite). **Larger files use a resumable upload session** (`createUploadSession`) sent in 10 MiB chunks, so large video/design assets no longer hit the simple-upload ceiling. When link generation is enabled, Sotto requests an `anonymous` view link and **falls back to `organization` scope** when the tenant blocks anonymous sharing.
 
 ## Tradeoffs
 

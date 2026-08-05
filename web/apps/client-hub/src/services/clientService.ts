@@ -1,10 +1,10 @@
 import { supabase } from '../lib/supabase'
-import type { Client } from '@dc-hub/asset-library'
-import { toClientIdentity as toClient, dimensionLabelsToJson, DEFAULT_DIMENSION_LABELS } from '@dc-hub/database'
-import type { ClientRow, TablesUpdate } from '@dc-hub/database'
+import type { Client } from '@sotto/asset-library'
+import { toClientIdentity as toClient, dimensionLabelsToJson, DEFAULT_DIMENSION_LABELS } from '@sotto/database'
+import type { ClientRow, TablesUpdate } from '@sotto/database'
 
 /**
- * Row → domain. The projection itself lives in @dc-hub/database, beside the generated row type, so
+ * Row → domain. The projection itself lives in @sotto/database, beside the generated row type, so
  * desktop reads a client exactly the way the portal does. Kept as a named re-export because it is
  * part of this service's surface.
  */

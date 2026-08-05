@@ -1,10 +1,10 @@
 import { create } from 'zustand';
-import { type VocabTag, type VocabularyData } from '@dc-hub/domain';
+import { type VocabTag, type VocabularyData } from '@sotto/domain';
 import { getSeedVocabulary } from '../services/vocabService';
 
 const EMPTY_VOCAB: VocabularyData = {
   _schema_version: '4.0.0',
-  _comment: 'DC Hub vocabulary',
+  _comment: 'Sotto vocabulary',
   tags: [],
 };
 

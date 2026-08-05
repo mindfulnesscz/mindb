@@ -15,13 +15,14 @@ import { copyFile, mkdir, rename, remove } from '@tauri-apps/plugin-fs';
 import { join, dirname } from '@tauri-apps/api/path';
 import type { AppSettings } from '../../store/settingsStore';
 import type { LogType } from '../../store/pipelineStore';
-import { buildVocabMap, translateExportName, stripStableId } from '@dc-hub/domain';
+import { buildVocabMap, translateExportName, stripStableId } from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
 import type { DestExportLayout } from '../../domain/client';
 import { shouldSkip, isPackageFolder, isOutFolder, isPublishableFile } from './naming';
-import { listDir, listDirLogged, isUnchanged } from './fs';
+import { listDirResult, isUnchanged } from './fs';
 import { findPackageFolders, syncPackageFromOut, keepOnlyHighestVersions, purgePackageMirror } from './packages';
 import { scanAllAssets } from './scan';
+import { assessReconciliationRead, assessTargetReconciliationRead } from '../guardrail';
 
 /* ── Disconnected / orphan detection ───────────────────────────────────── */
 
@@ -31,12 +32,20 @@ export async function flagDisconnected(
   stats:     RunStats,
   appendLog: (t: LogType, m: string) => void,
   addIssue:  (i: { category: 'skipped'|'disconnected'|'version-conflict'|'error'; file: string; reason: string }) => void,
-  opts: { layout: DestExportLayout; settings: AppSettings },
+  opts: { layout: DestExportLayout; settings: AppSettings; protectedSubtrees?: Set<string> },
 ): Promise<void> {
   /* Orphans: 🚫-rename outside package folders; hard-delete inside 📦 mirrors
      (pickup collections must not keep older versions / renamed tags). */
+  const unreadableTargetSubtrees = new Set<string>();
   async function collectAll(dir: string, acc: { path: string; isDir: boolean }[]) {
-    const entries = await listDir(dir);
+    const read = await listDirResult(dir);
+    if (read.error) {
+      unreadableTargetSubtrees.add(dir);
+      const verdict = assessTargetReconciliationRead(dir, read.error);
+      appendLog('error', verdict.message);
+      return;
+    }
+    const entries = read.entries;
     for (const e of entries) {
       if (e.name.startsWith('.')) continue;
       const childPath = await join(dir, e.name);
@@ -49,6 +58,17 @@ export async function flagDisconnected(
   await collectAll(targetDir, all);
 
   const targetNorm = targetDir.replace(/\\/g, '/').replace(/\/+$/, '');
+  const protectedNorm = [...(opts.protectedSubtrees ?? []), ...unreadableTargetSubtrees]
+    .map(p => p.replace(/\\/g, '/').replace(/\/+$/, ''));
+
+  function touchesProtectedSubtree(abs: string): boolean {
+    const normalized = abs.replace(/\\/g, '/').replace(/\/+$/, '');
+    return protectedNorm.some(protectedPath =>
+      normalized === protectedPath ||
+      normalized.startsWith(`${protectedPath}/`) ||
+      protectedPath.startsWith(`${normalized}/`),
+    );
+  }
 
   function inLayoutScope(abs: string): boolean {
     if (opts.layout === 'flat') {
@@ -83,6 +103,7 @@ export async function flagDisconnected(
   const folders = scoped.filter(x => x.isDir).sort((a, b) => a.path.split('/').length - b.path.split('/').length);
 
   for (const { path: existingPath, isDir } of [...files, ...folders]) {
+    if (touchesProtectedSubtree(existingPath)) continue;
     const existingNorm = existingPath.replace(/\\/g, '/').replace(/\/+$/, '');
     if (!isDir && liveNorm.has(existingNorm)) continue;
     if (isDir  && (liveNorm.has(existingNorm) || liveFolderAncestors.has(existingNorm))) continue;
@@ -155,7 +176,18 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
   appendLog('dim', `  Layout: ${layout}${includePackages ? ' + nested packages' : ''} · always highest version only`);
 
   const livePub = new Set<string>();
+  const protectedSubtrees = new Set<string>();
   const vocabMap = buildVocabMap(vocab);
+
+  async function readSourceDir(sourceDir: string, targetDir: string) {
+    const read = await listDirResult(sourceDir);
+    if (read.error) {
+      protectedSubtrees.add(targetDir);
+      const verdict = assessReconciliationRead(sourceDir, targetDir, read.error);
+      appendLog('error', verdict.message);
+    }
+    return read.entries;
+  }
 
   // srcPath that already claimed each destination this run — so a second source translating
   // to the same target name is reported rather than silently counted as unchanged (F-6).
@@ -213,6 +245,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
     }
     appendLog('info', `  Nested packages: ${packages.length} folder(s)`);
     for (const pkg of packages) {
+      if (ctx.isStopping?.()) return;
       const rel = nestedPublishRel(sourceFolder, pkg);
       const destPkg = await join(targetFolder, rel);
       stats.pubFolders += 1;
@@ -256,12 +289,22 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
     appendLog('dim', '  Mode: flat (all files into target root)');
     let assets = (ctx.collectedAssets?.length
       ? ctx.collectedAssets
-      : await scanAllAssets(sourceFolder, settings));
+      : await scanAllAssets(sourceFolder, settings, (path, error) => {
+          ctx.sourceReadErrors?.add(path);
+          appendLog('error', `  ✕  Cannot read source directory: ${path}\n     ${error}`);
+        }));
+    if (ctx.sourceReadErrors?.size) {
+      protectedSubtrees.add(targetFolder);
+      appendLog('error', assessReconciliationRead(
+        [...ctx.sourceReadErrors][0], targetFolder, 'initial source scan was incomplete',
+      ).message);
+    }
     const { kept, dropped } = keepOnlyHighestVersions(assets);
     assets = kept;
     if (dropped.length) appendLog('skip', `  ⊘  dropped ${dropped.length} older version(s)`);
     stats.pubFolders += 1;
     for (const srcPath of assets) {
+      if (ctx.isStopping?.()) return;
       const rawName = srcPath.split('/').pop()!;
       if (!isPublishableFile(rawName) || rawName.includes('-thumb')) continue;
       const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
@@ -273,7 +316,8 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
     appendLog('dim', '  Mode: full folders (OUT tree)');
 
     async function publishDir(dirPath: string, targetDir: string) {
-      const items = await listDir(dirPath);
+      if (ctx.isStopping?.()) return;
+      const items = await readSourceDir(dirPath, targetDir);
       const fileItems = items.filter(
         item => item.isFile && !shouldSkip(item.name, settings)
           && isPublishableFile(item.name) && !item.name.includes('-thumb'),
@@ -288,6 +332,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
       }
 
       for (const fileSrc of kept) {
+        if (ctx.isStopping?.()) return;
         const name = fileSrc.split('/').pop()!;
         const ext = name.includes('.') ? '.' + name.split('.').pop()! : '';
         const stem = ext ? name.slice(0, -ext.length) : name;
@@ -295,6 +340,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
         await copyOne(fileSrc, await join(targetDir, translated), `${name} → ${translated}`);
       }
       for (const item of items) {
+        if (ctx.isStopping?.()) return;
         if (shouldSkip(item.name, settings) || !item.isDirectory) continue;
         const subSrc    = await join(dirPath, item.name);
         const subTarget = await join(targetDir, item.name);
@@ -304,8 +350,10 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
     }
 
     async function publishFolder(src: string, target: string) {
-      const entries = await listDirLogged(src, appendLog);
+      if (ctx.isStopping?.()) return;
+      const entries = await readSourceDir(src, target);
       for (const e of entries) {
+        if (ctx.isStopping?.()) return;
         if (shouldSkip(e.name, settings)) continue;
         if (!e.isDirectory) continue;
         // Package dirs next to OUT are handled by publishNestedPackages when enabled.
@@ -332,10 +380,11 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
 
   // Always scan for leftovers (even when every file was unchanged) so root package
   // dumps from older publish modes get disconnected.
-  if (!dryRun) {
+  if (!dryRun && !ctx.isStopping?.()) {
     await flagDisconnected(targetFolder, livePub, stats, appendLog, addIssue, {
       layout,
       settings,
+      protectedSubtrees,
     });
   }
 
@@ -344,4 +393,3 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
     `${stats.disconnected} disconnected · ${stats.errors} errors ━━━`
   );
 }
-

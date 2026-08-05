@@ -32,7 +32,7 @@ vi.mock('@tauri-apps/plugin-shell', () => ({ open: async () => {} }));
 
 const { vfs } = await import('../test/vfs');
 const { invokeStub } = await import('../test/invokeStub');
-const { runPipeline } = await import('./pipelineService');
+const { deleteCdnObjects, runPipeline } = await import('./pipelineService');
 const { makeSettings, makeCtx, SRC, R2 } = await import('../test/pipelineHarness');
 import type { AppSettings } from '../store/settingsStore';
 
@@ -93,7 +93,7 @@ describe('CDN — object key construction', () => {
       'client-abc/pages/a1000004/c1/001.webp',
       'client-abc/thumbnails/a1000004/c1.webp',
     ]);
-    expect(invokeStub.argsFor('upload_to_r2')[0].bucket).toBe('dchub-test');
+    expect(invokeStub.argsFor('upload_to_r2')[0].bucket).toBe('sotto-test');
   });
 
   it('never double-applies a prefix that a key already carries', async () => {
@@ -128,7 +128,7 @@ describe('CDN — object key construction', () => {
     const buckets = new Set(invokeStub.argsFor('upload_to_r2')
       .filter(a => (a.objectKey as string).includes('/pages/'))
       .map(a => a.bucket));
-    expect([...buckets]).toEqual(['dchub-test-gated']);
+    expect([...buckets]).toEqual(['sotto-test-gated']);
   });
 
   it('sends page previews to the public bucket only when the document is public', async () => {
@@ -140,7 +140,7 @@ describe('CDN — object key construction', () => {
     const pageUploads = invokeStub.argsFor('upload_to_r2')
       .filter(a => (a.objectKey as string).includes('/pages/'));
     expect(pageUploads.map(a => a.objectKey)).toEqual(['client-abc/pages/a5000002/c1/001.webp']);
-    expect(pageUploads.every(a => a.bucket === 'dchub-test')).toBe(true);
+    expect(pageUploads.every(a => a.bucket === 'sotto-test')).toBe(true);
   });
 
   /* A document that lost pages — edited, or the admin lowered the limit — leaves objects past the
@@ -212,7 +212,7 @@ describe('CDN — object key construction', () => {
 
     const del = invokeStub.argsFor('delete_r2_object')
       .find(a => a.objectKey === 'client-abc/pages/a5000007/c1/001.webp');
-    expect(del?.bucket).toBe('dchub-test');
+    expect(del?.bucket).toBe('sotto-test');
   });
 
   it('publishes no pages for an asset type that has none', async () => {
@@ -239,8 +239,9 @@ describe('CDN — object key construction', () => {
     await cdn({ doThumbnails: false });
 
     expect(invokeStub.uploadedKeys()).toEqual([
-      'client/client-abc/originals/a1000007/c1.pdf',
-      'client/client-abc/originals/a1000007/c2.jpg',
+      // Fresh ids follow the shared lexical path order, independent of filesystem scan order.
+      'client/client-abc/originals/a1000007/c1.jpg',
+      'client/client-abc/originals/a1000007/c2.pdf',
     ]);
   });
 
@@ -256,6 +257,40 @@ describe('CDN — object key construction', () => {
     const keys = invokeStub.uploadedKeys();
     expect(keys).toHaveLength(2);
     expect(new Set(keys.map(k => k.split('/').pop()!.split('.')[0])).size).toBe(2);
+  });
+});
+
+describe('THUMBNAILS — source fingerprint cache', () => {
+  it('regenerates a raster whose content changed even when the restored source is older', async () => {
+    const source = `${SRC}/Asset __a1000099/[03] OUT/(PRD) Product.png`;
+    const first = 'first image bytes';
+    vfs.put(source, first);
+    await cdn({ doCdnOriginals: false });
+
+    // A backup restore can move the source clock backwards. Existence/newer-destination checks used
+    // to keep the old thumbnail forever; the recorded source fingerprint must invalidate it.
+    vfs.put(source, first.replace('first', 'other'), 500);
+    const second = await cdn({ doCdnOriginals: false });
+
+    expect(invokeStub.argsFor('generate_thumbnail')).toHaveLength(2);
+    expect(second.stats.thumbnails).toBe(1);
+  });
+});
+
+describe('CDN — disconnect cleanup routing', () => {
+  it('deletes public and gated identity keys from their respective buckets', async () => {
+    const keys = [
+      'client-abc/thumbnails/a1000001/c1.webp',
+      'client/client-abc/originals/a1000002/c2.pdf',
+    ];
+
+    await deleteCdnObjects(R2, keys, () => {}, 2);
+
+    const deletions = invokeStub.argsFor('delete_r2_object');
+    expect(deletions).toEqual([
+      expect.objectContaining({ objectKey: keys[0], bucket: R2.bucket }),
+      expect.objectContaining({ objectKey: keys[1], bucket: R2.gatedBucket }),
+    ]);
   });
 });
 
@@ -482,6 +517,22 @@ describe('CDN — URLs handed to the portal', () => {
 });
 
 describe('CDN — guard rails', () => {
+  it('dry-run performs no rendering, identity-manifest write, upload, or page-object delete', async () => {
+    vfs.tree(SRC, {
+      'Asset __a6000000/[03] OUT/(PRD)(SlD) Deck.pdf': 'pdf',
+      'Asset __a6000000/[03] OUT/(PRD)(SlD) Deck-thumb/001.webp': 'page',
+      'Asset __a6000000/[03] OUT/(PRD)(SlD) Deck-thumb/pages.json': JSON.stringify({ rendered: 1, total: 1 }),
+    });
+    invokeStub.remoteKeys.add('client/client-abc/pages/a6000000/c1/999.webp');
+
+    const run = await cdn({ dryRun: true });
+
+    expect(invokeStub.calls).toEqual([]);
+    expect(vfs.ops).toEqual([]);
+    expect(vfs.hasFile(`${SRC}/Asset __a6000000/.dchub.json`)).toBe(false);
+    expect(run.logged('[DRY]')).toBe(true);
+  });
+
   it('skips the whole stage when the R2 config is incomplete', async () => {
     vfs.tree(SRC, { 'Asset __a6000001/[03] OUT/(PRD)(SlD) Deck.pdf': '' });
     const run = await cdn({}, { r2: { ...R2, secretKey: '' } });

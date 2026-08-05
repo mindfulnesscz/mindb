@@ -32,6 +32,13 @@ beforeEach(() => {
 });
 
 describe('syncStreamVideos', () => {
+  it('dry-runs an upload without starting a Stream mutation', async () => {
+    fetchAllForClient.mockResolvedValue([row({ download_url: 'https://f.dc/client/c/originals/s/c.mp4?v=abc' })]);
+    const r = await syncStreamVideos(cfg, 'c1', log, { dryRun: true });
+    expect(requestStreamUpload).not.toHaveBeenCalled();
+    expect(r.uploaded).toBe(1);
+  });
+
   it('uploads a video that has no Stream copy', async () => {
     fetchAllForClient.mockResolvedValue([row({ download_url: 'https://f.dc/client/c/originals/s/c.mp4?v=abc' })]);
     const r = await syncStreamVideos(cfg, 'c1', log);
