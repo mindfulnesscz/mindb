@@ -28,6 +28,9 @@ export default defineConfig({
       'packages/*/src/**/*.test.ts',
       'web/apps/*/src/**/*.test.{ts,tsx}',
       'workers/*/src/**/*.test.ts',
+      // Pure policy modules used by Deno edge functions. These tests need no edge runtime and make
+      // the credential/CORS boundaries fail in the ordinary package gate when they regress.
+      'supabase/functions/_shared/**/*.test.ts',
     ],
     // Component tests opt into jsdom per file with `// @vitest-environment jsdom`, so the
     // pure-logic suites keep running in plain node (they are ~10x faster there).

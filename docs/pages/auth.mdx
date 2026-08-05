@@ -4,7 +4,7 @@ The portal offers **OAuth sign-in (Microsoft, Google, GitHub)** plus an **email 
 
 ## OAuth providers
 
-The portal sign-in shows **Continue with Microsoft / Google / GitHub** above the email option. Provisioning is identical to the email path: OAuth returns the user's verified email, so the domain-whitelist trigger below still maps them to a client and role. A first-time OAuth user on a non-whitelisted domain lands as `public` and is assigned by an admin. OAuth can't carry a portal `client_id` into user metadata, so whitelist matching is by email domain.
+The portal sign-in shows **Continue with Microsoft / Google / GitHub** above the email option. Provisioning is identical to the email path: OAuth returns the user's verified email, so the domain-whitelist trigger below still maps them to a client and role. A first-time OAuth user on a non-whitelisted domain lands as `public` and is assigned by an admin. Neither OAuth nor magic-link signup uses portal `client_id` metadata for access; whitelist matching is by verified email domain.
 
 The Supabase callback URL is the redirect URI for every provider. It is **one per Supabase project**, so there are three — local, staging, production — and none of them is a portal domain:
 
@@ -187,7 +187,14 @@ The sign-in form is different depending on where the user accesses the app:
 
 ## Portal context at sign-in
 
-When a user signs in from a client portal (`/:slug`), the portal's `client_id` is embedded in the magic link metadata. If the user is new and their email domain isn't in any domain whitelist, the trigger still assigns the correct `client_id` to their profile based on which portal they signed in from.
+The portal path (`/:slug`) controls the return destination and branding, **not membership**. The
+portal does not put `client_id` into signup metadata. More importantly, the database trigger ignores
+`raw_user_meta_data.client_id` even if a caller talks to Supabase Auth directly and supplies it: that
+field is caller-controlled and is not proof that the person belongs to a tenant.
+
+A first-time user receives automatic tenant access only when their verified email domain matches an
+administrator-managed `clients.domain_whitelist`. Otherwise they land as `public` with
+`client_id = NULL` until an administrator assigns them in **Users**.
 
 ## Profile auto-creation
 
@@ -195,8 +202,8 @@ A Postgres trigger (`handle_new_auth_user`) fires on `auth.users` INSERT — i.e
 
 1. Reads `name`, `company`, `country`, `industry` from magic link metadata (filled in by unknown users)
 2. Checks `clients.domain_whitelist` for the email domain → sets `role = 'member'` and `client_id`
-3. Falls back to `client_id` passed in the link metadata (from the portal)
-4. If neither matches → `role = 'public'`, `client_id = NULL`
+3. If there is no domain match → `role = 'public'`, `client_id = NULL`; caller-supplied
+   `client_id` metadata is ignored
 
 For returning users (subsequent sign-ins), the trigger does **not** fire — their existing profile is unchanged.
 
@@ -225,7 +232,7 @@ No admin approval needed — access is instant on first click of the magic link.
 
 For users whose email domain isn't whitelisted:
 1. They sign in via the portal and fill in the profile form
-2. Profile is created with `role = 'public'`
+2. Profile is created with `role = 'public'` and no tenant access; choosing a portal does not assign it
 3. An admin promotes them in the **Users** tab of the admin dashboard
 
 ## Supabase configuration

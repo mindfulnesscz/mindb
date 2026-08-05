@@ -1,18 +1,28 @@
 // r2-grant — Control API storage grants (authentication-plan Phase 3).
 //
 // Bucket + public domain are environment-level secrets (R2_BUCKET, R2_PUBLIC_DOMAIN).
-// Each grant is scoped to one client_id; object keys use prefix `{client_id}/`.
+// Each grant is scoped to one client_id. Public keys start `{client_id}/`; gated keys start with
+// the effective level and then `{client_id}/`.
 //
 // Secrets: CF_R2_TOKEN, CF_ACCOUNT_ID, R2_PARENT_ACCESS_KEY_ID,
 //           R2_BUCKET, R2_PUBLIC_DOMAIN
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import {
+  grantPrefixes,
+  temporaryCredentialRequest,
+  type GrantPurpose,
+} from '../_shared/r2-grant-policy.ts';
 
 const GRANT_TTL_SECONDS = 3600;
 
 interface GrantRequest {
   client_id?: string;
-  purpose?: 'pipeline' | 'branding';
+  purpose?: GrantPurpose;
 }
+
+// Postgres accepts UUIDs regardless of version/variant (the local seed deliberately uses a
+// zero-valued UUID), so validate the shape without rejecting valid database identifiers.
+const UUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 
 function json(status: number, body: Record<string, unknown>): Response {
   return new Response(JSON.stringify(body), {
@@ -36,6 +46,10 @@ Deno.serve(async (req) => {
   const body = (await req.json().catch(() => ({}))) as GrantRequest;
   const { client_id, purpose = 'pipeline' } = body;
   if (!client_id) return json(400, { error: 'client_id required' });
+  if (!UUID.test(client_id)) return json(400, { error: 'client_id must be a UUID' });
+  if (purpose !== 'pipeline' && purpose !== 'branding') {
+    return json(400, { error: 'purpose must be pipeline or branding' });
+  }
 
   const { data: profile } = await supa
     .from('profiles').select('role').eq('id', userData.user.id).single();
@@ -88,19 +102,21 @@ Deno.serve(async (req) => {
     return json(503, { error: 'Storage backend not provisioned — set CF_R2_TOKEN / CF_ACCOUNT_ID / R2_PARENT_ACCESS_KEY_ID' });
   }
 
-  /* Temporary credentials are scoped to ONE bucket, so the two tiers need one grant each. */
-  async function tempCredentials(forBucket: string) {
+  /* Temporary credentials are scoped to ONE bucket, so the two tiers need one grant each. The
+     caller receives these credentials, making Cloudflare's prefix restriction the object-layer
+     tenant boundary even if the caller ignores the returned keyPrefix. */
+  async function tempCredentials(forBucket: string, prefixes: string[]) {
     const res = await fetch(
       `https://api.cloudflare.com/client/v4/accounts/${accountId}/r2/temp-access-credentials`,
       {
         method: 'POST',
         headers: { Authorization: `Bearer ${cfToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          bucket: forBucket,
-          parentAccessKeyId: parentKey,
-          permission: 'object-read-write',
-          ttlSeconds: GRANT_TTL_SECONDS,
-        }),
+        body: JSON.stringify(temporaryCredentialRequest(
+          forBucket,
+          parentKey,
+          prefixes,
+          GRANT_TTL_SECONDS,
+        )),
       },
     );
     const body = await res.json().catch(() => null);
@@ -111,10 +127,13 @@ Deno.serve(async (req) => {
     return body.result as { accessKeyId: string; secretAccessKey: string; sessionToken: string };
   }
 
-  const publicCreds = await tempCredentials(bucket);
+  const publicPrefixes = grantPrefixes(client_id, purpose, 'public');
+  const publicCreds = await tempCredentials(bucket, publicPrefixes);
   if (!publicCreds) return json(502, { error: 'Could not obtain storage credentials' });
 
-  const gatedCreds = purpose === 'pipeline' ? await tempCredentials(gatedBucket!) : null;
+  const gatedCreds = purpose === 'pipeline'
+    ? await tempCredentials(gatedBucket!, grantPrefixes(client_id, purpose, 'gated'))
+    : null;
   if (purpose === 'pipeline' && !gatedCreds) {
     return json(502, { error: 'Could not obtain gated storage credentials' });
   }

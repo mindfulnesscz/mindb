@@ -22,7 +22,7 @@ interface AuthContextValue {
   profile: ProfileRow | null
   loading: boolean
   checkEmail: (email: string) => Promise<EmailAuthType>
-  sendMagicLink: (email: string, userData?: Record<string, string>, redirectTo?: string, clientId?: string) => Promise<string | null>
+  sendMagicLink: (email: string, userData?: Record<string, string>, redirectTo?: string) => Promise<string | null>
   signInWithProvider: (provider: OAuthProvider, redirectTo?: string) => Promise<string | null>
   completeProfile: (fields: { name: string; company: string; country: string; industry: string }) => Promise<string | null>
   signOut: () => Promise<void>
@@ -99,13 +99,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     email: string,
     userData?: Record<string, string>,
     redirectTo?: string,
-    clientId?: string,
   ): Promise<string | null> {
     if (!supabase) return 'Supabase not configured'
     try {
       await sendMagicLinkCore(supabase, email, {
         emailRedirectTo: redirectTo ?? window.location.origin,
-        data: { ...userData, ...(clientId ? { client_id: clientId } : {}) },
+        // Profile fields are descriptive only. Tenant access comes from the server-controlled
+        // domain allow-list or a later admin assignment, never caller-supplied signup metadata.
+        data: userData,
       })
       return null
     } catch (e) {
