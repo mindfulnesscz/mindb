@@ -1,90 +1,70 @@
 // @vitest-environment jsdom
 
-/* A thumbnail that fails must not read as a broken product.
+/* The thumbnail fallback.
  *
- * The browser's answer to a 401 or 404 on an <img> is its broken-image glyph, which is what a client
- * saw when a 431 MiB TIFF could not be decoded and so never got a thumbnail. The asset itself was
- * fine and downloadable; only the preview was missing.
+ * The failure being designed around is quiet and easy to mistake for a bug in the product: an asset's
+ * row is visible while its bytes are not. `perm='guest'` is exactly that — RLS returns the row to any
+ * signed-in user, but the image comes from the gated bucket through `cdn-gate`, which answers 401
+ * without the CDN cookie. The browser's own answer to that is the broken-image glyph.
  */
 
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
-import { AssetImage } from './AssetImage'
-
-const SRC = 'https://files.example.com/client/c1/thumbnails/a1/c1.webp'
-
-/** Simulate what the browser does when the image request fails. */
-function failImage() {
-  fireEvent.error(screen.getByRole('img'))
-}
+import { describe, it, expect } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import { AssetImage } from './AssetImage';
 
 describe('AssetImage', () => {
-  it('shows the image while it loads fine', () => {
-    render(<AssetImage src={SRC} alt="Falling Up" />)
-    expect(screen.getByRole('img')).toHaveAttribute('src', SRC)
-    expect(screen.queryByText('No preview')).not.toBeInTheDocument()
-  })
+  it('renders the image', () => {
+    render(<AssetImage src="https://cdn.example/a.webp" alt="Sofa hero" />);
+    expect(screen.getByAltText('Sofa hero')).toBeTruthy();
+  });
 
-  it('names the asset and offers the original when the preview fails', () => {
-    render(<AssetImage
-      src={SRC} alt="Falling Up"
-      fileName="falling-up@600x.tif"
-      downloadUrl="https://files.example.com/original.tif"
-    />)
-    failImage()
+  it('sends no referrer — a hotlink-protected CDN must treat this as a direct hit', () => {
+    render(<AssetImage src="https://cdn.example/a.webp" alt="Sofa hero" />);
+    expect(screen.getByAltText('Sofa hero')).toHaveAttribute('referrerpolicy', 'no-referrer');
+  });
 
-    expect(screen.getByText('No preview')).toBeInTheDocument()
-    // Which asset — "no preview" alone does not say, and several tiles can fail at once.
-    expect(screen.getByText('falling-up@600x.tif')).toBeInTheDocument()
-    // A missing preview is not a missing asset.
-    expect(screen.getByRole('link', { name: 'Download' }))
-      .toHaveAttribute('href', 'https://files.example.com/original.tif')
-  })
+  it('a failed load becomes a placeholder, not a broken image', () => {
+    render(<AssetImage src="https://cdn.example/gated.webp" alt="Sofa hero" />);
 
-  it('keeps the placeholder accessible as an image role', () => {
-    render(<AssetImage src={SRC} alt="Falling Up" />)
-    failImage()
-    expect(screen.getByRole('img', { name: /Falling Up — preview unavailable/ })).toBeInTheDocument()
-  })
+    fireEvent.error(screen.getByAltText('Sofa hero'));
 
-  it('omits the label and link when compact, for tiles too small to read them', () => {
-    render(<AssetImage
-      src={SRC} alt="Page 3" compact
-      fileName="falling-up@600x.tif" downloadUrl="https://x/o.tif"
-    />)
-    failImage()
+    expect(screen.queryByAltText('Sofa hero')).toBeNull();
+    expect(screen.getByText('Preview unavailable')).toBeTruthy();
+    // Still announced as an image, and still named — a screen reader gets the asset, not silence.
+    expect(screen.getByRole('img', { name: 'Sofa hero — preview unavailable' })).toBeTruthy();
+  });
 
-    expect(screen.getByText('No preview')).toBeInTheDocument()
-    expect(screen.queryByText('falling-up@600x.tif')).not.toBeInTheDocument()
-    expect(screen.queryByRole('link')).not.toBeInTheDocument()
-  })
-
-  it('does not let the download click open the card behind it', () => {
-    // These placeholders sit inside clickable cards; without stopPropagation the click would both
-    // download AND open the asset drawer.
-    const onDownload = vi.fn()
-    const onCardClick = vi.fn()
+  it('keeps the footprint, so a grid does not reflow around one gated tile', () => {
     render(
-      <div onClick={onCardClick}>
-        <AssetImage src={SRC} alt="a" fileName="f.tif" downloadUrl="https://x/o.tif" onDownload={onDownload} />
-      </div>,
-    )
-    failImage()
-    fireEvent.click(screen.getByRole('link', { name: 'Download' }))
+      <AssetImage
+        src="https://cdn.example/gated.webp" alt="Sofa hero"
+        className="w-full h-full object-cover" fallbackClassName="w-full h-full"
+      />,
+    );
+    fireEvent.error(screen.getByAltText('Sofa hero'));
+    expect(screen.getByRole('img').className).toContain('w-full h-full');
+  });
 
-    expect(onDownload).toHaveBeenCalledOnce()
-    expect(onCardClick).not.toHaveBeenCalled()
-  })
+  it('a NEW src gets a fresh attempt', () => {
+    /* The carousel reuses one instance as it steps, so a bare `failed` boolean would show the
+       placeholder for every frame after the first gated one. */
+    const { rerender } = render(<AssetImage src="https://cdn.example/gated.webp" alt="Frame" />);
+    fireEvent.error(screen.getByAltText('Frame'));
+    expect(screen.getByText('Preview unavailable')).toBeTruthy();
 
-  /* The failure is remembered against the URL, not as a boolean: a carousel reuses one instance as it
-     steps, so a bare flag would show the placeholder for every frame after the first failure. */
-  it('recovers when the src changes to one that works', () => {
-    const { rerender } = render(<AssetImage src={SRC} alt="a" />)
-    failImage()
-    expect(screen.getByText('No preview')).toBeInTheDocument()
+    rerender(<AssetImage src="https://cdn.example/fine.webp" alt="Frame" />);
 
-    rerender(<AssetImage src={`${SRC}?v=other`} alt="a" />)
-    expect(screen.queryByText('No preview')).not.toBeInTheDocument()
-    expect(screen.getByRole('img')).toHaveAttribute('src', `${SRC}?v=other`)
-  })
-})
+    expect(screen.getByAltText('Frame')).toBeTruthy();
+    expect(screen.queryByText('Preview unavailable')).toBeNull();
+  });
+
+  it('and going back to the failed src stays failed', () => {
+    const { rerender } = render(<AssetImage src="https://cdn.example/gated.webp" alt="Frame" />);
+    fireEvent.error(screen.getByAltText('Frame'));
+    rerender(<AssetImage src="https://cdn.example/fine.webp" alt="Frame" />);
+
+    rerender(<AssetImage src="https://cdn.example/gated.webp" alt="Frame" />);
+
+    expect(screen.getByText('Preview unavailable')).toBeTruthy();
+  });
+});

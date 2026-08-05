@@ -17,7 +17,7 @@ import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { MemoryRouter, Routes, Route, useLocation, useNavigationType } from 'react-router-dom';
-import { getDefaultFilters, type FilterState } from '@sotto/asset-library';
+import { getDefaultFilters, type FilterState } from '@dc-hub/asset-library';
 import { useFilterParams } from './useFilterParams';
 
 /** Renders the current filters, the live location, and buttons for each way of calling the setter. */

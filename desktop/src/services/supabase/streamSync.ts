@@ -11,7 +11,7 @@
  * missed. Scoping it to files touched this run would make a miss permanent.
  */
 
-import { isVideoFile, stripVersion } from '@sotto/domain';
+import { isVideoFile, stripVersion } from '@dc-hub/domain';
 import type { SupabaseConfig } from './rest';
 import { makeHeaders, fetchAllForClient } from './rest';
 import { requestStreamUpload } from './streamUpload';
@@ -45,7 +45,6 @@ function sourceHashOf(url: string): string | null {
  */
 export async function syncStreamVideos(
   config: SupabaseConfig, clientId: string, log: Log,
-  options: { dryRun?: boolean; shouldStop?: () => boolean } = {},
 ): Promise<{ uploaded: number; replaced: number; failed: number }> {
   const result = { uploaded: 0, replaced: 0, failed: 0 };
 
@@ -88,14 +87,7 @@ export async function syncStreamVideos(
   }
 
   for (const v of work.slice(0, MAX_PER_RUN)) {
-    if (options.shouldStop?.()) break;
     const replacing = !!v.stream_uid;
-    if (options.dryRun) {
-      log('dim', `  [DRY] would ${replacing ? 'replace' : 'upload'} Stream video: ${v.name}`);
-      if (replacing) result.replaced += 1;
-      else result.uploaded += 1;
-      continue;
-    }
     try {
       const res = await requestStreamUpload(config, v.id, { replace: replacing });
       if (res.reused) continue;

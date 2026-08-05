@@ -12,7 +12,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { patchMeta } from './notes';
-import type { ParsedFilename } from '@sotto/domain';
+import type { ParsedFilename } from '@dc-hub/domain';
 
 const parsed = (over: Partial<ParsedFilename> = {}): ParsedFilename => ({
   tags: [], unknownTags: [], description: null, version: null, yymm: null, error: null, ...over,

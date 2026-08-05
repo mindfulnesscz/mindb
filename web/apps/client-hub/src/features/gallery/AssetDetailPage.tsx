@@ -21,7 +21,7 @@
 import { useState, type ReactNode } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { MOCK_ASSETS } from '@sotto/asset-library'
+import { MOCK_ASSETS } from '@dc-hub/asset-library'
 import { useAuth } from '../../context/AuthContext'
 import { useRole } from '../../context/RoleContext'
 import { fetchAsset } from '../../services/assetService'
@@ -36,7 +36,7 @@ function Chrome({ children, backTo }: { children: ReactNode; backTo?: string }) 
         <div className="w-6 h-6 rounded-[28%_38%] bg-cosmos-black flex items-center justify-center">
           <span className="text-clear-white text-[10px] font-bold font-sans leading-none">C</span>
         </div>
-        <span className="text-xs font-sans font-bold uppercase tracking-label text-cosmos-black">SOTTO</span>
+        <span className="text-xs font-sans font-bold uppercase tracking-label text-cosmos-black">DC HUB</span>
         {/* Only rendered when there is somewhere the viewer can actually go. Both back links here used
             to be an unconditional `Link to="/"`, which sends a client to the staff admin landing. */}
         {backTo && (

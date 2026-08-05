@@ -1,6 +1,6 @@
 /* Settings-shaped adapters over the shared naming rules.
  *
- * @sotto/domain takes a NamingSettings; the pipeline carries a full AppSettings. These four
+ * @dc-hub/domain takes a NamingSettings; the pipeline carries a full AppSettings. These four
  * adapters are the only place that translation happens, so the domain package stays free of
  * desktop's settings shape.
  * 
@@ -13,7 +13,7 @@ import type { AppSettings } from '../../store/settingsStore';
 import {
   isOutFolder as namingIsOutFolder,
   isPackageFolder as namingIsPackageFolder,
-} from '@sotto/domain';
+} from '@dc-hub/domain';
 
 export function shouldSkip(name: string, s: AppSettings): boolean {
   if (name.startsWith('~$')) return true;

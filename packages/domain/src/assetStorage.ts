@@ -10,7 +10,7 @@
  *
  * All four import THIS module. The Worker was the exception — it restated the parse by hand,
  * because it lives in its own bundle — until workers/cdn-gate joined the npm workspace and could
- * resolve @sotto/domain like everyone else. `parseObjectPath` below is that parser, and it is now
+ * resolve @dc-hub/domain like everyone else. `parseObjectPath` below is that parser, and it is now
  * the only copy: a change to the key shape can no longer be half-made.
  *
  * Two tiers of delivery, four levels of access:

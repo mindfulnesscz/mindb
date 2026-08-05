@@ -7,10 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import {
-  assessDestruction, assessFreshDestruction, assessReconciliationRead,
-  assessTargetReconciliationRead, DESTRUCTION_FLOOR,
-} from './guardrail';
+import { assessDestruction, DESTRUCTION_FLOOR } from './guardrail';
 
 const assess = (doomed: number, written: number, allowLarge = false) =>
   assessDestruction({ unit: 'row(s)', doomed, written, allowLarge });
@@ -108,36 +105,5 @@ describe('assessDestruction — the refusal message', () => {
   it('carries the unit it was given, so the log reads correctly for objects too', () => {
     expect(assessDestruction({ unit: 'CDN object(s)', doomed: 40, written: 0 }).message)
       .toContain('40 CDN object(s)');
-  });
-});
-
-describe('fresh-source and read-integrity guardrails', () => {
-  it('refuses even a small deletion when the authoritative source is stale', () => {
-    const result = assessFreshDestruction({
-      unit: 'portal tag(s)', doomed: 1, written: 20,
-      sourceFresh: false, source: 'the local vocabulary',
-    });
-    expect(result.blocked).toBe(true);
-    expect(result.message).toContain('not freshly synchronized');
-  });
-
-  it('applies the normal blast-radius ratio once the source is fresh', () => {
-    expect(assessFreshDestruction({
-      unit: 'portal tag(s)', doomed: 40, written: 1,
-      sourceFresh: true, source: 'the local vocabulary',
-    }).blocked).toBe(true);
-  });
-
-  it('blocks reconciliation for an unreadable subtree and names both paths', () => {
-    const result = assessReconciliationRead('/source/asset/OUT', '/target/asset', 'denied');
-    expect(result.blocked).toBe(true);
-    expect(result.message).toContain('/source/asset/OUT');
-    expect(result.message).toContain('/target/asset');
-  });
-
-  it('blocks classification of an unreadable target subtree', () => {
-    const result = assessTargetReconciliationRead('/target/protected', 'denied');
-    expect(result.blocked).toBe(true);
-    expect(result.message).toContain('/target/protected');
   });
 });

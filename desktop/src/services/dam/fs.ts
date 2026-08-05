@@ -11,7 +11,7 @@ import type { DirEntry } from '@tauri-apps/plugin-fs';
 import type { AppSettings } from '../../store/settingsStore';
 import {
   isOutFolder as namingIsOutFolder, isPackageFolder as namingIsPackageFolder,
-} from '@sotto/domain';
+} from '@dc-hub/domain';
 
 export async function listDir(path: string): Promise<DirEntry[]> {
   try { return await readDir(path); } catch { return []; }

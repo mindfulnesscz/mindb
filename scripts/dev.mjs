@@ -54,7 +54,6 @@ for (const service of services) {
     cwd: process.cwd(),
     env: { ...process.env, FORCE_COLOR: process.env.FORCE_COLOR ?? '1' },
     stdio: ['inherit', 'pipe', 'pipe'],
-    shell: process.platform === 'win32',
   })
   children.add(child)
   prefixOutput(child.stdout, process.stdout, label)

@@ -3,7 +3,7 @@
 -- pipeline instead; this file exists so a local portal has something to show.
 --
 -- Seeded sign-ins (LOCAL ONLY — never reuse this pattern on a hosted tier):
---   admin@acme.test  / password: sotto-local   (role: super_admin — full access: environments, client creation, admin management)
+--   admin@acme.test  / password: dchub-local   (role: super_admin — full access: environments, client creation, admin management)
 --   Additional users: create in Studio (http://localhost:54323 → Authentication);
 --   any @acme.test address auto-joins Acme Studio as role 'member'.
 
@@ -50,7 +50,7 @@ insert into public.asset_events (asset_id, event_type, role) values
   ('00000000-0000-0000-0000-00000000a001', 'view', 'public'),
   ('00000000-0000-0000-0000-00000000a001', 'download', 'member');
 
--- ── Seeded local admin: admin@acme.test / sotto-local ────────────────────
+-- ── Seeded local admin: admin@acme.test / dchub-local ────────────────────
 -- Direct auth.users insert works on the local stack only, which is the point.
 -- The handle_new_user trigger creates the profile (as 'member', via the
 -- domain whitelist); the update below promotes it to admin.
@@ -62,7 +62,7 @@ insert into auth.users (
   '00000000-0000-0000-0000-000000000000',
   '00000000-0000-0000-0000-0000000000ad',
   'authenticated', 'authenticated', 'admin@acme.test',
-  extensions.crypt('sotto-local', extensions.gen_salt('bf')),
+  extensions.crypt('dchub-local', extensions.gen_salt('bf')),
   now(),
   '{"provider":"email","providers":["email"]}',
   '{"name":"Local Admin"}',

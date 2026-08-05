@@ -1,5 +1,5 @@
 {
-  "name": "@sotto/database",
+  "name": "@dc-hub/database",
   "version": "2.3.0",
   "private": true,
   "type": "module",

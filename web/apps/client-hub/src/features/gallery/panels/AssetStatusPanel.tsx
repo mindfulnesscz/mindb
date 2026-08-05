@@ -10,7 +10,7 @@
  * server would refuse.
  */
 
-import { canApprove, canControlPermission, canReadComments, type Asset, type Role } from '@sotto/asset-library'
+import { canApprove, canControlPermission, canReadComments, type Asset, type Role } from '@dc-hub/asset-library'
 import { STATUS_OPTIONS, PERM_OPTIONS } from '../assetOptions'
 
 export interface AssetStatusPanelProps {

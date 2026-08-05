@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from 'react'
 import { useReducedMotion } from 'motion/react'
-import { canDownload, canSeeStats, canReadComments, type Asset, type Role } from '@sotto/asset-library'
+import { canDownload, canSeeStats, canReadComments, type Asset, type Role } from '@dc-hub/asset-library'
 import { assetFacetLabels } from '../../services/assetService'
 import { webAssetActions } from '../../lib/assetActions'
 import { MultiAssetHoverGrid, useSiblingPreviews, useDelayedHover, type SiblingPreview } from './MultiAssetHover'
@@ -101,8 +101,6 @@ export function AssetCard({
               alt={asset.name}
               className="relative z-[1] w-full h-full object-cover cursor-pointer"
               fallbackClassName="relative z-[1] w-full h-full"
-              fileName={asset.name}
-              downloadUrl={canDownload(role, asset) ? asset.downloadUrl : undefined}
             />
           )
           : <div className="relative z-[1] w-full h-full bg-gray-150" />
@@ -220,3 +218,4 @@ export function AssetCard({
 }
 
 // ── Skeletons ─────────────────────────────────────────────────
+

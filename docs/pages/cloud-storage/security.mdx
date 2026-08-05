@@ -17,12 +17,7 @@ Expect only **OAuth tokens** (and optional Google client secret) in local config
 
 ## Temporary grants
 
-Pipeline CDN uploads use short-lived credentials from `r2-grant` after role and client-membership
-checks. The returned credentials are also object-key scoped by Cloudflare: `{client_id}/` in the
-public bucket and the three gated level namespaces for that same client in the gated bucket. This is
-the storage-layer boundary that prevents a credential issued for client A from reading, overwriting,
-or deleting client B's objects. Branding uploads use `r2-branding-upload` (admin only). Failures when
-unprovisioned are explicit 503s — they do not fall back to embedding permanent keys.
+Pipeline CDN uploads use short-lived credentials from `r2-grant` (role + client scope). Branding uploads use `r2-branding-upload` (admin only). Failures when unprovisioned are explicit 503s — they do not fall back to embedding permanent keys.
 
 ## Operator habits
 

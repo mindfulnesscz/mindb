@@ -1,14 +1,8 @@
 # Portal administration
 
-The root route is the staff landing. Without Supabase configuration it renders a locked state; with
-configuration it requires an authenticated editor, admin, or super admin profile. Editors navigate
-client cards. Client forms (admin and super admin) manage name, initials, accent, logo (CDN upload or
-URL), `dimension_labels`, site, slug, portal background, domain whitelist, the **tags** tree, and
-**export destinations**.
+The root route is the staff landing. Editors/admins navigate client cards. Client forms (admin) manage name, initials, accent, logo (CDN upload or URL), `dimension_labels`, site, slug, portal background, domain whitelist, the **tags** tree, and **export destinations**.
 
-Users load via `get_all_profiles`; administrators change role and access through `update_user_access`
-(member client picker, editor `client_members` checkboxes). Portal and desktop staff sign-in accepts
-editor, admin, and super admin profiles.
+Users load via `get_all_profiles`; administrators change role and access through `update_user_access` (member client picker, editor `client_members` checkboxes). Desktop sign-in remains editor/admin only.
 
 ### Tags and destinations in the client drawer
 

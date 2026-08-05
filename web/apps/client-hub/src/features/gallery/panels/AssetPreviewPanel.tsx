@@ -10,7 +10,7 @@
  */
 
 import type { Dispatch, SetStateAction } from 'react'
-import { canDownload, type Asset, type Role } from '@sotto/asset-library'
+import { canDownload, type Asset, type Role } from '@dc-hub/asset-library'
 import type { DetailFocus } from '../hooks/useDetailFocus'
 import { AssetImage } from '../../../components/AssetImage'
 import type { PortalDestination } from '../../../services/destinationService'
@@ -178,19 +178,16 @@ export function AssetPreviewPanel({
                   if (!dest) return isStaff
                   return true
                 })
-                const downloadable = canDownload(role, a)
                 return {
                   src: a.downloadUrl || a.thumbnailUrl || '',
                   thumbSrc: a.thumbnailUrl,
                   alt: a.name,
                   title: a.name,
-                  downloadUrl: downloadable ? a.downloadUrl : undefined,
-                  cloudLinks: downloadable
-                    ? links.map(l => ({
-                        label: l.name || l.provider || 'Cloud',
-                        url: l.url,
-                      }))
-                    : [],
+                  downloadUrl: canDownload(role, asset) ? a.downloadUrl : undefined,
+                  cloudLinks: links.map(l => ({
+                    label: l.name || l.provider || 'Cloud',
+                    url: l.url,
+                  })),
                   assetId: a.id,
                 }
               })

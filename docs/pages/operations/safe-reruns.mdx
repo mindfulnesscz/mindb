@@ -12,30 +12,3 @@
 | Supabase | Reconnect by `(stable_id, child_id)`; missing rows are disconnected, never deleted |
 
 There is no global exactly-once guarantee. “Safe to rerun” means each phase’s consequence is understood, not that every provider is idempotent. For a changed local thumbnail, delete the sidecar. For stale Dropbox, remove its remote path. For Drive, clean duplicate IDs/names. Never run full R2 reconciliation before folder identity has resolved — without it every object looks stale.
-
-## Previewing and stopping safely
-
-**Dry run** is a mutation boundary for the whole run, including the normally automatic tail. It
-logs planned local/DAM changes, CDN and cloud uploads/deletes, Supabase inserts/patches/disconnects,
-tag/version-history/rename-task changes, and Stream uploads, while leaving files, manifests, caches,
-database rows and remote objects untouched. Reads still occur so the preview can describe the diff.
-
-**Stop** takes effect at the next safe checkpoint. Work already in a bounded concurrent batch may
-finish, but no new stage or batch starts. Keep the app open until the status leaves **Stopping…**.
-
-## Destructive reconciliation tripwires
-
-- A failed source-directory read never means “empty.” Local publish protects the corresponding
-  target subtree, and Supabase row disconnect is refused for an incomplete scan, so a transient
-  permission/mount error cannot rename target files or disconnect their portal identities.
-- An unreadable target subtree is also excluded from reconciliation; the pipeline never renames a
-  folder merely because it could not enumerate the files inside it.
-- Stale Supabase rows and their CDN objects are checked against how many rows the run wrote. Large
-  inverse diffs are refused unless **Allow large deletions** was selected for that run.
-- Portal tag deletion additionally requires a freshly synchronized local vocabulary. Dirty or
-  cached vocabulary can upsert local edits but cannot infer deletion of portal-only tags. A fresh
-  tag diff still passes the same blast-radius ratio check.
-
-A refusal leaves the useful non-destructive work in place and names the skipped action in the
-activity log. Fix the source/read condition and rerun; use the large-deletion override only after
-confirming the selected source and client are correct.

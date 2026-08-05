@@ -11,7 +11,7 @@
 
 import { useState } from 'react';
 import { Search, X, RefreshCw } from 'lucide-react';
-import { type Slot, dimensionLabelForSlot } from '@sotto/domain';
+import { type Slot, dimensionLabelForSlot } from '@dc-hub/domain';
 import { useVocabularyStore } from '../../store/vocabularyStore';
 import { useClientStore } from '../../store/clientStore';
 import { TagModal } from './TagModal';

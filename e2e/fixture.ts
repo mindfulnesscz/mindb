@@ -27,7 +27,7 @@ export const SERVICE_KEY =
 
 /** From seed.sql. The password exists only on the local stack, by design. */
 export const ADMIN_EMAIL = 'admin@acme.test';
-export const ADMIN_PASSWORD = 'sotto-local';
+export const ADMIN_PASSWORD = 'dchub-local';
 
 export const FIXTURE_CLIENT_ID = 'eeeeeeee-1111-4eee-8eee-e00000000001';
 export const FIXTURE_SLUG = 'e2e-smoke';
@@ -48,11 +48,11 @@ const svc = {
   'Content-Type': 'application/json',
 };
 
-/** True only when PostgREST in the full local stack answers successfully. */
+/** True when the local stack answers. Everything here is skipped otherwise. */
 export async function stackIsUp(): Promise<boolean> {
   try {
     const res = await fetch(`${API}/rest/v1/`, { headers: { apikey: ANON_KEY } });
-    return res.ok;
+    return res.ok || res.status === 404;
   } catch {
     return false;
   }

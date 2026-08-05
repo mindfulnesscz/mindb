@@ -8,7 +8,7 @@
  */
 
 import { useLocation } from 'react-router-dom'
-import { ErrorBoundary } from '@sotto/asset-library'
+import { ErrorBoundary } from '@dc-hub/asset-library'
 import { reportError } from '../lib/reportError'
 
 export function RouteErrorBoundary({ children }: { children: React.ReactNode }) {

@@ -41,7 +41,7 @@ jobs:
       - run: npm run version:check
       # Unsigned and un-notarized. Gatekeeper refuses it on download, and "right-click → Open" is no
       # longer reliable on current macOS — the route is System Settings → Privacy & Security → Open
-      # Anyway, or `xattr -dr com.apple.quarantine "/Applications/Sotto.app"`.
+      # Anyway, or `xattr -dr com.apple.quarantine "/Applications/DC Hub.app"`.
       # Also ARM-ONLY: macos-latest runners are Apple Silicon and `"targets": "all"` selects bundle
       # FORMATS, not architectures, so this .dmg does not run on an Intel Mac.
       # For signed builds, set TAURI_SIGNING_PRIVATE_KEY + TAURI_SIGNING_PRIVATE_KEY_PASSWORD.

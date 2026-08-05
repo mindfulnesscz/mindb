@@ -1,13 +1,7 @@
-import { createAuthClient, type SottoClient } from '@sotto/auth'
+import { createAuthClient, type DcHubClient } from '@dc-hub/auth'
 
-const LS_URL = 'sotto_supabase_url'
-const LS_KEY = 'sotto_supabase_anon_key'
-/* Read-only fallbacks from before the rename. This path is only used when VITE_SUPABASE_URL/KEY are
-   absent — a manually configured browser — and a rename alone would present as "not configured" with
-   no hint that the values are still there. Read the old keys, write only the new ones, so the entry
-   migrates the first time anything saves. */
-const LEGACY_LS_URL = 'dc_hub_supabase_url'
-const LEGACY_LS_KEY = 'dc_hub_supabase_anon_key'
+const LS_URL = 'dc_hub_supabase_url'
+const LS_KEY = 'dc_hub_supabase_anon_key'
 
 export interface SupabaseConfig {
   url: string
@@ -24,8 +18,8 @@ export function getConfig(): SupabaseConfig {
   }
 
   return {
-    url: localStorage.getItem(LS_URL) ?? localStorage.getItem(LEGACY_LS_URL) ?? '',
-    anonKey: localStorage.getItem(LS_KEY) ?? localStorage.getItem(LEGACY_LS_KEY) ?? '',
+    url: localStorage.getItem(LS_URL) ?? '',
+    anonKey: localStorage.getItem(LS_KEY) ?? '',
     fromEnv: false,
   }
 }
@@ -38,11 +32,9 @@ export function saveConfig(url: string, anonKey: string): void {
 export function clearConfig(): void {
   localStorage.removeItem(LS_URL)
   localStorage.removeItem(LS_KEY)
-  localStorage.removeItem(LEGACY_LS_URL)
-  localStorage.removeItem(LEGACY_LS_KEY)
 }
 
-function makeClient(): SottoClient | null {
+function makeClient(): DcHubClient | null {
   const { url, anonKey } = getConfig()
   if (!url || !anonKey) return null
   // Browser flow: detectSessionInUrl exchanges the post-redirect `?code=` on

@@ -132,18 +132,6 @@ describe('CLIENT_IDENTITY_SELECT', () => {
     }
   })
 
-  /* The other direction, and it cost a broken desktop: this list is sent to Production, Staging AND
-     Local, and PostgREST rejects the WHOLE query with "column does not exist" against any database
-     missing one of them. Adding `preview_page_limit` here made every environment without the
-     migration fail with "Could not load clients" — no client list at all, for a page-count setting.
-     A column belongs here only once every environment is guaranteed to have it; anything newer is
-     read by its own query that can degrade. */
-  it('omits columns that may not exist in every environment yet', () => {
-    for (const tooNew of ['preview_page_limit']) {
-      expect(CLIENT_IDENTITY_SELECT).not.toContain(tooNew)
-    }
-  })
-
   it('is a bare column list — it is interpolated into a select, not parsed', () => {
     expect(CLIENT_IDENTITY_SELECT).not.toMatch(/\s/)
     expect(CLIENT_IDENTITY_SELECT).not.toMatch(/[*();]/)

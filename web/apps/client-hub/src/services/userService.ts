@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase'
-import type { Role } from '@sotto/asset-library'
+import type { Role } from '@dc-hub/asset-library'
 
 export interface UserProfile {
   id: string

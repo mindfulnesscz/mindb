@@ -5,7 +5,7 @@
  */
 
 import { useState, useRef, useEffect } from 'react'
-import {} from '@sotto/asset-library'
+import {} from '@dc-hub/asset-library'
 
 const LOGO_ACCEPT = 'image/png,image/jpeg,image/webp,image/svg+xml,image/gif'
 const LOGO_MAX_BYTES = 2 * 1024 * 1024

@@ -28,7 +28,7 @@ const packageFiles = [
 // architecture"), so their versions are recorded here rather than in per-tree lockfiles.
 // ONE lockfile for the workspace. docs/ keeps its own — it is a Next.js site with a dependency
 // tree nothing else shares. workers/cdn-gate joined the workspace so the Worker can import
-// @sotto/domain and stop restating the object-key rules by hand.
+// @dc-hub/domain and stop restating the object-key rules by hand.
 const lockFiles = {
   'package-lock.json': ['', 'desktop', 'web/apps/client-hub', 'packages/asset-library',
                         'workers/cdn-gate'],
@@ -36,8 +36,8 @@ const lockFiles = {
 }
 
 function cargoPackageVersion(source) {
-  const block = source.match(/\[\[package\]\][\s\S]*?\nname = "sotto-app"\nversion = "([^"]+)"/)
-  if (!block) throw new Error('sotto-app package not found in Cargo.lock')
+  const block = source.match(/\[\[package\]\][\s\S]*?\nname = "dc-hub-app"\nversion = "([^"]+)"/)
+  if (!block) throw new Error('dc-hub-app package not found in Cargo.lock')
   return block[1]
 }
 
@@ -100,7 +100,7 @@ function setVersion(kind) {
   write('desktop/src-tauri/Cargo.toml',
     read('desktop/src-tauri/Cargo.toml').replace(/^(version = ")[^"]+("$)/m, `$1${next}$2`))
   write('desktop/src-tauri/Cargo.lock', read('desktop/src-tauri/Cargo.lock').replace(
-    /(\[\[package\]\][\s\S]*?\nname = "sotto-app"\nversion = ")[^"]+("\n)/,
+    /(\[\[package\]\][\s\S]*?\nname = "dc-hub-app"\nversion = ")[^"]+("\n)/,
     `$1${next}$2`,
   ))
 

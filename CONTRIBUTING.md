@@ -1,4 +1,4 @@
-# Contributing to Sotto
+# Contributing to DC Hub
 
 This repo holds four things that ship together: a Tauri 2 desktop app, a React portal, a Nextra docs
 site, and the Supabase schema they share. The rules below are the ones that are expensive to
@@ -176,12 +176,6 @@ slightly wrong, it is inverted. If you add a stage that deletes in bulk, gate it
 
 `dev` → `staging` → `main`. Migrations deploy from `staging` and `main` via `db.yml`; the portal follows
 the same branches through Vercel; desktop releases ride `v*` tags.
-
-Pull requests run the browser smoke suite against an isolated local Supabase stack in GitHub Actions.
-The merge push to `dev` does not repeat that database-backed job, and no workflow links `dev` to a
-remote Supabase project. Pushes to `staging` and `main` rerun the smoke alongside their separate
-deployment workflows. CI pins the Supabase CLI version so checks do not depend on resolving the
-latest GitHub release.
 
 Write commit messages that explain **why**, including what you considered and rejected. The git log here
 is used as an engineering record — several decisions in this codebase are only recoverable from it.

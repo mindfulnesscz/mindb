@@ -9,7 +9,7 @@
  * views, and switching resets the boundary via `resetKey`.
  */
 
-import { ErrorBoundary } from '@sotto/asset-library';
+import { ErrorBoundary } from '@dc-hub/asset-library';
 import { reportError, recentBreadcrumbs } from '../services/reportError';
 import css from './ViewErrorBoundary.module.css';
 

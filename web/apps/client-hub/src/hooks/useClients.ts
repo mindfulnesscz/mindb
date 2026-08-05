@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import type { Client } from '@sotto/asset-library'
-import { MOCK_CLIENTS } from '@sotto/asset-library'
+import type { Client } from '@dc-hub/asset-library'
+import { MOCK_CLIENTS } from '@dc-hub/asset-library'
 import { fetchClients } from '../services/clientService'
 import { isConfigured } from '../lib/supabase'
 

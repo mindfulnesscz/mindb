@@ -154,7 +154,7 @@ async function onedriveCreateLink(
 export async function uploadOneDriveFile(
   accessToken: string,
   bytes:        Uint8Array<ArrayBuffer>,
-  remotePath:   string,   // e.g. "Sotto/ESS/file.pdf"
+  remotePath:   string,   // e.g. "DC Hub/ESS/file.pdf"
   getLink:      boolean,
   driveId?:     string,   // SharePoint/OneDrive-for-Business drive; empty → /me/drive
 ): Promise<string | null> {

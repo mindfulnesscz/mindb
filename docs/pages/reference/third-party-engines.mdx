@@ -10,19 +10,6 @@ land under `desktop/src-tauri/resources/native/`. None are committed to the repo
 | [PDFium](https://pdfium.googlesource.com/pdfium/) via [pdfium-binaries](https://github.com/bblanchon/pdfium-binaries) | `chromium/7988` | BSD-3-Clause (PDFium), MIT (packaging) | Bundled dynamic library, ~7MB |
 | [LibreOffice](https://www.libreoffice.org/) | 26.2.5 | **MPL-2.0** | Bundled app tree on macOS/Windows, ~800MB; package dependency on Linux |
 
-## Download and cache integrity
-
-Every platform artifact in `scripts/fetch-native-deps.mjs` has a pinned SHA-256 digest. A missing or
-malformed pin stops the command before it downloads anything, and downloaded bytes are verified
-before extraction. Adding a platform with `sha256: null` is therefore a hard build failure, not a
-warning that still ships native code.
-
-The cache is verified independently of the URL. After extraction, the fetcher hashes the complete
-payload deterministically — paths, symlink targets, file modes, sizes, and bytes — and records that
-tree digest beside the pinned archive digest. On the next run it re-hashes the extracted payload; a
-swapped or missing binary invalidates the cache and forces a clean verified fetch. CI keys its native
-engine cache on the fetch script as an additional version boundary.
-
 ## Why LibreOffice is bundled
 
 Rendering fidelity. macOS QuickLook was evaluated as a zero-dependency alternative and rejected: it

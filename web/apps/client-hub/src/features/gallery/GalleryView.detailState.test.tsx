@@ -19,8 +19,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
-import { applyFilters, type Asset, type FilterState, type Role } from '@sotto/asset-library';
-import { DEFAULT_DIMENSION_LABELS } from '@sotto/database';
+import { applyFilters, type Asset, type FilterState, type Role } from '@dc-hub/asset-library';
+import { DEFAULT_DIMENSION_LABELS } from '@dc-hub/database';
 
 const asset = (over: Partial<Asset>): Asset => ({
   id: 'a', clientId: 'c1', name: 'Untitled',

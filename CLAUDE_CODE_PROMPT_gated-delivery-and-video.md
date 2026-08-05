@@ -851,7 +851,7 @@ Anything new keys on `stable_id` + `child_id`. See `CHANGELOG.md` 3.0.0 and
 There's a working pattern for integration tests against the local stack in
 `desktop/src/services/supabaseSync.integration.test.ts`: mock `@tauri-apps/api/core` to
 delegate `invoke` to real `fetch`, mock `authService`'s token with the seeded local admin
-(`admin@acme.test` / `sotto-local`), and let the test hit `127.0.0.1:54321`. It self-skips when
+(`admin@acme.test` / `dchub-local`), and let the test hit `127.0.0.1:54321`. It self-skips when
 the stack is down so CI stays green. Reuse it for `cdn-token` and `requestStreamUpload`.
 
 Worker tests want Miniflare/`wrangler dev` with a local R2 binding. Remember the Cache API is a

@@ -1,5 +1,5 @@
 {
-  "name": "sotto-workspace",
+  "name": "dc-hub-workspace",
   "private": true,
   "version": "3.2.0",
   "type": "module",
@@ -60,7 +60,7 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:coverage:ci": "npm --prefix desktop run test:coverage:ci",
-    "typecheck:worker": "npm --workspace @sotto/cdn-gate run typecheck"
+    "typecheck:worker": "npm --workspace @dc-hub/cdn-gate run typecheck"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

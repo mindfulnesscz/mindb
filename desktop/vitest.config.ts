@@ -8,9 +8,9 @@ export default defineConfig({
   // test runner has to resolve them the same way the bundler does.
   resolve: {
     alias: {
-      '@sotto/auth': fromHere('../packages/auth/src/index.ts'),
-      '@sotto/database': fromHere('../packages/database/src/index.ts'),
-      '@sotto/domain': fromHere('../packages/domain/src/index.ts'),
+      '@dc-hub/auth': fromHere('../packages/auth/src/index.ts'),
+      '@dc-hub/database': fromHere('../packages/database/src/index.ts'),
+      '@dc-hub/domain': fromHere('../packages/domain/src/index.ts'),
     },
   },
   test: {

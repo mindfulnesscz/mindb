@@ -41,8 +41,8 @@ symlinks and signature Tauri's resource copy destroys), and regenerates the DMG.
 
 | Command | Effect |
 |---|---|
-| `npm run deps:native` | Fetches SHA-256-pinned PDFium and LibreOffice artifacts for this platform and verifies the extracted cache by digest. Run by `npm run setup`; idempotent. ~290MB download, ~800MB on disk. |
-| `npm run smoke:functions` | Asserts every Supabase edge function boots; a missing full stack or a 404 fails. Add `--fresh` to recreate the local runtime first — it caches a module on first import and ignores later edits, so a green run after an edit otherwise proves nothing. |
+| `npm run deps:native` | Fetches the bundled render engines (PDFium, LibreOffice) for this platform. Run by `npm run setup`; idempotent. ~290MB download, ~800MB on disk. |
+| `npm run smoke:functions` | Asserts every Supabase edge function boots. Add `--fresh` to recreate the local runtime first — it caches a module on first import and ignores later edits, so a green run after an edit otherwise proves nothing. |
 
 See [Third-party engines](/reference/third-party-engines) and [Testing](/reference/testing).
 

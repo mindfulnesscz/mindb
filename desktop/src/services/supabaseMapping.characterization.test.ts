@@ -22,7 +22,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: async () => ({}) }));
 vi.mock('@tauri-apps/api/path', () => ({ join: async (...p: string[]) => p.join('/') }));
 
 const { parseAssetForSupabase } = await import('./supabaseService');
-import type { VocabularyData, VocabTag } from '@sotto/domain';
+import type { VocabularyData, VocabTag } from '@dc-hub/domain';
 
 const tag = (shortcode: string, slot: VocabTag['slot'], label: string): VocabTag =>
   ({ shortcode, slot, parentGroup: null, label, key: label.toLowerCase(), icon: '' });

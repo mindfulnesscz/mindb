@@ -52,7 +52,7 @@
 	//     curl -s https://api.cloudflare.com/client/v4/accounts/<id>/workers/subdomain -H "Authorization: Bearer <token>"
 	// The dashboard's subdomain field offers a RENAME, which is not the same action and is not a fix:
 	// renaming stops *.<old>.workers.dev routing immediately, and this account's subdomain is shared
-	// with unrelated projects. Nothing in Sotto depends on its name — both deployed environments use
+	// with unrelated projects. Nothing in DC Hub depends on its name — both deployed environments use
 	// custom domains and set workers_dev: false — so there is never a reason to change it from here.
 	//
 	// Do not add the staging or production buckets here. The Worker only ever reads `GATED`, so extra

@@ -7,10 +7,10 @@
     "noEmit": true,
     "types": ["node", "vite/client"],
     "paths": {
-      "@sotto/asset-library": ["../../../packages/asset-library/src/index.ts"],
-      "@sotto/database": ["../../../packages/database/src/index.ts"],
-      "@sotto/auth": ["../../../packages/auth/src/index.ts"],
-      "@sotto/domain": ["../../../packages/domain/src/index.ts"]
+      "@dc-hub/asset-library": ["../../../packages/asset-library/src/index.ts"],
+      "@dc-hub/database": ["../../../packages/database/src/index.ts"],
+      "@dc-hub/auth": ["../../../packages/auth/src/index.ts"],
+      "@dc-hub/domain": ["../../../packages/domain/src/index.ts"]
     }
   },
   "include": ["src", "vite.config.ts"]

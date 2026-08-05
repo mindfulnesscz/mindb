@@ -14,7 +14,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { vfs } from '../../test/vfs';
-import type { VocabTag } from '@sotto/domain';
+import type { VocabTag } from '@dc-hub/domain';
 
 vi.mock('@tauri-apps/plugin-fs', () => vfs.fsApi());
 

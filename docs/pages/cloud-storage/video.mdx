@@ -258,9 +258,7 @@ functions deploy from `main`/`staging` via `.github/workflows/db.yml`.
 **`FunctionsFetchError: Failed to send a request to the Edge Function`.** A CORS preflight was
 refused, so the call never reached the function — nothing will be in its logs. Browser-facing
 functions need `_shared/cors.ts`; desktop-called ones (`r2-grant`, `cdn-reconcile`, `stream-upload`)
-do not, which is why the omission is easy to miss by comparison. `_shared/cors.ts` accepts only
-origins listed exactly in `ALLOWED_ORIGINS`; an arbitrary `*.vercel.app` preview is not trusted.
-Add a preview origin explicitly only when that exact deployment is intended to call the functions.
+do not, which is why the omission is easy to miss by comparison.
 
 **A blank video card with no error.** A gated video whose token did not mint. The URL built from the
 bare uid 401s, and an `<img>` cannot report that. The portal deliberately holds its placeholder

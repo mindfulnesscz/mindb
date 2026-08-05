@@ -50,7 +50,6 @@ class MissingPathError extends Error {
 export class Vfs {
   private files = new Map<string, VfsEntry>();
   private dirs = new Set<string>(['/']);
-  private readFailures = new Set<string>();
   private clock = 1000;
   /** Every mutation, in order. Reset with `reset()`. */
   ops: Op[] = [];
@@ -60,17 +59,11 @@ export class Vfs {
     this.dirs = new Set(['/']);
     this.clock = 1000;
     this.ops = [];
-    this.readFailures.clear();
   }
 
   /** Next monotonic timestamp — also usable by tests to age a file deliberately. */
   tick(): number {
     return ++this.clock;
-  }
-
-  /** Keep a directory present but make reads fail, matching permission/transient IO errors. */
-  failRead(path: string): void {
-    this.readFailures.add(norm(path));
   }
 
   /* ── Building fixtures ──────────────────────────────────────────────────── */
@@ -133,13 +126,6 @@ export class Vfs {
     return this.dirs.has(norm(path));
   }
 
-  sameContent(left: string, right: string): boolean {
-    const a = this.files.get(norm(left))?.content;
-    const b = this.files.get(norm(right))?.content;
-    if (!a || !b || a.byteLength !== b.byteLength) return false;
-    return a.every((byte, i) => byte === b[i]);
-  }
-
   removed(): string[] {
     return this.ops.filter(o => o.kind === 'remove').map(o => (o as { path: string }).path).sort();
   }
@@ -159,7 +145,6 @@ export class Vfs {
     return {
       readDir: async (path: string) => {
         const p = norm(path);
-        if (this.readFailures.has(p)) throw new Error(`readDir: permission denied: ${path}`);
         if (!this.dirs.has(p)) throw new MissingPathError('readDir', path);
         const names = new Set<string>();
         const out: Array<{ name: string; isDirectory: boolean; isFile: boolean; isSymlink: boolean }> = [];

@@ -17,9 +17,9 @@ import {
   checkEmailAuth,
   sendMagicLink as sendMagicLinkCore,
   signOut as signOutCore,
-  type SottoClient,
+  type DcHubClient,
   type EmailAuthType,
-} from '@sotto/auth';
+} from '@dc-hub/auth';
 import { invoke } from '@tauri-apps/api/core';
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { appDataDir, join } from '@tauri-apps/api/path';
@@ -49,7 +49,7 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): 
   ]);
 }
 
-let client: SottoClient | null = null;
+let client: DcHubClient | null = null;
 let clientKey = '';
 let authSubscription: { unsubscribe: () => void } | null = null;
 let currentAccessToken: string | null = null;
@@ -87,30 +87,7 @@ export async function getAccessToken(opts: { forceRefresh?: boolean } = {}): Pro
 
 function authStorageKey(url: string): string {
   const host = url.replace(/^https?:\/\//, '').replace(/[:./]/g, '_');
-  return `sotto-auth-${host}`;
-}
-
-/**
- * Carry a session across the storage-key rename, once, so the Sotto rename does not sign everyone
- * out of every environment they had configured.
- *
- * supabase-js keeps the session under `storageKey`; changing that key alone makes a signed-in
- * operator look signed out, with a working session still sitting in storage under the old name. The
- * old entry is removed after the copy so this cannot resurrect a stale session later.
- */
-function migrateLegacyAuthSession(url: string): void {
-  const host = url.replace(/^https?:\/\//, '').replace(/[:./]/g, '_');
-  const legacy = `dc-hub-auth-${host}`;
-  const current = authStorageKey(url);
-  try {
-    if (localStorage.getItem(current) !== null) return; // already migrated, or a fresh sign-in
-    const stored = localStorage.getItem(legacy);
-    if (stored === null) return;
-    localStorage.setItem(current, stored);
-    localStorage.removeItem(legacy);
-  } catch {
-    // Storage unavailable (private mode, disabled). A re-sign-in is the fallback, not a crash.
-  }
+  return `dc-hub-auth-${host}`;
 }
 
 function teardownAuthClient(): void {
@@ -124,11 +101,10 @@ function teardownAuthClient(): void {
   clientKey = '';
 }
 
-function mountAuthClient(config: AuthServerConfig): SottoClient {
+function mountAuthClient(config: AuthServerConfig): DcHubClient {
   // Desktop flow: detectSessionInUrl false — the Rust loopback listener
   // captures the ?code= and waitForMagicLink() exchanges it manually. A
   // per-environment storageKey keeps sessions from colliding across projects.
-  migrateLegacyAuthSession(config.url);
   client = createAuthClient(
     { url: config.url, anonKey: config.anonKey },
     { detectSessionInUrl: false, storageKey: authStorageKey(config.url) },
@@ -146,7 +122,7 @@ function mountAuthClient(config: AuthServerConfig): SottoClient {
   return client;
 }
 
-export function initAuthClient(config: AuthServerConfig): SottoClient {
+export function initAuthClient(config: AuthServerConfig): DcHubClient {
   const key = `${config.url}::${config.anonKey}`;
   if (client && clientKey === key) return client;
   teardownAuthClient();
@@ -155,7 +131,7 @@ export function initAuthClient(config: AuthServerConfig): SottoClient {
 
 /** Tear down the previous project's session storage lock before switching
  * environments — without this, getSession() can stall indefinitely. */
-export async function switchAuthClient(config: AuthServerConfig): Promise<SottoClient> {
+export async function switchAuthClient(config: AuthServerConfig): Promise<DcHubClient> {
   const key = `${config.url}::${config.anonKey}`;
   if (client && clientKey === key) return client;
 
@@ -171,7 +147,7 @@ export async function switchAuthClient(config: AuthServerConfig): Promise<SottoC
   return mountAuthClient(config);
 }
 
-export function getAuthClient(): SottoClient | null {
+export function getAuthClient(): DcHubClient | null {
   return client;
 }
 

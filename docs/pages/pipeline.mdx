@@ -2,22 +2,11 @@
 
 The asset pipeline is a **desktop application** (`desktop`) built with [Tauri 2](https://tauri.app/) — a Rust backend with a React/TypeScript frontend. It runs on a signed-in staff machine (**editor** or **admin**) and processes creative files for the platform.
 
-All Supabase access uses the signed-in user's JWT under RLS. There is no service-role key on the
-desktop. CDN access uses short-lived `r2-grant` credentials when the environment is provisioned;
-Cloudflare scopes those credentials to the selected client's public and gated key namespaces.
+All Supabase access uses the signed-in user's JWT under RLS. There is no service-role key on the desktop. CDN access uses short-lived `r2-grant` credentials when the environment is provisioned.
 
 ## Steps, in run order
 
 Steps 1–5 are numbered checkboxes in the app's **Tasks** panel and can each be switched on/off per run. **Scan**, **Supabase sync**, and **Version history sync** aren't checkboxes — they run automatically whenever a source folder / Supabase session is present.
-
-**Dry run is end-to-end.** It may scan local files and read portal/provider state to build a plan,
-but it does not render or copy files, update identity manifests or caches, upload/delete CDN or
-cloud objects, mutate Supabase rows/tags/version history/rename tasks, write DAM output, or start
-Stream uploads. Intended actions are written to the activity log with `[DRY]`.
-
-**Stop is cooperative.** An in-flight bounded batch is allowed to finish; the run halts at the next
-stage or batch checkpoint. Post-run Supabase, CDN reconcile, tag, version-history, rename-task and
-Stream work use the same stop signal, so the run is not marked complete before that tail finishes.
 
 | Step | What it does | |
 |---|---|---|
@@ -39,15 +28,11 @@ Stream work use the same stop signal, so the run is not marked complete before t
 
 ### 1 — Generate thumbnails
 
-For each collected asset, the Rust backend renders a WebP thumbnail (PPTX/PDF via LibreOffice + `pdftoppm`, images directly) at the configured width/quality. Skipped for file types that don't support thumbnailing. Raster thumbnails record the source size + mtime and render settings in a sidecar manifest; an existing WebP is reused only while that fingerprint still matches. Document thumbnails and page previews use the equivalent `pages.json` fingerprint.
+For each collected asset, the Rust backend renders a WebP thumbnail (PPTX/PDF via LibreOffice + `pdftoppm`, images directly) at the configured width/quality. Skipped for file types that don't support thumbnailing.
 
 ### CDN upload
 
-Runs only when thumbnails are enabled **and** the Control API grant succeeds (`r2-grant`). Uploads
-each thumbnail and original to Cloudflare R2 under `{client_id}/thumbnails/` or
-`{client_id}/originals/` on the public tier, or `{effective_level}/{client_id}/…` on the gated tier.
-The temporary credentials carry matching Cloudflare `prefixes`, so another client's key is denied
-independently of the desktop's key-building logic.
+Runs only when thumbnails are enabled **and** the Control API grant succeeds (`r2-grant`). Uploads each thumbnail and original to Cloudflare R2 under `{client_id}/thumbnails/` or `{client_id}/originals/`.
 
 **Only the highest version uploads.** When several version files of one asset sit in the same folder (`v0-3-7` next to `v0-3-8`), only the highest per base+extension is eligible — they all share one version-stable object key, so uploading more than one would make them overwrite each other every run. The log reports older versions excluded from CDN.
 
@@ -58,7 +43,7 @@ independently of the desktop's key-building logic.
 2. A local upload cache (mtime + size + sha256, per machine) skips unchanged files with zero network calls; the cached public URL (with `?v=`) is still recorded so the Supabase sync never sees a gap.
 3. On a cache miss, the Rust backend hashes the file and compares against the caller's cached hash or the object's `x-amz-meta-sha256` — content must differ for an actual upload to happen.
 
-Stable-identity clients key every upload by the manifest pair, never by filename: public objects use `{client_id}/{kind}/{stable_id}/{child_id}{ext}` and gated objects add `{effective_level}/` in front. `kind` is `thumbnails`, `originals`, or `pages`; page objects continue with a zero-padded page name. Files differing only by extension get distinct child IDs. A stale-sibling cleanup removes an old original when a version bump changes its extension — but never a key claimed by another file in the same run.
+Stable-identity clients key uploads per **file** (`{client_id}/originals/{stableId}/{childId}.ext` from the `.dchub.json` manifest), so files differing only by extension get distinct keys. A stale-sibling cleanup removes an old object when a version bump changes the file extension — but never a key claimed by another file in the same run.
 
 ### 2 — Distribute packages
 
@@ -70,7 +55,7 @@ Highest version only. Package folders become a **hard mirror of live OUT**:
 
 Migrated `Name __hash` asset folders are **not** package anchors (even with `.dchub.json`); destination export still publishes their OUT via the normal folders walk.
 
-Copy decisions use size + mtime as a fast gate (`isUnchanged`), then compare the files byte-for-byte in the Rust backend before skipping. The comparison streams fixed-size chunks rather than loading two large creative files into the webview. A restored older source or same-size content swap is therefore republished instead of being mistaken for an old unchanged file. Re-running is always safe.
+Copy decisions use an mtime check (`isUnchanged`): if the destination file already exists and is the same age or newer than the source, it's skipped; if it's missing or older, it's (re)copied. Re-running is always safe.
 
 ### 3 — Export to destinations
 
@@ -83,13 +68,6 @@ Resolves the checked **local** destination’s machine path (falling back to `se
 Orphan handling on the **target**:
 - Outside package folders: rename with a `🚫` prefix (visible, reversible where live links may still exist).
 - Inside `📦` package collections: **hard-delete** stale files (older versions, renamed tags, prior `🚫` marks). Pickup mirrors must stay exact.
-
-Reconciliation only trusts source subtrees that were read successfully. A permission error,
-unmounted volume, or other failed directory read is different from a genuinely empty folder: the
-matching target subtree is protected for that run, and none of its files are renamed or deleted.
-An unreadable target subtree is protected too, because entries that cannot be enumerated cannot be
-classified as stale. Refusals are logged through the same destructive-stage guardrail used by
-portal/CDN cleanup.
 
 Source packages never use `🚫`.
 
@@ -113,17 +91,7 @@ Always runs after the steps above, if a Supabase config is present for the activ
 
 An asset in a folder with no hash suffix has no identity to sync by: it is reported as an error and skipped. Create packages through the Vocabulary screen so they are born with one.
 
-This step also cleans up R2 thumbnails, originals, and known page-preview objects for assets no longer present on disk. Exact keys are rebuilt from `(stable_id, child_id)`, the row's effective access level, and the shared `@sotto/domain/assetStorage` rules, so public and gated buckets use the same addresses as upload. Any key still referenced by an active record is protected (including a gallery parent's shared thumbnail). Only rows successfully marked `disconnected` contribute deletion keys. Row disconnects and object deletes pass a blast-radius check: above the small-deletion floor, removals cannot exceed rows written unless the operator selected **Allow large deletions**.
-If any source subtree failed to scan, row disconnects are refused outright; a partial source view is
-not evidence that the absent identities left disk.
-If the initial existing-row read fails, planning and all writes are aborted as well; an empty/unknown
-read result is never treated as permission to insert every local asset again.
-
-The portal remains authoritative for tag labels and groups. Local unpublished leaf edits may be
-upserted, but pass-3 tag deletion is refused when the local vocabulary is dirty/stale. Deletion is
-allowed only from an explicitly fresh portal-synchronized vocabulary, and then it passes the same
-write-to-delete blast-radius check as row disconnects. This prevents a cached vocabulary from
-deleting tags that were added in the portal. Pending `rename_tasks` may also be processed here.
+This step also cleans up R2 objects for assets no longer present on disk — except any object key still referenced by an active record (protects a gallery parent's shared thumbnail). Tag trees are **not** synced from vocabulary JSON (web TagsAdmin is source of truth); the desktop may process pending `rename_tasks` from web tag edits.
 
 ### Version history sync
 

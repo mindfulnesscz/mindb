@@ -81,7 +81,7 @@ const PINNED = {
   // what the standard library looks like.
   '@types/node': {},
 
-  // The client type that @sotto/auth's SottoClient is built from. If desktop and web disagree,
+  // The client type that @dc-hub/auth's DcHubClient is built from. If desktop and web disagree,
   // shared data-access signatures silently diverge.
   '@supabase/supabase-js': {},
 

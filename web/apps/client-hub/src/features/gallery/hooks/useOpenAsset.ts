@@ -21,7 +21,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import type { Asset } from '@sotto/asset-library'
+import type { Asset } from '@dc-hub/asset-library'
 import { fetchAsset } from '../../../services/assetService'
 import { reportError } from '../../../lib/reportError'
 

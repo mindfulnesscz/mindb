@@ -89,7 +89,7 @@ describe('uploadOneDriveFile — simple vs session', () => {
   });
 
   it('uploads a small file as a single PUT', async () => {
-    await uploadOneDriveFile('tok', bytes(1024), 'Sotto/ESS/deck.pdf', false);
+    await uploadOneDriveFile('tok', bytes(1024), 'DC Hub/ESS/deck.pdf', false);
 
     const call = stub.one(GRAPH_PUT);
     expect(call.method).toBe('PUT');
@@ -169,13 +169,10 @@ describe('uploadOneDriveFile — targeting and links', () => {
   });
 
   it('encodes each path SEGMENT but keeps the separators', async () => {
-    /* "Client Assets/ESS 2026/a+b.pdf" must stay three folders deep with the spaces and + escaped —
-       encoding the whole string would turn the slashes into %2F and create one long filename.
-       The first segment deliberately CONTAINS A SPACE: that is what this test proves, and it used to
-       be the product name until the Sotto rename replaced it with a single word, which quietly
-       removed the space from the fixture while the encoded expectation still read `DC%20Hub`. */
-    await uploadOneDriveFile('tok', bytes(10), 'Client Assets/ESS 2026/a+b.pdf', false);
-    expect(stub.calls[0].url).toContain('root:/Client%20Assets/ESS%202026/a%2Bb.pdf:/content');
+    // "DC Hub/ESS 2026/a+b.pdf" must stay three folders deep with the spaces and + escaped —
+    // encoding the whole string would turn the slashes into %2F and create one long filename.
+    await uploadOneDriveFile('tok', bytes(10), 'DC Hub/ESS 2026/a+b.pdf', false);
+    expect(stub.calls[0].url).toContain('root:/DC%20Hub/ESS%202026/a%2Bb.pdf:/content');
   });
 
   it('returns null and requests no link when getLink is false', async () => {
@@ -221,7 +218,7 @@ const upload = (over: Partial<{
   async () => bytes(over.size ?? 1024),
   'application/pdf',
   over.name ?? 'deck.pdf',
-  over.folder ?? 'Sotto/ESS',
+  over.folder ?? 'DC Hub/ESS',
   over.getLink ?? false,
   over.driveId ?? '',
 );
@@ -320,7 +317,7 @@ describe('uploadGDriveFile — the 5 MiB boundary', () => {
 describe('uploadGDriveFile — folder resolution', () => {
   it('walks the path segment by segment, because Drive folders are ids and not paths', async () => {
     routeDrive();
-    await upload({ folder: 'walk/Sotto/ESS' });
+    await upload({ folder: 'walk/DC Hub/ESS' });
 
     const queries = stub.matching(DRIVE_LIST)
       .map(c => new URL(c.url).searchParams.get('q') ?? '')
@@ -330,7 +327,7 @@ describe('uploadGDriveFile — folder resolution', () => {
     // same-named folder anywhere in the drive.
     expect(queries[0]).toContain("'root' in parents");
     expect(queries[1]).toContain("'folder-walk' in parents");
-    expect(queries[2]).toContain("'folder-Sotto' in parents");
+    expect(queries[2]).toContain("'folder-DC Hub' in parents");
   });
 
   it('creates a missing folder instead of failing the upload', async () => {
@@ -386,12 +383,12 @@ describe('uploadDropboxFile', () => {
     // and streaming from disk in Rust avoids holding a large deliverable in webview memory.
     invokeStub.replies.set('upload_to_dropbox', { url: 'https://db/x', skipped: false });
 
-    const r = await uploadDropboxFile('tok', '/local/OUT/deck.pdf', '/Sotto/ESS/deck.pdf', true);
+    const r = await uploadDropboxFile('tok', '/local/OUT/deck.pdf', '/DC Hub/ESS/deck.pdf', true);
 
     expect(r).toEqual({ url: 'https://db/x', skipped: false });
     expect(invokeStub.argsFor('upload_to_dropbox')).toEqual([{
       filePath: '/local/OUT/deck.pdf',
-      remotePath: '/Sotto/ESS/deck.pdf',
+      remotePath: '/DC Hub/ESS/deck.pdf',
       accessToken: 'tok',
       getLink: true,
     }]);

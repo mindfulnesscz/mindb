@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { canReadComments, MOCK_COMMENTS, type Role } from '@sotto/asset-library'
+import { canReadComments, MOCK_COMMENTS, type Role } from '@dc-hub/asset-library'
 import { fetchComments, addComment, deleteComment, type RealComment } from '../../../services/commentService'
 import { reportError } from '../../../lib/reportError'
 import { isConfigured } from '../../../lib/supabase'

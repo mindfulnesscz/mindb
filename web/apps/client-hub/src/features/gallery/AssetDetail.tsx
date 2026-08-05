@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
-import type { Asset } from '@sotto/asset-library'
-import { canDownload, canRate, canReadComments, canSeeStats } from '@sotto/asset-library'
+import type { Asset } from '@dc-hub/asset-library'
+import { canDownload, canRate, canReadComments, canSeeStats } from '@dc-hub/asset-library'
 import { useRole } from '../../context/RoleContext'
 import { useAuth } from '../../context/AuthContext'
 import { webAssetActions } from '../../lib/assetActions'
@@ -219,7 +219,7 @@ export default function AssetDetail({
         </div>
 
         {/* Variant selector — format/size siblings sharing one folder identity (Task 3).
-            Deliberately NOT called "version" — Sotto already has a separate, unrelated
+            Deliberately NOT called "version" — DC Hub already has a separate, unrelated
             version-history concept (semantic version numbers, latest flag); this is about
             different renditions of the same asset (format, size, background, etc). */}
         {sortedVariants.length > 0 && (

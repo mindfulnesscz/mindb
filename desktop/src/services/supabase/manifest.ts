@@ -10,15 +10,15 @@
  */
 
 import { readFile, readTextFile, writeTextFile, exists as fsExists } from '@tauri-apps/plugin-fs';
-import { parseVersion, compareVersions } from '@sotto/domain';
+import { parseVersion, compareVersions } from '@dc-hub/domain';
 
 /* ── Folder-based stable identity: manifest + content-hash matching ────────
    See CLAUDE_CODE_PROMPT_identity-migration.md. A migrated client's asset
-   folders carry a ` __<hash>` suffix (@sotto/domain stableId); the manifest below
+   folders carry a ` __<hash>` suffix (@dc-hub/domain stableId); the manifest below
    maps individual filenames inside that folder to a stable child_id, so
    renames don't create new DB rows. */
 
-export interface AssetManifest {
+export interface DchubManifest {
   stable_id:  string;
   children:   Record<string, { child_id: string; sha256: string }>;
   updated_at: string;
@@ -31,15 +31,15 @@ export async function sha256Hex(bytes: Uint8Array): Promise<string> {
   return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-export async function readManifest(packageDir: string): Promise<AssetManifest | null> {
+export async function readManifest(packageDir: string): Promise<DchubManifest | null> {
   const path = `${packageDir}/${MANIFEST_FILENAME}`;
   try {
     if (!(await fsExists(path))) return null;
-    return JSON.parse(await readTextFile(path)) as AssetManifest;
+    return JSON.parse(await readTextFile(path)) as DchubManifest;
   } catch { return null; }
 }
 
-export async function writeManifest(packageDir: string, manifest: AssetManifest): Promise<void> {
+export async function writeManifest(packageDir: string, manifest: DchubManifest): Promise<void> {
   const path = `${packageDir}/${MANIFEST_FILENAME}`;
   await writeTextFile(path, JSON.stringify({ ...manifest, updated_at: new Date().toISOString() }, null, 2));
 }
@@ -57,7 +57,7 @@ export function nextChildId(used: Set<string>): string {
  * version, if several entries share the base) so a version bump keeps the asset's DB
  * row — and with it feedback/ratings — and its version-stable CDN key, instead of
  * splitting off a brand-new child. */
-export function versionLineageChildId(manifest: AssetManifest, filename: string): string | null {
+export function versionLineageChildId(manifest: DchubManifest, filename: string): string | null {
   const parsed = parseVersion(filename);
   if (!parsed) return null;
   let best: { childId: string; version: [number, number, number]; entryName: string | null } | null = null;
@@ -89,7 +89,7 @@ export function versionLineageChildId(manifest: AssetManifest, filename: string)
 /** The scaffold's reserved placeholder slot (extensionless key, empty-content sha) that no
  * real file has claimed yet — a gallery parent can adopt it so turning a freshly scaffolded
  * asset into a gallery keeps the draft row instead of orphaning it. */
-export function unclaimedScaffoldSlot(manifest: AssetManifest): { childId: string; key: string } | null {
+export function unclaimedScaffoldSlot(manifest: DchubManifest): { childId: string; key: string } | null {
   for (const [name, entry] of Object.entries(manifest.children)) {
     if (name.startsWith(GALLERY_SLOT_PREFIX)) continue;
     if (/\.[A-Za-z0-9]{1,8}$/.test(name)) continue; // real file, not the placeholder
@@ -101,7 +101,7 @@ export function unclaimedScaffoldSlot(manifest: AssetManifest): { childId: strin
 /** Matching order per Task 4: manifest filename → content-hash (renamed file) →
  * version lineage (version bump of a known asset) → brand-new. */
 export async function resolveChildId(
-  manifest: AssetManifest,
+  manifest: DchubManifest,
   filename: string,
   absPath:  string,
   used:     Set<string>,
@@ -130,7 +130,7 @@ export const GALLERY_SLOT_PREFIX = '__gallery__:';
  * is allocated.
  */
 export function resolveGalleryParentChildId(
-  state: { manifest: AssetManifest; used: Set<string>; dirty: boolean },
+  state: { manifest: DchubManifest; used: Set<string>; dirty: boolean },
   galleryPath: string,
   currentPathsInPackage: Set<string>,
 ): string {
@@ -195,27 +195,7 @@ export function resolveGalleryParentChildId(
   return parentChildId;
 }
 
-export type ManifestStates = Map<string, { manifest: AssetManifest; used: Set<string>; dirty: boolean }>;
-
-/** One physical file whose manifest identity must be resolved. Both the CDN and Supabase planners
- * feed this exact shape through `resolveIdentityFiles`, so fresh child ids cannot depend on which
- * planner happened to enumerate the directory first. */
-export interface IdentityFile {
-  packageDir: string;
-  stableId: string;
-  absPath: string;
-}
-
-function normalizedPath(path: string): string {
-  return path.replace(/\\/g, '/');
-}
-
-/** Locale-independent lexical ordering for identity assignment. */
-export function compareIdentityPaths(a: string, b: string): number {
-  const left = normalizedPath(a);
-  const right = normalizedPath(b);
-  return left < right ? -1 : left > right ? 1 : 0;
-}
+export type ManifestStates = Map<string, { manifest: DchubManifest; used: Set<string>; dirty: boolean }>;
 
 /** Reads (or initializes) the manifest state for a package dir, caching it in `manifests`
  * for the rest of the run. Shared by `exportAssetsToSupabase` and `resolveCdnIdentity` so
@@ -234,45 +214,12 @@ export async function getManifestState(manifests: ManifestStates, packageDir: st
 }
 
 /**
- * Resolve physical files in one deterministic order, regardless of scan order.
- *
- * This is the shared entry point for CDN key planning and Supabase row planning. It deliberately
- * delegates every match/allocation decision to `resolveChildId`; callers must not reproduce that
- * logic or assign ids themselves.
- */
-export async function resolveIdentityFiles(
-  manifests: ManifestStates,
-  files: IdentityFile[],
-): Promise<Map<string, { stableId: string; childId: string }>> {
-  const resolvedByPath = new Map<string, { stableId: string; childId: string }>();
-  const ordered = [...files].sort((a, b) =>
-    compareIdentityPaths(a.packageDir, b.packageDir) || compareIdentityPaths(a.absPath, b.absPath));
-
-  for (const file of ordered) {
-    if (resolvedByPath.has(file.absPath)) continue;
-    const state = await getManifestState(manifests, file.packageDir, file.stableId);
-    const filename = normalizedPath(file.absPath).split('/').pop()!;
-    const resolved = await resolveChildId(state.manifest, filename, file.absPath, state.used);
-    if (resolved.dirty) {
-      state.manifest.children[filename] = {
-        child_id: resolved.childId,
-        sha256: resolved.sha256,
-      };
-      state.dirty = true;
-    }
-    resolvedByPath.set(file.absPath, { stableId: file.stableId, childId: resolved.childId });
-  }
-
-  return resolvedByPath;
-}
-
-/**
  * The map key for a per-STEM lookup — one thumbnail is shared by every extension variant of
  * a stem (`foo.pdf` and `foo.png` show the same `foo-thumb.webp`).
  *
  * Scoped to the file's directory, never the bare stem: display names repeat freely across
  * packages (two packages can each hold a `plyn.pdf`), and a bare-stem key lets the second
  * entry overwrite the first — after which BOTH files resolve to the second's identity. See
- * the note at the top of @sotto/domain assetGrouping, which fixed that for grouping; this map
+ * the note at the top of @dc-hub/domain assetGrouping, which fixed that for grouping; this map
  * had the same defect (F-5).
  */

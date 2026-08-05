@@ -11,7 +11,7 @@
  * stay in step with `packages/asset-library/src/permissions.ts` and the migration that defines it.
  */
 
-import type { Asset } from '@sotto/asset-library'
+import type { Asset } from '@dc-hub/asset-library'
 
 export const STATUS_OPTIONS: { value: Asset['status']; label: string }[] = [
   { value: 'draft',        label: 'Draft' },

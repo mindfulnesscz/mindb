@@ -18,9 +18,9 @@
     /* Shared workspace packages — consumed as raw TS from the web/ tree.
        Paths resolve relative to this tsconfig (no baseUrl needed on TS 5+). */
     "paths": {
-      "@sotto/auth": ["../packages/auth/src/index.ts"],
-      "@sotto/database": ["../packages/database/src/index.ts"],
-      "@sotto/domain": ["../packages/domain/src/index.ts"]
+      "@dc-hub/auth": ["../packages/auth/src/index.ts"],
+      "@dc-hub/database": ["../packages/database/src/index.ts"],
+      "@dc-hub/domain": ["../packages/domain/src/index.ts"]
     },
 
     /* Linting */
