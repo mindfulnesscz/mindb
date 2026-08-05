@@ -20,6 +20,10 @@ exercise the work; that needs real Cloudflare credentials. Logic worth asserting
 `@sotto/domain` instead, where the ordinary suite covers it — `planPageMoves` was extracted from
 `cdn-reconcile` for exactly that reason.
 
+A missing full stack and a `404 Function not found` are both failures. The probe never reports a
+green "skipped" run: green means every directory currently under `supabase/functions/` was served by
+the edge runtime.
+
 Two traps, both hit while writing it:
 
 **Probe with the anon key.** Without an `Authorization` header the API gateway rejects the request
@@ -38,11 +42,11 @@ after a green run. CI needs no flag — its container is new.
 
 | Suite | Count | Runs with |
 |---|---:|---|
-| Shared packages + portal | 209 | `npm test` |
-| Desktop | 343 | `npm test` |
-| Rust | 43 | `npm run test:rust` |
-| pgTAP (RLS, constraints, rate limits) | 85 | `npm run test:rls` |
-| Playwright portal smoke | 4 | `npm run test:e2e` |
+| Packages, portal, Worker, edge policy, scripts | 547 | `npm run test:packages` |
+| Desktop | 401 | `npm run test:desktop` |
+| Rust | 66 | `npm run test:rust` |
+| pgTAP (RLS, constraints, rate limits) | 126 | `npm run test:rls` |
+| Playwright portal smoke | 9 | `npm run test:e2e` |
 
 The repo had **27** tests before the v3 refactor. The growth was not incidental: each phase wrote tests
 *first*, and the tests found real defects — cross-tenant rating writes, filename-keyed CDN identity
@@ -139,4 +143,5 @@ npm run check         # versions, toolchain, DB types, lint, builds, clippy
 ```
 
 `npm run check` skips the database-type gate when the local stack is down, so start Supabase if you
-touched the schema. The e2e and pgTAP suites skip rather than fail for the same reason.
+touched the schema. The edge-function and Playwright smoke suites require the full stack and fail when
+it is absent; this prevents CI from turning an unreachable integration into a green skip.

@@ -38,8 +38,11 @@ on:
       dry_run:
         description: Report drift without moving anything
         required: false
-        default: false
+        default: true
         type: boolean
+
+permissions:
+  contents: read
 
 # One at a time per environment. Two overlapping runs would both plan from the same starting state
 # and race each other's copies.

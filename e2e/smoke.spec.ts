@@ -15,18 +15,18 @@ import {
   FIXTURE_SLUG, FIXTURE_ASSET_NAME,
 } from './fixture';
 
-let up = false;
+let fixtureStarted = false;
 
 test.beforeAll(async () => {
-  up = await stackIsUp();
-  // Skipped rather than failed when the stack is down: `supabase start` is not a prerequisite for
-  // running the rest of the repo's tests, and pretending otherwise trains people to ignore red.
-  test.skip(!up, 'local Supabase is not running — start it with `supabase start`');
+  if (!await stackIsUp()) {
+    throw new Error('local Supabase is not running — start the full stack with `supabase start`');
+  }
+  fixtureStarted = true;
   await createFixtureTenant();
 });
 
 test.afterAll(async () => {
-  if (up) await destroyFixtureTenant();
+  if (fixtureStarted) await destroyFixtureTenant();
 });
 
 test.describe('the portal loads and routes', () => {

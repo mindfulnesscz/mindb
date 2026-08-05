@@ -25,6 +25,7 @@ export default defineConfig({
     // I/O-free, so the security matrix runs in plain node with no workerd. Anything that needs a
     // real R2 binding or the Cache API is a `wrangler dev` job — see workers/cdn-gate/README.md.
     include: [
+      'scripts/**/*.test.mjs',
       'packages/*/src/**/*.test.ts',
       'web/apps/*/src/**/*.test.{ts,tsx}',
       'workers/*/src/**/*.test.ts',
