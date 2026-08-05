@@ -64,6 +64,9 @@ export async function exportAssetsToSupabase(
   allowLargeDeletions = false,
   /** absPath → page-preview counts from the render step, for documents. */
   pageCounts?:   Map<string, { total: number; rendered: number }>,
+  dryRun = false,
+  shouldStop?: () => boolean,
+  sourceFresh = true,
 ): Promise<SupabaseExportResult> {
   const result: SupabaseExportResult = { created: 0, updated: 0, disconnected: 0, errors: 0, staleObjectKeys: [] };
   const base    = `${config.url}/rest/v1`;
@@ -123,7 +126,7 @@ export async function exportAssetsToSupabase(
     /* ── 2. Plan ──────────────────────────────────────────────────────────── */
     const plan = await planExport({
       identified, clientId, vocab, existingByStableId, cdnUrls, originalUrls, cloudUrls,
-      pageCounts: writablePageCounts, appendLog,
+      pageCounts: writablePageCounts, appendLog, dryRun,
     });
 
     /* ── 3. Write — parents first; children need the resolved parent uuid ─── */
@@ -137,24 +140,50 @@ export async function exportAssetsToSupabase(
       return false;
     });
 
-    const parentIdByKey = await writeParents(parents, existing, base, headers, result, appendLog);
-    await writeChildren(children, parentIdByKey, existing, base, headers, result, appendLog);
+    let parentIdByKey: Map<string, string>;
+    if (dryRun) {
+      parentIdByKey = new Map(parents.map(parent => [
+        parent.key,
+        existing.get(parent.key)?.id ?? `dry:${parent.key}`,
+      ]));
+      const writes = [...parents, ...children];
+      result.created = writes.filter(write => !existing.has(write.key)).length;
+      result.updated = writes.length - result.created;
+      appendLog('dim',
+        `  [DRY] would create ${result.created} and update ${result.updated} stable record(s)`,
+      );
+    } else {
+      parentIdByKey = await writeParents(
+        parents, existing, base, headers, result, appendLog, shouldStop,
+      );
+      await writeChildren(
+        children, parentIdByKey, existing, base, headers, result, appendLog, shouldStop,
+      );
+    }
 
-    appendLog('success', `  ✓  Stable identity: ${plan.parentWrites.length} parent/single · ${plan.childWrites.length} child record(s) synced`);
+    appendLog(dryRun ? 'dim' : 'success',
+      `  ${dryRun ? '[DRY] would sync' : '✓  Stable identity:'} ` +
+      `${plan.parentWrites.length} parent/single · ${plan.childWrites.length} child record(s)`,
+    );
 
     // Access level as the DB has it, for readme.md. A row created this run isn't in here with a
     // perm, so the target's own create-time default stands in.
     const dbLevelById = new Map<string, { perm?: string | null; status?: string | null }>();
     for (const row of existing.values()) dbLevelById.set(row.id, { perm: row.perm, status: row.status });
 
-    await writeReadmes(plan.readmeTargets, parentIdByKey, dbLevelById, vocab, config, appendLog);
+    if (!dryRun && !shouldStop?.()) {
+      await writeReadmes(plan.readmeTargets, parentIdByKey, dbLevelById, vocab, config, appendLog);
+    } else if (dryRun && plan.readmeTargets.length) {
+      appendLog('dim', `  [DRY] would write ${plan.readmeTargets.length} readme.md file(s)`);
+    }
 
     /* ── 4. Disconnect ────────────────────────────────────────────────────── */
     // Skipped when the read failed: "no row for this key" would then mean "unknown", not
     // "absent", and treating an empty result as truth would disconnect every asset.
-    if (!readFailed) {
+    if (!readFailed && !shouldStop?.()) {
       await disconnectStaleRows(
-        existing, plan.currentStableKeys, base, headers, result, appendLog, allowLargeDeletions,
+        existing, plan.currentStableKeys, base, headers, result, appendLog,
+        allowLargeDeletions, dryRun, shouldStop, sourceFresh,
       );
     }
   }

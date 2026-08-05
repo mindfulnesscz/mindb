@@ -24,7 +24,7 @@ vi.mock('@tauri-apps/plugin-shell', () => ({ open: async () => {} }));
 
 const { vfs } = await import('../test/vfs');
 const { runPipeline } = await import('./pipelineService');
-const { makeSettings, makeCtx, SRC } = await import('../test/pipelineHarness');
+const { makeSettings, makeCtx, SRC, DST } = await import('../test/pipelineHarness');
 import type { AppSettings } from '../store/settingsStore';
 
 const PKG = `${SRC}/Campaign/[00] 📦 Handoff`;
@@ -322,6 +322,27 @@ describe('collect — dry run', () => {
     expect(vfs.hasFile(`${PKG}/Retired.pdf`)).toBe(true);
     expect(vfs.hasFile(`${PKG}/Product Slides — Deck v2.pdf`)).toBe(false);
     expect(run.logged('[DRY]')).toBe(true);
+  });
+});
+
+describe('pipeline stop checkpoints', () => {
+  it('halts before the next stage after Stop is requested', async () => {
+    seedCampaign();
+    const settings = makeSettings({ doDistribute: true, doPublish: true });
+    const run = makeCtx(settings);
+    let stopping = false;
+    const capture = run.ctx.appendLog as (type: string, message: string) => void;
+    run.ctx.appendLog = (type: string, message: string) => {
+      capture(type, message);
+      if (message.includes('COLLECT DONE')) stopping = true;
+    };
+    run.ctx.isStopping = () => stopping;
+
+    await runPipeline(run.ctx as never);
+
+    expect(vfs.relPaths(PKG)).toHaveLength(2);
+    expect(vfs.relPaths(DST)).toEqual([]);
+    expect(run.logged('halted before local publish')).toBe(true);
   });
 });
 

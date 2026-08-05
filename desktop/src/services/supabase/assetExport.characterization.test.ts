@@ -52,13 +52,16 @@ const VOCAB: VocabularyData = {
 async function sync(paths: string[], opts: {
   cdnUrls?: Map<string, string>;
   pageCounts?: Map<string, { total: number; rendered: number }>;
+  dryRun?: boolean;
+  sourceFresh?: boolean;
 } = {}) {
   const { singles, galleries } = groupAssets(paths, 'OUT');
   const logs: Array<{ type: string; msg: string }> = [];
   const result = await exportAssetsToSupabase(
     singles, CLIENT, VOCAB, config,
     (type, msg) => { logs.push({ type, msg }); },
-    opts.cdnUrls, undefined, galleries, undefined, false, opts.pageCounts,
+    opts.cdnUrls, undefined, galleries, undefined, false, opts.pageCounts, opts.dryRun,
+    undefined, opts.sourceFresh,
   );
   return { result, logs, logged: (n: string) => logs.some(l => l.msg.includes(n)) };
 }
@@ -66,6 +69,27 @@ async function sync(paths: string[], opts: {
 beforeEach(() => { vfs.reset(); restStub.reset(); });
 
 describe('assetExport — a fresh package folder', () => {
+  it('dry-runs the complete export without rows, manifests, or readmes being mutated', async () => {
+    const path = `${SRC}/Asset __a1000000/OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.put(path, 'pdf');
+    restStub.existingRows = [{
+      id: 'stale-row', stable_id: 'deadbeef', child_id: 'c1',
+      thumbnail_url: null, download_key: 'client/client-1/originals/deadbeef/c1.pdf',
+      parent_id: null, variant_of: null,
+    }];
+
+    const { result, logged } = await sync([path], { dryRun: true });
+
+    expect(result.created).toBe(1);
+    expect(result.disconnected).toBe(1);
+    expect(restStub.byMethod('POST')).toEqual([]);
+    expect(restStub.byMethod('PATCH')).toEqual([]);
+    expect(vfs.hasFile(`${SRC}/Asset __a1000000/.dchub.json`)).toBe(false);
+    expect(vfs.ops).toEqual([]);
+    expect(logged('[DRY] would create 1')).toBe(true);
+    expect(logged('[DRY] would mark 1 stable record(s) disconnected')).toBe(true);
+  });
+
   it('creates one row, keyed by stable_id + child_id rather than by shortcode', async () => {
     vfs.put(`${SRC}/Asset __a1000001/OUT/(PRD)(SlD) Deck.pdf`, 'pdf');
     const { result } = await sync([`${SRC}/Asset __a1000001/OUT/(PRD)(SlD) Deck.pdf`]);
@@ -334,6 +358,21 @@ describe('assetExport — galleries (a folder of related files)', () => {
 });
 
 describe('assetExport — disconnecting what is gone', () => {
+  it('refuses disconnects when the source scan was incomplete', async () => {
+    const p = `${SRC}/Asset __a5000000/OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.put(p, 'pdf');
+    restStub.existingRows = [
+      { id: 'row-live', stable_id: 'a5000000', child_id: 'c1' },
+      { id: 'row-unseen', stable_id: 'b5000000', child_id: 'c1' },
+    ];
+
+    const { result, logged } = await sync([p], { sourceFresh: false });
+
+    expect(result.disconnected).toBe(0);
+    expect(restStub.disconnectedIds()).toEqual([]);
+    expect(logged('source asset scan was not freshly synchronized')).toBe(true);
+  });
+
   it('soft-marks a row whose file left the disk, never deletes it', async () => {
     // Deleting would take the asset's ratings, comments and events with it. A transient disk
     // change must never do that.

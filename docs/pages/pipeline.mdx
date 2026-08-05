@@ -10,6 +10,15 @@ Cloudflare scopes those credentials to the selected client's public and gated ke
 
 Steps 1–5 are numbered checkboxes in the app's **Tasks** panel and can each be switched on/off per run. **Scan**, **Supabase sync**, and **Version history sync** aren't checkboxes — they run automatically whenever a source folder / Supabase session is present.
 
+**Dry run is end-to-end.** It may scan local files and read portal/provider state to build a plan,
+but it does not render or copy files, update identity manifests or caches, upload/delete CDN or
+cloud objects, mutate Supabase rows/tags/version history/rename tasks, write DAM output, or start
+Stream uploads. Intended actions are written to the activity log with `[DRY]`.
+
+**Stop is cooperative.** An in-flight bounded batch is allowed to finish; the run halts at the next
+stage or batch checkpoint. Post-run Supabase, CDN reconcile, tag, version-history, rename-task and
+Stream work use the same stop signal, so the run is not marked complete before that tail finishes.
+
 | Step | What it does | |
 |---|---|---|
 | Scan | Walks the source folder for every file sitting in an `OUT` folder. | [→](#scan) |
@@ -75,6 +84,13 @@ Orphan handling on the **target**:
 - Outside package folders: rename with a `🚫` prefix (visible, reversible where live links may still exist).
 - Inside `📦` package collections: **hard-delete** stale files (older versions, renamed tags, prior `🚫` marks). Pickup mirrors must stay exact.
 
+Reconciliation only trusts source subtrees that were read successfully. A permission error,
+unmounted volume, or other failed directory read is different from a genuinely empty folder: the
+matching target subtree is protected for that run, and none of its files are renamed or deleted.
+An unreadable target subtree is protected too, because entries that cannot be enumerated cannot be
+classified as stale. Refusals are logged through the same destructive-stage guardrail used by
+portal/CDN cleanup.
+
 Source packages never use `🚫`.
 
 ### 4 — Cloud export
@@ -97,7 +113,15 @@ Always runs after the steps above, if a Supabase config is present for the activ
 
 An asset in a folder with no hash suffix has no identity to sync by: it is reported as an error and skipped. Create packages through the Vocabulary screen so they are born with one.
 
-This step also cleans up R2 objects for assets no longer present on disk — except any object key still referenced by an active record (protects a gallery parent's shared thumbnail). Tag trees are **not** synced from vocabulary JSON (web TagsAdmin is source of truth); the desktop may process pending `rename_tasks` from web tag edits.
+This step also cleans up R2 objects for assets no longer present on disk — except any object key still referenced by an active record (protects a gallery parent's shared thumbnail). Row disconnects and object deletes pass a blast-radius check: above the small-deletion floor, removals cannot exceed rows written unless the operator selected **Allow large deletions**.
+If any source subtree failed to scan, row disconnects are refused outright; a partial source view is
+not evidence that the absent identities left disk.
+
+The portal remains authoritative for tag labels and groups. Local unpublished leaf edits may be
+upserted, but pass-3 tag deletion is refused when the local vocabulary is dirty/stale. Deletion is
+allowed only from an explicitly fresh portal-synchronized vocabulary, and then it passes the same
+write-to-delete blast-radius check as row disconnects. This prevents a cached vocabulary from
+deleting tags that were added in the portal. Pending `rename_tasks` may also be processed here.
 
 ### Version history sync
 

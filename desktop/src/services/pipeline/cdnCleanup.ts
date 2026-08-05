@@ -24,6 +24,10 @@ export async function reconcileCdn(ctx: RunContext, stats: RunStats): Promise<vo
   if (!r2) return;
 
   appendLog('section', '━━━ CDN CLEANUP ━━━');
+  if (ctx.settings.dryRun) {
+    appendLog('dim', '  [DRY] would list and reconcile CDN objects');
+    return;
+  }
 
   // Keys that should exist — one per collected asset, mirroring runCdnUpload's key logic
   // exactly so this never mistakes a current object for a stale one.
@@ -67,6 +71,7 @@ export async function reconcileCdn(ctx: RunContext, stats: RunStats): Promise<vo
   let errors  = 0;
 
   for (const objectKey of stale) {
+    if (ctx.isStopping?.()) return;
     try {
       await invoke('delete_r2_object', {
         endpoint:     r2.endpoint,
@@ -96,6 +101,8 @@ export async function deleteCdnObjects(
   appendLog:  (type: string, msg: string) => void,
   written = 0,
   allowLargeDeletions = false,
+  dryRun = false,
+  shouldStop?: () => boolean,
 ): Promise<void> {
   if (!objectKeys.length) return;
   appendLog('section', '━━━ CDN DELETE ━━━');
@@ -111,9 +118,15 @@ export async function deleteCdnObjects(
     appendLog('section', '━━━ CDN DELETE SKIPPED ━━━');
     return;
   }
+  if (dryRun) {
+    for (const objectKey of objectKeys) appendLog('dim', `  [DRY] would remove: ${objectKey}`);
+    appendLog('section', `━━━ CDN DELETE DRY RUN — ${objectKeys.length} object(s) retained ━━━`);
+    return;
+  }
   let removed = 0;
   let errors  = 0;
   for (const objectKey of objectKeys) {
+    if (shouldStop?.()) return;
     /* Which bucket holds it is readable from the key: a leading level segment means the gated
        tier, anything else is public. Deleting from the wrong bucket does not fail loudly — the
        object simply is not there — so a hardcoded `r2.bucket` would leave every withdrawn gated
@@ -139,4 +152,3 @@ export async function deleteCdnObjects(
   }
   appendLog('section', `━━━ CDN DELETE DONE — ${removed} removed · ${errors} errors ━━━`);
 }
-

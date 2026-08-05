@@ -73,10 +73,12 @@ export async function writeParents(
   headers: Record<string, string>,
   result: SupabaseExportResult,
   appendLog: Log,
+  shouldStop?: () => boolean,
 ): Promise<Map<string, string>> {
   const parentIdByKey = new Map<string, string>();
 
   for (const { key, record: rawRecord } of parents) {
+    if (shouldStop?.()) break;
     // A primary/gallery parent is always top-of-hierarchy — clear BOTH relation fields
     // explicitly, or a stale value from an earlier build lingers (PATCH omits ⇒ untouched).
     const record = stripAbsentUrls({ ...rawRecord, parent_id: null, variant_of: null });
@@ -123,8 +125,10 @@ export async function writeChildren(
   headers: Record<string, string>,
   result: SupabaseExportResult,
   appendLog: Log,
+  shouldStop?: () => boolean,
 ): Promise<void> {
   for (const { key, record, parentKey, relation } of children) {
+    if (shouldStop?.()) return;
     const parentId = parentIdByKey.get(parentKey);
     if (!parentId) { appendLog('error', `  ✕  No parent ID for ${key} — child skipped`); result.errors++; continue; }
     // Null the OTHER relation too: a row synced by an earlier build (before galleries and

@@ -43,6 +43,12 @@ export async function runThumbnails(ctx: RunContext, stats: RunStats): Promise<v
     return;
   }
 
+  if (settings.dryRun) {
+    appendLog('dim', `  [DRY] would generate thumbnails/previews for ${files.length} file(s)`);
+    stats.thumbnails += files.length;
+    return;
+  }
+
   appendLog('info', `  Found ${files.length} file(s) — checking for existing thumbnails…`);
 
   /* Documents get per-page previews as well as a title thumbnail, and BOTH come out of one Rust
@@ -60,6 +66,7 @@ export async function runThumbnails(ctx: RunContext, stats: RunStats): Promise<v
 
   const STAT_CONCURRENCY = 16;
   for (let i = 0; i < files.length; i += STAT_CONCURRENCY) {
+    if (ctx.isStopping?.()) return;
     const batch = files.slice(i, i + STAT_CONCURRENCY);
     await Promise.all(batch.map(async srcFile => {
       const fileName = srcFile.split('/').pop()!;
@@ -100,6 +107,7 @@ export async function runThumbnails(ctx: RunContext, stats: RunStats): Promise<v
 
   const CONCURRENCY = 8;
   for (let i = 0; i < needsRegen.length; i += CONCURRENCY) {
+    if (ctx.isStopping?.()) return;
     const batch = needsRegen.slice(i, i + CONCURRENCY);
     await Promise.all(batch.map(async ({ srcFile, fileName, destFile }) => {
       try {
@@ -123,6 +131,7 @@ export async function runThumbnails(ctx: RunContext, stats: RunStats): Promise<v
      the rest of the pipeline — each call spawns exactly one render worker, and PDFium is only safe
      one-per-process (see render.rs). */
   for (let i = 0; i < docJobs.length; i += CONCURRENCY) {
+    if (ctx.isStopping?.()) return;
     const batch = docJobs.slice(i, i + CONCURRENCY);
     await Promise.all(batch.map(async ({ srcFile, fileName, destFile, pagesDir }) => {
       try {

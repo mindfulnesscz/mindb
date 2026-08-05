@@ -102,7 +102,7 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
 
   const outFolder = settings.outFolder || 'OUT';
   const vocabMap = buildVocabMap(vocab);
-  const cloudCache = await loadCloudCache();
+  const cloudCache = settings.dryRun ? {} : await loadCloudCache();
   let cloudCacheDirty = false;
 
   // Default OUT-tree file list (used when dest layout is folders or flat).
@@ -174,6 +174,7 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
   appendLog('info', `  ${activeDests.length} destination(s)`);
 
   for (const dest of activeDests) {
+    if (ctx.isStopping?.()) return;
     const cfg = dest.config;
     if (cfg.type === 'local') continue;
 
@@ -200,6 +201,12 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
       continue;
     }
 
+    if (settings.dryRun) {
+      appendLog('dim', `  [DRY] would upload ${files.length} file(s) to ${dest.name}`);
+      stats.published += files.length;
+      continue;
+    }
+
     if (!dest.generateLink) {
       appendLog('info', `  → ${dest.name} (${cfg.type}) — uploading without link collection`);
     } else {
@@ -215,6 +222,7 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
     // Match CDN: high concurrency; cache hits stay silent (summary only).
     const CONCURRENCY = 8;
     for (let i = 0; i < files.length; i += CONCURRENCY) {
+      if (ctx.isStopping?.()) return;
       const batch = files.slice(i, i + CONCURRENCY);
       await Promise.all(batch.map(async ({ srcPath, stem, ext, relativeDir, nestedOverride }) => {
         const translated = nestedOverride
@@ -356,4 +364,3 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
 
   appendLog('section', `━━━ CLOUD EXPORT DONE — ${stats.published} uploaded · ${totalLinks} link(s) collected ━━━`);
 }
-
