@@ -40,7 +40,7 @@ describe('magic-link confirmation values', () => {
     expect(parseMagicLinkConfirmationFragment(fragment)).toBeNull()
   })
 
-  it('constructs the spendable Supabase URL with an allowlisted return destination', () => {
+  it('constructs a magic-link verification URL with an allowlisted return destination', () => {
     const result = new URL(buildMagicLinkVerificationUrl(
       'https://project.supabase.co',
       { tokenHash: 'one-time-hash', redirectTo: 'https://hub.example.com/ess?entity=Sofa' },
@@ -49,7 +49,8 @@ describe('magic-link confirmation values', () => {
     expect(result.origin).toBe('https://project.supabase.co')
     expect(result.pathname).toBe('/auth/v1/verify')
     expect(result.searchParams.get('token')).toBe('one-time-hash')
-    expect(result.searchParams.get('type')).toBe('email')
+    // `email` is the numeric-code flow and makes a magic-link token fail at Supabase Auth.
+    expect(result.searchParams.get('type')).toBe('magiclink')
     expect(result.searchParams.get('redirect_to')).toBe('https://hub.example.com/ess?entity=Sofa')
   })
 })
