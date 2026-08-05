@@ -1,7 +1,8 @@
 /* Filesystem helpers shared by every stage.
  *
  * listDir swallows read errors on purpose: a permission-denied or vanished directory must not
- * abort a whole run. listDirLogged is the same read for places where the operator should see it.
+ * abort a whole run. listDirResult preserves the error for destructive walks that must distinguish
+ * an empty directory from an unreadable one.
  * 
  * isUnchanged is the copy/skip decision for every stage. It compares mtimes and treats a missing
  * destination as "changed", so a failed read always errs toward copying rather than skipping.
@@ -10,7 +11,6 @@
 import { readDir, stat, type DirEntry } from '@tauri-apps/plugin-fs';
 import { join } from '@tauri-apps/api/path';
 import type { AppSettings } from '../../store/settingsStore';
-import type { LogType } from '../../store/pipelineStore';
 import { shouldSkip, isPackageFolder, isPublishableFile } from './naming';
 import { isPreviewArtifact } from '@sotto/domain';
 
@@ -22,15 +22,17 @@ export async function listDir(path: string): Promise<DirEntry[]> {
   }
 }
 
-export async function listDirLogged(
-  path: string,
-  appendLog: (t: LogType, m: string) => void
-): Promise<DirEntry[]> {
+export interface DirectoryRead {
+  entries: DirEntry[];
+  error: unknown | null;
+}
+
+/** A directory read that preserves the difference between "empty" and "unreadable". */
+export async function listDirResult(path: string): Promise<DirectoryRead> {
   try {
-    return await readDir(path);
-  } catch (e) {
-    appendLog('error', `  ✕  Cannot read directory: ${path}\n     ${e}`);
-    return [];
+    return { entries: await readDir(path), error: null };
+  } catch (error) {
+    return { entries: [], error };
   }
 }
 
@@ -67,4 +69,3 @@ export async function isUnchanged(src: string, dest: string): Promise<boolean> {
     return ss.size === ds.size; // mtime unavailable on this filesystem — fall back to size
   } catch { return false; } // dest missing (or unreadable) — not unchanged, copy it
 }
-

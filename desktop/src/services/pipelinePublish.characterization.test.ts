@@ -261,6 +261,35 @@ describe('publish — nested packages', () => {
 });
 
 describe('publish — disconnect reconciliation', () => {
+  it('does not disconnect a target subtree when its source subtree could not be read', async () => {
+    vfs.tree(SRC, {
+      'Campaign/Readable __aaaa1111/[03] OUT/(PRD)(SlD) Current.pdf': 'current',
+      'Campaign/Unreadable __bbbb2222/[03] OUT/(PRD)(SlD) Precious.pdf': 'precious',
+    });
+    vfs.put(`${DST}/Campaign/Unreadable/Precious.pdf`, 'client copy');
+    vfs.failRead(`${SRC}/Campaign/Unreadable __bbbb2222/[03] OUT`);
+
+    const run = await publish();
+
+    expect(vfs.hasFile(`${DST}/Campaign/Unreadable/Precious.pdf`)).toBe(true);
+    expect(vfs.hasFile(`${DST}/Campaign/Unreadable/🚫 Precious.pdf`)).toBe(false);
+    expect(run.logged('REFUSING destructive reconciliation')).toBe(true);
+    expect(run.logged('unreadable folder is not an empty folder')).toBe(true);
+  });
+
+  it('does not rename a target subtree that could not itself be read', async () => {
+    seedCampaign();
+    vfs.put(`${DST}/Campaign/Protected/Precious.pdf`, 'client copy');
+    vfs.failRead(`${DST}/Campaign/Protected`);
+
+    const run = await publish();
+
+    expect(vfs.hasFile(`${DST}/Campaign/Protected/Precious.pdf`)).toBe(true);
+    expect(vfs.hasDir(`${DST}/Campaign/Protected`)).toBe(true);
+    expect(vfs.hasDir(`${DST}/Campaign/🚫 Protected`)).toBe(false);
+    expect(run.logged('target subtree')).toBe(true);
+  });
+
   it('renames a file that is no longer in source with a 🚫 prefix', async () => {
     seedCampaign();
     vfs.put(`${DST}/Campaign/Asset One/Retired Deliverable.pdf`, 'stale');
@@ -346,5 +375,26 @@ describe('publish — dry run', () => {
     // Not even the 🚫 rename is previewed — dry run returns before flagDisconnected.
     expect(vfs.hasFile(`${DST}/Campaign/Asset One/Retired.pdf`)).toBe(true);
     expect(run.stats.disconnected).toBe(0);
+  });
+});
+
+describe('publish — stop safety', () => {
+  it('never reconciles from a partially built live set after Stop', async () => {
+    seedCampaign();
+    vfs.put(`${DST}/Campaign/Asset Two/Precious.pdf`, 'client copy');
+    const settings = makeSettings({ doPublish: true });
+    const run = makeCtx(settings, { localExportLayout: 'folders' });
+    let stopping = false;
+    const capture = run.ctx.appendLog as (type: string, message: string) => void;
+    run.ctx.appendLog = (type: string, message: string) => {
+      capture(type, message);
+      if (type === 'success') stopping = true;
+    };
+    run.ctx.isStopping = () => stopping;
+
+    await runPipeline(run.ctx as never);
+
+    expect(vfs.hasFile(`${DST}/Campaign/Asset Two/Precious.pdf`)).toBe(true);
+    expect(vfs.hasFile(`${DST}/Campaign/Asset Two/🚫 Precious.pdf`)).toBe(false);
   });
 });

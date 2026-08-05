@@ -56,12 +56,15 @@ export interface PlanInput {
   originalUrls?: Map<string, string>;
   cloudUrls?: Map<string, CloudUrlEntry[]>;
   appendLog: (type: string, msg: string) => void;
+  /** Resolve identities in memory for previewing, but never persist the manifest. */
+  dryRun?: boolean;
 }
 
 export async function planExport(input: PlanInput): Promise<ExportPlan> {
   const {
     identified: { stableSingles, stableGalleries },
     clientId, vocab, existingByStableId, cdnUrls, originalUrls, cloudUrls, pageCounts, appendLog,
+    dryRun = false,
   } = input;
 
   // `stem` drives taxonomy parsing (display text); `absPath` keys the CDN URL maps, which must
@@ -291,6 +294,10 @@ export async function planExport(input: PlanInput): Promise<ExportPlan> {
   // write never loses an id the next run would re-mint differently.
   for (const [dir, state] of manifests) {
     if (!state.dirty) continue;
+    if (dryRun) {
+      appendLog('dim', `  [DRY] would update identity manifest for "${dir}"`);
+      continue;
+    }
     try { await writeManifest(dir, state.manifest); }
     catch (e) { appendLog('error', `  ✕  Manifest write failed for "${dir}": ${e}`); }
   }

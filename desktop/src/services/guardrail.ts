@@ -55,6 +55,13 @@ export interface DestructionRequest {
   allowLarge?: boolean;
 }
 
+export interface FreshDestructionRequest extends DestructionRequest {
+  /** True only when the destructive diff was built from a freshly synchronized source. */
+  sourceFresh: boolean;
+  /** Human-readable source name for the refusal message. */
+  source: string;
+}
+
 export function assessDestruction({
   unit, doomed, written, allowLarge = false,
 }: DestructionRequest): DestructionAssessment {
@@ -79,5 +86,50 @@ export function assessDestruction({
       'That ratio usually means the source folder was empty, partly readable, or the wrong client is ' +
       'active — not that this much is really stale. Nothing was removed. Check the source, then ' +
       're-run with "Allow large deletions" if it is genuinely correct.',
+  };
+}
+
+/** Destruction is never inferred from a stale/dirty authority, even below the numeric floor. */
+export function assessFreshDestruction({
+  sourceFresh, source, ...request
+}: FreshDestructionRequest): DestructionAssessment {
+  if (request.doomed <= 0) return { blocked: false, message: '' };
+  if (!sourceFresh) {
+    return {
+      blocked: true,
+      message:
+        `  ✕  REFUSING to remove ${request.doomed} ${request.unit}: ${source} was not freshly ` +
+        'synchronized, so absence is not proof of deletion. Nothing was removed. Refresh the ' +
+        'source and retry.',
+    };
+  }
+  return assessDestruction(request);
+}
+
+/** A failed source walk invalidates reconciliation for the corresponding target subtree. */
+export function assessReconciliationRead(
+  sourceDir: string,
+  targetDir: string,
+  error: unknown,
+): DestructionAssessment {
+  return {
+    blocked: true,
+    message:
+      `  ✕  REFUSING destructive reconciliation for "${targetDir}": source subtree ` +
+      `"${sourceDir}" could not be read (${error}). An unreadable folder is not an empty folder; ` +
+      'nothing in this target subtree will be renamed or deleted.',
+  };
+}
+
+/** Reconciliation cannot safely classify a target entry it could not enumerate. */
+export function assessTargetReconciliationRead(
+  targetDir: string,
+  error: unknown,
+): DestructionAssessment {
+  return {
+    blocked: true,
+    message:
+      `  ✕  REFUSING destructive reconciliation for target subtree "${targetDir}": it could ` +
+      `not be read (${error}). Nothing in this subtree will be renamed or deleted.`,
   };
 }

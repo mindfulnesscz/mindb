@@ -43,6 +43,10 @@ export interface RunContext {
   addIssue:          (i: { category: 'skipped'|'disconnected'|'version-conflict'|'error'; file: string; reason: string }) => void;
   setProgress:       (p: number) => void;
   finishRun:         (stats: RunStats, hasIssues: boolean) => void;
+  /** Live cancellation probe. Stages check it between bounded batches, never mid-mutation. */
+  isStopping?:       () => boolean;
+  /** UI runs include post-pipeline portal work, so their caller owns the final completion state. */
+  deferFinish?:      boolean;
   processedPackages?: string[];
   collectedAssets?:  string[]; // populated once by runPipeline, stems used for Supabase sync
   r2?:               R2Config;                             // CDN upload config; omit to skip CDN step
@@ -68,6 +72,8 @@ export interface RunContext {
    *  `total` can exceed `rendered`: that difference is what the portal turns into "download the
    *  asset to see the rest". */
   pageCounts?:       Map<string, { total: number; rendered: number }>;
+  /** Source directories the initial scan could not read; destructive reconciliation distrusts it. */
+  sourceReadErrors?: Set<string>;
 }
 
 

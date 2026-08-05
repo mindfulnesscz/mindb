@@ -482,6 +482,22 @@ describe('CDN — URLs handed to the portal', () => {
 });
 
 describe('CDN — guard rails', () => {
+  it('dry-run performs no rendering, identity-manifest write, upload, or page-object delete', async () => {
+    vfs.tree(SRC, {
+      'Asset __a6000000/[03] OUT/(PRD)(SlD) Deck.pdf': 'pdf',
+      'Asset __a6000000/[03] OUT/(PRD)(SlD) Deck-thumb/001.webp': 'page',
+      'Asset __a6000000/[03] OUT/(PRD)(SlD) Deck-thumb/pages.json': JSON.stringify({ rendered: 1, total: 1 }),
+    });
+    invokeStub.remoteKeys.add('client/client-abc/pages/a6000000/c1/999.webp');
+
+    const run = await cdn({ dryRun: true });
+
+    expect(invokeStub.calls).toEqual([]);
+    expect(vfs.ops).toEqual([]);
+    expect(vfs.hasFile(`${SRC}/Asset __a6000000/.dchub.json`)).toBe(false);
+    expect(run.logged('[DRY]')).toBe(true);
+  });
+
   it('skips the whole stage when the R2 config is incomplete', async () => {
     vfs.tree(SRC, { 'Asset __a6000001/[03] OUT/(PRD)(SlD) Deck.pdf': '' });
     const run = await cdn({}, { r2: { ...R2, secretKey: '' } });

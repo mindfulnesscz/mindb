@@ -149,10 +149,18 @@ async function readLocalCache(clientId: string | null): Promise<VocabularyData |
  */
 export async function loadVocabulary(
   clientId: string | null,
-  opts: { forceFromDb?: boolean; preferLocal?: boolean } = {},
+  opts: {
+    forceFromDb?: boolean;
+    preferLocal?: boolean;
+    persistCache?: boolean;
+    /** Refuse the local fallback when the caller needs proof that this read is current. */
+    requireDb?: boolean;
+  } = {},
 ): Promise<VocabularyData> {
   const forceFromDb = opts.forceFromDb ?? false;
   const preferLocal = opts.preferLocal ?? false;
+  const persistCache = opts.persistCache ?? true;
+  const requireDb = opts.requireDb ?? false;
 
   if (clientId && !forceFromDb) {
     const local = await readLocalCache(clientId);
@@ -165,9 +173,12 @@ export async function loadVocabulary(
   if (clientId) {
     const fromDb = await fetchTagsFromDb(clientId);
     if (fromDb) {
-      await saveVocabularyCache({ ...fromDb, _unpublished: false }, clientId).catch(console.warn);
+      if (persistCache) {
+        await saveVocabularyCache({ ...fromDb, _unpublished: false }, clientId).catch(console.warn);
+      }
       return { ...fromDb, _unpublished: false };
     }
+    if (requireDb) throw new Error('Portal vocabulary could not be refreshed');
   }
 
   // DB unavailable — fall back to any local cache (including empty).

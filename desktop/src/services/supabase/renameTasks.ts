@@ -45,12 +45,18 @@ export async function processRenameTasks(
   config:   SupabaseConfig,
   clientId: string,
   appendLog: (type: string, msg: string) => void,
+  options: { dryRun?: boolean; shouldStop?: () => boolean } = {},
 ): Promise<void> {
   const tasks = await fetchPendingRenameTasks(config, clientId);
   if (!tasks.length) return;
 
   appendLog('section', '━━━ RENAME TASKS ━━━');
   for (const task of tasks) {
+    if (options.shouldStop?.()) return;
+    if (options.dryRun) {
+      appendLog('dim', `  [DRY] would process ${task.task_type} (${task.id.slice(0, 8)}…)`);
+      continue;
+    }
     try {
       await updateRenameTaskStatus(config, task.id, 'running');
       appendLog('dim', `  Processing ${task.task_type} (${task.id.slice(0, 8)}…)`);
