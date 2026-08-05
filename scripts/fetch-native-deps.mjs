@@ -22,8 +22,8 @@
  */
 
 import { createHash } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { mkdir, readFile, readdir, readlink, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
@@ -34,7 +34,8 @@ const NATIVE_DIR = join(ROOT, 'desktop/src-tauri/resources/native');
 
 /* PDFium build pinned by release tag. bblanchon/pdfium-binaries publishes SHARED libraries only —
    there is no static archive in these tarballs, which is why PDFium is a bundled dylib/dll/so and
-   not linked into the executable. Checked against the chromium/7988 release. */
+   not linked into the executable. SHA-256 values are the asset digests published with the
+   chromium/7988 GitHub release. */
 const PDFIUM_TAG = 'chromium/7988';
 
 /* LibreOffice release line. Bumping this is a RENDERING change, not just a version bump — see the
@@ -51,31 +52,37 @@ const ENGINES = {
     platforms: {
       'darwin-arm64': {
         url: `https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM_TAG}/pdfium-mac-arm64.tgz`,
+        sha256: '2229b8a6ffa0fb1634aa78886ed5425a10a8a0bd01762f7f0c9244081d86a921',
         strip: 'lib/',
         files: ['libpdfium.dylib'],
       },
       'darwin-x64': {
         url: `https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM_TAG}/pdfium-mac-x64.tgz`,
+        sha256: '172d9b7b0fa805235c785be333c046ff95c4aa38b3538ddc2d9d21ecc99681ca',
         strip: 'lib/',
         files: ['libpdfium.dylib'],
       },
       'win32-x64': {
         url: `https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM_TAG}/pdfium-win-x64.tgz`,
+        sha256: '654daf488d9357d2787cec439d0dbdb93d7e180e2cb28e5f1d41c66d2645daec',
         strip: 'bin/',
         files: ['pdfium.dll'],
       },
       'win32-arm64': {
         url: `https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM_TAG}/pdfium-win-arm64.tgz`,
+        sha256: '67126c99b70df7ff4ff960325fc76a24bbba6b450980bc72f1122070b2462c96',
         strip: 'bin/',
         files: ['pdfium.dll'],
       },
       'linux-x64': {
         url: `https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM_TAG}/pdfium-linux-x64.tgz`,
+        sha256: '7358c15e26a746cd67854887ea11b3b807c436056788eee9294fb972b8f8e0be',
         strip: 'lib/',
         files: ['libpdfium.so'],
       },
       'linux-arm64': {
         url: `https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM_TAG}/pdfium-linux-arm64.tgz`,
+        sha256: 'a2926203456881efa8feca7e0e409de78a4471b9b72e62a74c820faebb3e4551',
         strip: 'lib/',
         files: ['libpdfium.so'],
       },
@@ -94,7 +101,8 @@ const ENGINES = {
      so Linux declares a package dependency instead (bundle.linux.deb.depends in tauri.conf.json)
      and the OS package manager installs it — still no terminal work for the user.
 
-     Pinned to the 26.2.x line, matching the version whose deck rendering was reviewed and accepted.
+     Pinned to the 26.2.x line, with hashes from The Document Foundation's .sha256 metadata, matching
+     the version whose deck rendering was reviewed and accepted.
      A major-version bump can change layout and font substitution, so treat it as a visual change:
      re-render a corpus of real decks before shipping one. */
   libreoffice: {
@@ -115,18 +123,18 @@ const ENGINES = {
       },
       'darwin-x64': {
         url: `https://download.documentfoundation.org/libreoffice/stable/${LO_VERSION}/mac/x86_64/LibreOffice_${LO_VERSION}_MacOS_x86-64.dmg`,
-        sha256: null, // unpinned — see the warning this triggers
+        sha256: 'e26180298685274b54aa7fe6e1101c65465a372f457a6748ebd642720811db36',
         archive: 'dmg',
         copy: 'LibreOffice.app',
       },
       'win32-x64': {
         url: `https://download.documentfoundation.org/libreoffice/stable/${LO_VERSION}/win/x86_64/LibreOffice_${LO_VERSION}_Win_x86-64.msi`,
-        sha256: null,
+        sha256: 'f15ba07bfcb0186986cf3171063506f5d207c11f8cc051ba0d135209e9e915f9',
         archive: 'msi',
       },
       'win32-arm64': {
         url: `https://download.documentfoundation.org/libreoffice/stable/${LO_VERSION}/win/aarch64/LibreOffice_${LO_VERSION}_Win_aarch64.msi`,
-        sha256: null,
+        sha256: '48e99bba813c65a823b86a9fe8c0746a415f3d0e9459255f81f745f58fd353aa',
         archive: 'msi',
       },
     },
@@ -143,8 +151,80 @@ async function exists(p) {
 
 async function sha256File(p) {
   const h = createHash('sha256');
-  h.update(await readFile(p));
+  for await (const chunk of createReadStream(p)) h.update(chunk);
   return h.digest('hex');
+}
+
+/**
+ * Hash the extracted payload deterministically. The cache contains extracted code, not its source
+ * archive, so trusting a stamp alone would let a replaced DLL/dylib/app tree pass. Paths, symlink
+ * targets and file bytes all contribute; the stamp itself is excluded because it records this hash.
+ */
+export async function sha256Tree(root) {
+  const h = createHash('sha256');
+
+  async function visit(dir, prefix = '') {
+    const entries = (await readdir(dir, { withFileTypes: true }))
+      .filter(entry => prefix !== '' || entry.name !== '.stamp.json')
+      .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+
+    for (const entry of entries) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const full = join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        h.update(`link\0${rel}\0${await readlink(full)}\0`);
+      } else if (entry.isDirectory()) {
+        h.update(`dir\0${rel}\0`);
+        await visit(full, rel);
+      } else if (entry.isFile()) {
+        const metadata = await stat(full);
+        h.update(`file\0${rel}\0${metadata.mode & 0o777}\0${metadata.size}\0`);
+        for await (const chunk of createReadStream(full)) h.update(chunk);
+      } else {
+        throw new Error(`unsupported native payload entry: ${rel}`);
+      }
+    }
+  }
+
+  await visit(root);
+  return h.digest('hex');
+}
+
+export function validatePins(engines = ENGINES) {
+  for (const [name, engine] of Object.entries(engines)) {
+    for (const [key, spec] of Object.entries(engine.platforms)) {
+      if (!/^[a-f0-9]{64}$/.test(spec.sha256 ?? '')) {
+        throw new Error(
+          `${name} (${key}): missing valid sha256 for ${spec.url}; refusing unverified native code`,
+        );
+      }
+    }
+  }
+}
+
+export function assertDigest(name, spec, actual) {
+  if (actual !== spec.sha256) {
+    throw new Error(
+      `${name}: digest mismatch for ${spec.url}\n  expected ${spec.sha256}\n  actual   ${actual}`,
+    );
+  }
+}
+
+export async function hasValidCache(outDir, spec, key, sentinels) {
+  try {
+    const stamp = JSON.parse(await readFile(join(outDir, '.stamp.json'), 'utf8'));
+    if (
+      stamp.platform !== key ||
+      stamp.digests?.archive !== spec.sha256 ||
+      !/^[a-f0-9]{64}$/.test(stamp.digests?.tree ?? '')
+    ) return false;
+
+    const present = await Promise.all(sentinels.map(file => exists(join(outDir, file))));
+    if (!present.every(Boolean)) return false;
+    return await sha256Tree(outDir) === stamp.digests.tree;
+  } catch {
+    return false;
+  }
 }
 
 /** Download to disk, streaming — these archives are multi-MB and some engines will be far larger. */
@@ -233,80 +313,81 @@ async function fetchEngine(name, engine, key, { force }) {
   }
 
   const outDir = join(NATIVE_DIR, name);
-  const stampPath = join(outDir, '.stamp.json');
   const sentinels = sentinelsFor(engine, spec);
 
-  if (!force && await exists(stampPath)) {
-    const stamp = JSON.parse(await readFile(stampPath, 'utf8'));
-    const present = await Promise.all(sentinels.map(f => exists(join(outDir, f))));
-    if (stamp.url === spec.url && present.every(Boolean)) {
+  if (!force && await exists(outDir)) {
+    if (await hasValidCache(outDir, spec, key, sentinels)) {
       console.log(`  ${name}: up to date (${key})`);
       return { name, cached: true };
     }
+    console.log(`  ${name}: cached payload failed digest validation; fetching a clean copy`);
   }
 
   console.log(`  ${name}: fetching ${spec.url}`);
   const tmp = join(NATIVE_DIR, `.tmp-${name}`);
   await rm(tmp, { recursive: true, force: true });
   await mkdir(tmp, { recursive: true });
+  try {
+    const archive = join(tmp, `archive.${spec.archive ?? 'tgz'}`);
+    const payload = join(tmp, 'payload');
+    await download(spec.url, archive);
 
-  const archive = join(tmp, `archive.${spec.archive ?? 'tgz'}`);
-  await download(spec.url, archive);
+    const actual = await sha256File(archive);
+    assertDigest(name, spec, actual);
 
-  /* Integrity check. An unpinned engine still gets fetched — refusing would block the platforms
-     whose digest nobody has recorded yet — but it says so loudly and prints the value to pin, so
-     "unverified" is a visible state rather than a silent one. */
-  const actual = await sha256File(archive);
-  if (spec.sha256 && actual !== spec.sha256) {
-    throw new Error(
-      `${name}: digest mismatch for ${spec.url}\n  expected ${spec.sha256}\n  actual   ${actual}`);
-  }
-  if (!spec.sha256) {
-    console.log(`    ! UNPINNED download — verify and add to ENGINES.${name}.platforms['${key}']:`);
-    console.log(`        sha256: '${actual}',`);
-  }
+    await mkdir(payload, { recursive: true });
+    const digests = { archive: actual };
 
-  await mkdir(outDir, { recursive: true });
-  const digests = { archive: actual };
-
-  if (engine.kind === 'tree') {
-    if (spec.archive === 'dmg') {
-      await extractDmg(archive, spec.copy, outDir);
-    } else if (spec.archive === 'msi') {
-      await extractMsi(archive, outDir);
+    if (engine.kind === 'tree') {
+      if (spec.archive === 'dmg') {
+        await extractDmg(archive, spec.copy, payload);
+      } else if (spec.archive === 'msi') {
+        await extractMsi(archive, payload);
+      } else {
+        throw new Error(`${name}: unsupported archive type ${spec.archive}`);
+      }
     } else {
-      throw new Error(`${name}: unsupported archive type ${spec.archive}`);
+      await untar(archive, tmp);
+      for (const file of spec.files) {
+        const from = join(tmp, spec.strip ?? '', file);
+        if (!await exists(from)) {
+          throw new Error(`${name}: expected ${spec.strip ?? ''}${file} in ${spec.url} — archive layout changed`);
+        }
+        const to = join(payload, file);
+        await writeFile(to, await readFile(from));
+        console.log(`    ✓ ${file}  ${(await sha256File(to)).slice(0, 12)}`);
+      }
     }
+
     // Assert the layout rather than trusting it — an upstream repackage should fail here, loudly,
     // not at runtime when a thumbnail silently stops rendering.
     for (const rel of sentinels) {
-      if (!await exists(join(outDir, rel))) {
+      if (!await exists(join(payload, rel))) {
         throw new Error(`${name}: ${rel} missing after extraction — archive layout changed`);
       }
-      console.log(`    ✓ ${rel}`);
+      if (engine.kind === 'tree') console.log(`    ✓ ${rel}`);
     }
-  } else {
-    await untar(archive, tmp);
-    for (const file of spec.files) {
-      const from = join(tmp, spec.strip ?? '', file);
-      if (!await exists(from)) {
-        throw new Error(`${name}: expected ${spec.strip ?? ''}${file} in ${spec.url} — archive layout changed`);
-      }
-      const to = join(outDir, file);
-      await writeFile(to, await readFile(from));
-      digests[file] = await sha256File(to);
-      console.log(`    ✓ ${file}  ${digests[file].slice(0, 12)}`);
-    }
-  }
 
-  await writeFile(
-    stampPath,
-    JSON.stringify({ url: spec.url, platform: key, sentinels, digests }, null, 2) + '\n');
-  await rm(tmp, { recursive: true, force: true });
-  return { name, fetched: true };
+    digests.tree = await sha256Tree(payload);
+    await rm(outDir, { recursive: true, force: true });
+    await rename(payload, outDir);
+    await writeFile(
+      join(outDir, '.stamp.json'),
+      JSON.stringify({ url: spec.url, platform: key, sentinels, digests }, null, 2) + '\n',
+    );
+    return { name, fetched: true };
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
 }
 
 async function main() {
+  validatePins();
+  if (process.argv.includes('--verify-pins')) {
+    console.log('All native engine downloads have valid sha256 pins.');
+    return;
+  }
+
   const force = process.argv.includes('--force');
   const key = platformKey();
   console.log(`Fetching native engines for ${key} → ${NATIVE_DIR}`);
@@ -318,7 +399,9 @@ async function main() {
   console.log('Done.');
 }
 
-main().catch(err => {
-  console.error(`\nfetch-native-deps failed: ${err.message}`);
-  process.exit(1);
-});
+if (resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
+  main().catch(err => {
+    console.error(`\nfetch-native-deps failed: ${err.message}`);
+    process.exit(1);
+  });
+}

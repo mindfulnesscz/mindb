@@ -48,11 +48,11 @@ const svc = {
   'Content-Type': 'application/json',
 };
 
-/** True when the local stack answers. Everything here is skipped otherwise. */
+/** True only when PostgREST in the full local stack answers successfully. */
 export async function stackIsUp(): Promise<boolean> {
   try {
     const res = await fetch(`${API}/rest/v1/`, { headers: { apikey: ANON_KEY } });
-    return res.ok || res.status === 404;
+    return res.ok;
   } catch {
     return false;
   }
