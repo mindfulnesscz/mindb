@@ -19,6 +19,8 @@ The desktop uses fixed port 1420, docs uses 3001, and the web portal normally us
 | `staging` | `staging.hub.disruptcollective.com` (branch domain) | pushed to the **staging** Supabase project | rehearsal against hosted infra |
 | `main` | `hub.disruptcollective.com` (production) | pushed to **production**, approval-gated | what clients and editors use |
 
+Pull requests run the portal smoke suite against an ephemeral local Supabase stack on the GitHub runner. That stack is never linked to a hosted project and disappears with the job. Because the pull request already tested the merge candidate, the subsequent push to `dev` skips this database-backed E2E job; pushes to `staging` and `main` run it again alongside their separate deployment workflows. The CLI version used by these workflows is pinned rather than resolved from `latest` at runtime.
+
 Every deploy path follows git. Nothing publishes from a laptop:
 
 | Target | Deployed by |
