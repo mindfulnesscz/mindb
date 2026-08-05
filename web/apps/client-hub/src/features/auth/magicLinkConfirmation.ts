@@ -56,7 +56,9 @@ export function buildMagicLinkVerificationUrl(
 
   const verifyUrl = new URL('/auth/v1/verify', supabaseUrl)
   verifyUrl.searchParams.set('token', confirmation.tokenHash)
-  verifyUrl.searchParams.set('type', 'email')
+  // signInWithOtp is the API name, but this template sends a magic link. Supabase reserves
+  // `type=email` for a numeric email OTP; GET /verify needs the token's actual magic-link type.
+  verifyUrl.searchParams.set('type', 'magiclink')
   verifyUrl.searchParams.set('redirect_to', confirmation.redirectTo)
   return verifyUrl.toString()
 }

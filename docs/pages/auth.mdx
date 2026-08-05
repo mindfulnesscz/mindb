@@ -124,7 +124,9 @@ similar corporate scanners are allowed to open the email URL without consuming t
 2. The confirmation page performs no verification on load and does not render the Supabase verify
    URL in an anchor.
 3. Only the person's explicit **Continue signing in** click constructs
-   `<supabase-url>/auth/v1/verify` and navigates to it.
+   `<supabase-url>/auth/v1/verify` with `type=magiclink` and navigates to it. Do not use
+   `type=email`: despite the `signInWithOtp` API name, that type is for numeric email codes and does
+   not match a magic-link token.
 4. Supabase spends the token and redirects to the original allowlisted destination. Web returns to
    the browser that holds the PKCE verifier; desktop returns to its `localhost:7623` listener.
 
@@ -156,7 +158,8 @@ Verify each hosted environment immediately after changing its template:
 2. Open the email action once without selecting **Continue signing in**. No Auth verification should
    occur and the page must say the link has not been used.
 3. Select **Continue signing in** and confirm the browser returns to the complete original portal URL,
-   including its query parameters.
+   including its query parameters. If it stops at a Supabase JSON error, confirm the generated
+   `/auth/v1/verify` request uses `type=magiclink`, not `type=email`.
 4. Request a desktop link and confirm the same button returns through
    `http://localhost:7623/auth-callback` and unlocks the waiting desktop window.
 5. Request a fresh link for an Outlook/Microsoft 365 mailbox after the preceding checks pass.
