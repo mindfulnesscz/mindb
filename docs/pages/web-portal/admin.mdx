@@ -10,6 +10,18 @@ Users load via `get_all_profiles`; administrators change role and access through
 (member client picker, editor `client_members` checkboxes). Portal and desktop staff sign-in accepts
 editor, admin, and super admin profiles.
 
+Super admins also see two maintainer tabs:
+
+- **Diagnostics** groups application errors and controls error notifications. Messages can contain
+  cross-client asset names and paths.
+- **CDN GC** analyzes both R2 buckets against every asset row. Execution requires a fresh matching
+  plan, an exact typed object-count confirmation, and an additional production confirmation. It
+  returns deletion and post-delete verification reports. See
+  [CDN garbage collection](/operations/cdn-garbage-collection).
+
+Both tabs are hidden from other roles and enforce the super-admin check again at their data/function
+boundary.
+
 ### Tags and destinations in the client drawer
 
 After selecting a client:

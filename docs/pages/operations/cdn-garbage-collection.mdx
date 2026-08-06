@@ -1,0 +1,191 @@
+# CDN garbage collection
+
+`scripts/gc-cdn-objects.mjs` is the standalone, bucket-wide collector for R2 objects that no asset
+row legitimately references. It covers the public and gated buckets for one environment, but never
+Cloudflare Stream. It is a manual operation and always starts with a dry run.
+
+This is separate from the desktop's per-asset cleanup. The desktop removes old-level copies when it
+touches an identity; this collector also finds residue from hard-deleted rows, old CI/manual runs,
+legacy no-client keys, and identities the desktop may never touch again.
+
+## Admin GUIs
+
+Super admins can run the same conservative workflow in either operator surface:
+
+- web portal: **Admin → CDN GC**, beside **Diagnostics**;
+- desktop app: **Settings → CDN garbage collection**, beside **Diagnostics**. The card expands to
+  the full Settings width after an analysis so the bucket and grouping tables remain readable.
+
+1. Select **Analyze**. The server reads every asset row and lists both R2 buckets with read-only,
+   bucket-scoped temporary credentials.
+2. Review asset/object totals, referenced and protected bytes, the orphan fraction, each bucket,
+   orphan groups by reason/client/level, sample keys, and reference warnings. Download the full JSON
+   inventory when a durable review artifact is needed.
+3. Select **Execute deletion** and type the displayed `DELETE N OBJECTS` phrase exactly. Production
+   also requires `production` in a second field.
+4. The server rebuilds the entire plan. If any asset row or R2 candidate changed, it refuses the old
+   confirmation and returns a fresh analysis for review. After deletion it relists both buckets and
+   shows deleted bytes, failures, and the remaining orphan count. Download the execution JSON for
+   the operational record.
+
+Neither client receives R2 or service-role credentials. The Edge Function independently checks
+that the caller is a `super_admin`; hiding the tab/card is not the security boundary. Both GUIs
+protect disconnected rows and `branding/`, and neither can override the 60% blast-radius gate. The
+advanced CLI flags remain available only for an investigated, deliberate operator run.
+
+If analysis could exceed the hosted function's wall-clock limit for a very large bucket, use the
+manual CLI workflow below. Both surfaces use the same platform-free reference/classification policy.
+
+## Before running
+
+The selected environment must have both config layers used by the other storage scripts:
+
+- `scripts/environments/<env>.public.env`: `PROJECT_REF`, both bucket names, and both domains;
+- `scripts/environments/<env>.env` or process environment: `SUPABASE_SERVICE_KEY`, `CF_R2_TOKEN`,
+  `CF_ACCOUNT_ID`, and `R2_PARENT_ACCESS_KEY_ID`.
+
+The Cloudflare token must be the parent R2 token whose Access Key ID is configured and must have
+read/write/list access to both named buckets. The collector derives its S3 signing credential in
+memory, never writes it to the report, and refuses if the configured public and gated bucket names
+are identical.
+
+Only `dev`, `staging`, and `production` are accepted, and `--env` is mandatory.
+
+## Manual CLI run, start to finish
+
+Always rehearse against staging before production.
+
+### 1. Generate the dry-run report
+
+```bash
+node scripts/gc-cdn-objects.mjs --env staging
+```
+
+The command reads every `public.assets` row with the Supabase service role, constructs stored and
+canonical references, and paginates every object in both configured buckets. It writes two files to
+`reports/cdn-gc/`:
+
+- `*.json`: the complete machine-readable inventory and classification for every key;
+- `*.txt`: totals and orphan groups by reason, client, and level, with sample keys.
+
+The report directory is gitignored. Preserve a reviewed report with the operational record if your
+normal change process requires it.
+
+Read these fields before accepting:
+
+- `totals`: total, referenced, protected, and orphan counts and bytes;
+- `disconnectedReferenced*`: bytes retained solely because disconnected rows still reference them;
+- `buckets[].orphanGroups`: count, bytes, and sample keys grouped by reason/client/level;
+- `source.warnings`: stored URLs that are not R2 keys, such as Cloudflare Stream URLs;
+- `safety`: the orphan fraction and whether the 60% blast-radius gate fired.
+
+Nothing has been deleted at this point. If the command exits on the blast-radius gate, the report
+is still available; investigate why more than 60% of objects appear orphaned before considering
+`--force`.
+
+Orphan reasons are:
+
+| Reason                      | Meaning                                                                                  |
+| --------------------------- | ---------------------------------------------------------------------------------------- |
+| `old-level-copy`            | The identity has a live row, but the object is in a different level/tier from that row.  |
+| `no-matching-row`           | No included row has the object's client/stable/child identity.                           |
+| `legacy-no-client`          | The key uses the old namespace without a client segment.                                 |
+| `unknown-shape`             | The key is not one of the canonical asset shapes.                                        |
+| `unreferenced-current-copy` | The identity and level are current, but this extra extension/page/key is not referenced. |
+
+### 2. Execute staging
+
+After reviewing a fresh dry-run report:
+
+```bash
+node scripts/gc-cdn-objects.mjs --env staging --execute
+```
+
+The collector prints the same preview and report first. In an interactive terminal it requires the
+exact object total to be typed back. Do not use `--force`, `--drop-disconnected`, or
+`--include-protected branding` merely to make a surprising report pass; each changes what is
+eligible for deletion and must be a deliberate decision.
+
+### 3. Verify and run production
+
+After staging completes, rerun the dry-run there and verify the portal still serves a sample of
+public and gated assets. Then create a new production report:
+
+```bash
+node scripts/gc-cdn-objects.mjs --env production
+```
+
+Review the production report independently. Staging counts are not a baseline for production. When
+the production report is accepted:
+
+```bash
+node scripts/gc-cdn-objects.mjs --env production --execute
+```
+
+Production requires the object-count confirmation and then a second `production` confirmation.
+Every confirmed deletion is recorded in the `*.audit.jsonl` file printed by the command. Keep that
+manifest with the reviewed report.
+
+For a deliberately non-interactive run, `--yes` bypasses both prompts:
+
+```bash
+node scripts/gc-cdn-objects.mjs --env staging --execute --yes
+```
+
+`--yes` does not imply `--execute`, does not override the blast-radius gate, and does not weaken any
+reference-set or bucket-scope check.
+
+Immediately before deleting, the script reads the asset table again and compares its fingerprint to
+the reviewed snapshot. Any level, status, identity, page-count, or stored-reference change aborts
+the run. Deletions are sent in bounded batches with retry/backoff for throttling and transient R2
+errors. Every confirmed key is appended to an `*.audit.jsonl` manifest beside the report.
+
+An interrupted run is resumable by rerunning the same command: it relists both buckets, so keys
+already deleted disappear and the new report contains only what remains. Always review that new
+report; do not replay keys from an old report.
+
+## Automation status
+
+There is **no scheduled GC automation** today: no cron trigger, GitHub Actions schedule, Worker
+cron, or desktop background job launches the CLI or the Admin function. The web and desktop GUIs
+automate analysis, confirmation binding, deletion, and verification inside an operator-started
+session; neither runs on its own. R2 deletion remains an operator action because the report must be reviewed
+against the current asset table before accepting the blast radius.
+
+`--yes` is only a non-interactive mode for a run that an operator or an external system explicitly
+starts. It is not a scheduler. If GC is automated later, the safe first phase is scheduled dry-run
+report generation and notification; production deletion should remain a separately approved step
+unless an equivalent approval and audit boundary is designed.
+
+## Flags
+
+| Flag                           | Effect                                                                                          |
+| ------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `--execute`                    | Delete candidates after reporting and confirmation. Without it, nothing changes.                |
+| `--yes`                        | Skip interactive confirmations, including the second production prompt.                         |
+| `--force`                      | Override only the greater-than-60% orphan-count gate after reviewing the report.                |
+| `--drop-disconnected`          | Stop protecting keys referenced only by `status='disconnected'` rows.                           |
+| `--include-protected branding` | Include the non-asset `branding/` namespace as candidates.                                      |
+| `--min-rows N`                 | Intentionally lower/raise the default sane floor of 10 rows for a small environment. Minimum 1. |
+
+Protected namespaces are opt-in individually. `branding/` is the only non-asset R2 writer today
+(`r2-branding-upload`); adding another writer requires adding its namespace to the collector before
+it ships.
+
+## Safety rails
+
+The collector aborts rather than interpreting uncertainty as garbage when:
+
+- the Supabase query fails, returns zero rows, returns fewer than the row floor, changes during
+  pagination, or returns duplicate IDs;
+- no included row has usable `(client_id, stable_id, child_id)`, fewer than 80% do, the computed
+  reference set is empty, or a page count is invalid/implausible;
+- more than 60% of listed objects are candidates and `--force` was not supplied;
+- the asset snapshot changes between preview/confirmation and deletion;
+- a deletion batch contains a non-orphan key, mixes buckets, or targets anything other than the two
+  configured bucket names.
+
+Stored `thumbnail_url`, `download_url`, and `download_key` values are protected verbatim even when
+they disagree with row identity. Originals whose extension cannot be reconstructed are protected
+by the full canonical `{child_id}.` prefix. Disconnected-row references and `branding/` are retained
+by default. These conservative rules are why an object can remain even when it looks redundant.

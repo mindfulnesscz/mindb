@@ -22,6 +22,7 @@ import {
   effectiveLevel, tierFor, assetUrl, stripVersion, planPageMoves, type AccessLevel,
 } from '../../../packages/domain/src/assetStorage.ts';
 import { tempCredentials, copyObject, s3, type TempCreds } from '../_shared/r2.ts';
+import { callerAuthFailureBody } from '../_shared/caller-auth-policy.ts';
 
 /** How many assets one invocation will move. Bounded so a large backlog cannot exceed the
  *  function's wall-clock limit; the queue keeps the rest for the next call. */
@@ -58,8 +59,8 @@ Deno.serve(async (req) => {
   const asCaller = createClient(env('SUPABASE_URL'), env('SUPABASE_ANON_KEY'), {
     global: { headers: { Authorization: authHeader } }, auth: { persistSession: false },
   });
-  const { data: userData } = await asCaller.auth.getUser();
-  if (!userData?.user) return json(401, { error: 'Not authenticated' });
+  const { data: userData, error: authError } = await asCaller.auth.getUser();
+  if (!userData?.user) return json(401, callerAuthFailureBody(authError, authHeader));
   const { data: profile } = await asCaller
     .from('profiles').select('role').eq('id', userData.user.id).single();
   if (!profile || !['editor', 'admin', 'super_admin'].includes(profile.role)) {
@@ -201,11 +202,11 @@ Deno.serve(async (req) => {
        pages readable under the old `client/` prefix.
 
        ADDRESSED FROM `preview_page_count`, NOT BY LISTING. An earlier version listed each level
-       prefix, which cannot work here: `tempCredentials` requests `object-read-write`, which grants
-       Get/Put/Delete on objects but NOT ListBucket. Every list returned 403, every asset was marked
-       failed, and nothing was ever dequeued — so `cdn_move_queue` stopped draining and videos queued
-       behind the jam never had `requireSignedURLs` reconciled. A list here would need bucket-wide
-       read credentials in an edge function, which is a worse trade than the residue below.
+       prefix with a temporary grant that returned 403 for ListObjects. Every asset was marked failed
+       and nothing was ever dequeued — so `cdn_move_queue` stopped draining and videos queued behind
+       the jam never had `requireSignedURLs` reconciled. Cloudflare's current object-read-write
+       temporary credentials do include ListObjects, but per-asset listings are still slower and
+       broader than using the row's bounded page count.
 
        RESIDUE, deliberately accepted: if the page COUNT also shrank (an edited document, or a lowered
        client limit) the objects past the new count at an old level are not addressable from the row,
@@ -254,8 +255,11 @@ Deno.serve(async (req) => {
       const { error } = await db.from('assets').update(patch).eq('id', a.id);
       if (error) { failed++; assetFailed = true; }
     }
-    // Source objects are left in place, exactly as the re-key script does: until they are removed
-    // separately, the whole move is undone by repointing the URLs back.
+    // Thumbnail/original sources stay in place so the move remains reversible by repointing the
+    // URLs. The next desktop upload touching this identity now sweeps both namespaces across all
+    // four levels (with a live-row shared-key guard), as it already does for pages. Residue for an
+    // identity never touched again still needs a separate bucket-wide GC with parent LIST access;
+    // the client-scoped temporary R2 grant intentionally cannot perform that global diff.
     if (!assetFailed) done.push(a.id);
   }
 

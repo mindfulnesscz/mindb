@@ -30,6 +30,7 @@
 import {
   parseGatedKey, authorize, levelForProfile, isStaffRole, parseRangeHeader, resolveContentRange,
 } from './authz';
+import { callerAuthFailure, classifyGoTrueRefusal, NOT_AUTHENTICATED } from '@sotto/domain/callerAuth';
 import { COOKIE_NAME, clearCookieHeader, mint, readCookie, setCookieHeader, verify } from './token';
 
 export interface Env {
@@ -100,14 +101,23 @@ async function handleAuth(req: Request, env: Env): Promise<Response> {
 
   const authHeader = req.headers.get('Authorization') ?? '';
   if (!authHeader.toLowerCase().startsWith('bearer ')) {
-    return json(401, { error: 'Not authenticated' }, req, env);
+    return json(401, callerAuthFailure(NOT_AUTHENTICATED), req, env);
   }
   const supaHeaders = { Authorization: authHeader, apikey: env.SUPABASE_ANON_KEY };
 
   const userRes = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, { headers: supaHeaders });
-  if (!userRes.ok) return json(401, { error: 'Not authenticated' }, req, env);
+  /* A refusal here is usually not "you are not allowed" — it is a tab whose session was revoked
+     while its access token stayed signature-valid. Saying so is what lets the portal end the
+     session; without it `useCdnCookie` retries a dead token forever and the only symptom is a
+     gallery of blank gated thumbnails. Unlike the edge functions, this route reads GoTrue's own
+     response, so the code is right here — see packages/domain/src/callerAuth.ts. */
+  if (!userRes.ok) {
+    const body = await userRes.json().catch(() => null) as { error_code?: string } | null;
+    return json(401, classifyGoTrueRefusal(body?.error_code, true), req, env);
+  }
   const user = (await userRes.json()) as { id?: string };
-  if (!user.id) return json(401, { error: 'Not authenticated' }, req, env);
+  // A 200 with no id is not a session problem; do not tell the caller to sign in again over it.
+  if (!user.id) return json(401, callerAuthFailure(NOT_AUTHENTICATED), req, env);
 
   // RLS ("profiles: own row") is what scopes this, but the id filter is still explicit: a staff
   // caller can read every profile, and an unfiltered select would hand us an arbitrary one.

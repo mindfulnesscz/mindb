@@ -12,6 +12,7 @@ import {
   temporaryCredentialRequest,
   type GrantPurpose,
 } from '../_shared/r2-grant-policy.ts';
+import { callerAuthFailureBody } from '../_shared/caller-auth-policy.ts';
 
 const GRANT_TTL_SECONDS = 3600;
 
@@ -41,7 +42,7 @@ Deno.serve(async (req) => {
     { global: { headers: { Authorization: authHeader } }, auth: { persistSession: false } },
   );
   const { data: userData, error: userErr } = await supa.auth.getUser();
-  if (userErr || !userData.user) return json(401, { error: 'Not authenticated' });
+  if (userErr || !userData.user) return json(401, callerAuthFailureBody(userErr, authHeader));
 
   const body = (await req.json().catch(() => ({}))) as GrantRequest;
   const { client_id, purpose = 'pipeline' } = body;

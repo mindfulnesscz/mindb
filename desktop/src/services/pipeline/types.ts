@@ -66,6 +66,9 @@ export interface RunContext {
    *  The level is part of the object key and picks the bucket, and `perm` is portal-owned, so
    *  the database is the only place that knows it. Absent key ⇒ a new asset. */
   assetLevels?:      Map<string, string>;
+  /** R2 object key → live `${stable_id}:${child_id}` rows that reference it.
+   *  Undefined means the database read failed, so destructive per-asset pruning must stop safely. */
+  cdnKeyReferences?: Map<string, Set<string>>;
   /** Per-client page-preview cap, read from `clients.preview_page_limit`. Portal-owned. */
   previewPageLimit?: number;
   /** absPath → page counts from the render step, for the Supabase sync to write onto the asset row.

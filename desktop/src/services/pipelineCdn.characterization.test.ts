@@ -215,6 +215,87 @@ describe('CDN — object key construction', () => {
     expect(del?.bucket).toBe('sotto-test');
   });
 
+  it('reclaims this asset\'s thumbnail and original from every non-current level', async () => {
+    const stableId = 'a5000008';
+    const src = `${SRC}/Asset __${stableId}/[03] OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.tree(SRC, { [`Asset __${stableId}/[03] OUT/(PRD)(SlD) Deck.pdf`]: 'current' });
+
+    const staleKeys = [
+      `client-abc/thumbnails/${stableId}/c1.webp`,
+      `guest/client-abc/thumbnails/${stableId}/c1.webp`,
+      `client/client-abc/thumbnails/${stableId}/c1.webp`,
+      `client-abc/originals/${stableId}/c1.pdf`,
+      // Proves the bounded identity sweep also catches an extension changed at the old level.
+      `guest/client-abc/originals/${stableId}/c1.pptx`,
+      `client/client-abc/originals/${stableId}/c1.pdf`,
+    ];
+    for (const key of staleKeys) invokeStub.remoteKeys.add(key);
+
+    const run = await cdn({}, {
+      assetLevels: new Map([[`${stableId}:c1`, 'internal']]),
+    });
+
+    expect(invokeStub.deletedKeys()).toEqual([...staleKeys].sort());
+    for (const key of staleKeys) expect(invokeStub.remoteKeys.has(key), key).toBe(false);
+    expect(invokeStub.remoteKeys).toContain(
+      `internal/client-abc/thumbnails/${stableId}/c1.webp`,
+    );
+    expect(invokeStub.remoteKeys).toContain(
+      `internal/client-abc/originals/${stableId}/c1.pdf`,
+    );
+    expect((run.ctx.cdnUrls as Map<string, string>).get(src))
+      .toContain(`internal/client-abc/thumbnails/${stableId}/c1.webp`);
+    expect((run.ctx.originalUrls as Map<string, string>).get(src))
+      .toContain(`internal/client-abc/originals/${stableId}/c1.pdf`);
+
+    const publicDeletes = invokeStub.argsFor('delete_r2_object')
+      .filter(call => (call.objectKey as string).startsWith('client-abc/'));
+    expect(publicDeletes.every(call => call.bucket === R2.bucket)).toBe(true);
+  });
+
+  it('keeps a stale thumbnail or original that another live row still references', async () => {
+    const stableId = 'a5000009';
+    vfs.tree(SRC, { [`Asset __${stableId}/[03] OUT/(PRD)(SlD) Deck.pdf`]: 'current' });
+    const staleThumb = `client/client-abc/thumbnails/${stableId}/c1.webp`;
+    const staleOriginal = `client/client-abc/originals/${stableId}/c1.pdf`;
+    invokeStub.remoteKeys.add(staleThumb);
+    invokeStub.remoteKeys.add(staleOriginal);
+
+    const references = new Map<string, Set<string>>([
+      [staleThumb, new Set([`${stableId}:c1`, `${stableId}:gallery-parent`])],
+      [staleOriginal, new Set([`${stableId}:c1`, `${stableId}:gallery-parent`])],
+    ]);
+    const run = await cdn({}, {
+      assetLevels: new Map([[`${stableId}:c1`, 'internal']]),
+      cdnKeyReferences: references,
+    });
+
+    expect(invokeStub.deletedKeys()).not.toContain(staleThumb);
+    expect(invokeStub.deletedKeys()).not.toContain(staleOriginal);
+    expect(invokeStub.remoteKeys.has(staleThumb)).toBe(true);
+    expect(invokeStub.remoteKeys.has(staleOriginal)).toBe(true);
+    expect(run.logged('kept shared stale thumbnail')).toBe(true);
+    expect(run.logged('kept shared stale original')).toBe(true);
+  });
+
+  it('skips stale-key pruning when live row references are unknown', async () => {
+    const stableId = 'a5000010';
+    vfs.tree(SRC, { [`Asset __${stableId}/[03] OUT/(PRD)(SlD) Deck.pdf`]: 'current' });
+    const staleThumb = `client/client-abc/thumbnails/${stableId}/c1.webp`;
+    const staleOriginal = `client/client-abc/originals/${stableId}/c1.pdf`;
+    invokeStub.remoteKeys.add(staleThumb);
+    invokeStub.remoteKeys.add(staleOriginal);
+
+    const run = await cdn({}, {
+      assetLevels: new Map([[`${stableId}:c1`, 'internal']]),
+      cdnKeyReferences: undefined,
+    });
+
+    expect(invokeStub.deletedKeys()).not.toContain(staleThumb);
+    expect(invokeStub.deletedKeys()).not.toContain(staleOriginal);
+    expect(run.logged('live row references unavailable')).toBe(true);
+  });
+
   it('publishes no pages for an asset type that has none', async () => {
     vfs.tree(SRC, { 'Asset __a5000005/[03] OUT/(ACQ)(Gll) Photo.jpg': '' });
     await cdn({ doCdnOriginals: false });
@@ -524,6 +605,8 @@ describe('CDN — guard rails', () => {
       'Asset __a6000000/[03] OUT/(PRD)(SlD) Deck-thumb/pages.json': JSON.stringify({ rendered: 1, total: 1 }),
     });
     invokeStub.remoteKeys.add('client/client-abc/pages/a6000000/c1/999.webp');
+    invokeStub.remoteKeys.add('client-abc/thumbnails/a6000000/c1.webp');
+    invokeStub.remoteKeys.add('client-abc/originals/a6000000/c1.pdf');
 
     const run = await cdn({ dryRun: true });
 
@@ -531,6 +614,8 @@ describe('CDN — guard rails', () => {
     expect(vfs.ops).toEqual([]);
     expect(vfs.hasFile(`${SRC}/Asset __a6000000/.dchub.json`)).toBe(false);
     expect(run.logged('[DRY]')).toBe(true);
+    expect(run.logged('prune stale thumbnail objects')).toBe(true);
+    expect(run.logged('prune stale original objects')).toBe(true);
   });
 
   it('skips the whole stage when the R2 config is incomplete', async () => {

@@ -7,7 +7,7 @@
  * `_shared/`, is invisible until production.
  *
  * That gap has already cost a production incident: a page-preview sweep added to `cdn-reconcile`
- * called an R2 LIST with credentials scoped `object-read-write`, which does not permit ListBucket.
+ * called an R2 LIST with a temporary grant that returned 403 for ListObjects.
  * Every asset failed, the move queue stopped draining, and because the same pass sets Cloudflare
  * Stream's `requireSignedURLs`, video playback and animated thumbnails stopped working. No test in
  * the repository could have caught it.

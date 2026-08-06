@@ -60,6 +60,16 @@ independently of the desktop's key-building logic.
 
 Stable-identity clients key every upload by the manifest pair, never by filename: public objects use `{client_id}/{kind}/{stable_id}/{child_id}{ext}` and gated objects add `{effective_level}/` in front. `kind` is `thumbnails`, `originals`, or `pages`; page objects continue with a zero-padded page name. Files differing only by extension get distinct child IDs. A stale-sibling cleanup removes an old original when a version bump changes its extension — but never a key claimed by another file in the same run.
 
+After the current-level object is confirmed, the upload prunes that asset's thumbnail, original, and page objects from every other access-level prefix. This reclaims the reversible source copies left by `cdn-reconcile` and, on a demotion, closes the old wider address. The delete set is bounded to the current `(stable_id, child_id)`; a thumbnail or original still referenced by another live row (for example, a gallery parent sharing its first child's media) is retained and logged. Dry runs report the sweep without deleting, and inventory/delete failures leave the object for a later run.
+
+This is per-run self-healing, not bucket-wide garbage collection. It covers only identities touched
+by the desktop run. Objects belonging to hard-deleted rows or clients that never run the desktop
+again are handled by the dry-run-first bucket collector, available to super admins in web **Admin →
+CDN GC**, desktop **Settings → CDN garbage collection**, and manually through
+`scripts/gc-cdn-objects.mjs`. The temporary desktop grant remains too
+narrow for a full-bucket diff; the Admin Edge Function and CLI obtain separately scoped operator
+credentials. See [CDN garbage collection](/operations/cdn-garbage-collection).
+
 ### 2 — Distribute packages
 
 Finds folders matching the configured package prefix (e.g. `📦` or `[00] 📦`). These are **pickup anchors**: Collect fills each one from **sibling and nested** `OUT` folders under the same parent (including migrated `Name __hash/OUT` assets). Other package folders are skipped so anchors don't harvest each other.

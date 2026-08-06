@@ -28,6 +28,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { effectiveLevel, tierFor } from '../../../packages/domain/src/assetStorage.ts';
 import { preflight, corsJson } from '../_shared/cors.ts';
+import { callerAuthFailureBody } from '../_shared/caller-auth-policy.ts';
 
 /* Long enough to watch something without the URL dying mid-scrub, short enough that a token
    pasted elsewhere stops working the same afternoon. Renewal is a cheap call, so there is nothing
@@ -59,8 +60,8 @@ Deno.serve(async (req) => {
   const asCaller = createClient(env('SUPABASE_URL'), env('SUPABASE_ANON_KEY'), {
     global: { headers: { Authorization: authHeader } }, auth: { persistSession: false },
   });
-  const { data: userData } = await asCaller.auth.getUser();
-  if (!userData?.user) return json(401, { error: 'Not authenticated' });
+  const { data: userData, error: authError } = await asCaller.auth.getUser();
+  if (!userData?.user) return json(401, callerAuthFailureBody(authError, authHeader));
 
   const body = await req.json().catch(() => ({})) as { asset_ids?: string[] };
   const ids = (body.asset_ids ?? []).slice(0, MAX_PER_REQUEST);

@@ -17,6 +17,7 @@ import { effectiveLevel, tierFor, stripVersion } from '../../../packages/domain/
 import { isVideoFile } from '../../../packages/domain/src/video.ts';
 import { tempCredentials, presignGet } from '../_shared/r2.ts';
 import { preflight, corsJson } from '../_shared/cors.ts';
+import { callerAuthFailureBody } from '../_shared/caller-auth-policy.ts';
 
 /* Long enough for Stream to pull a large master, short enough that a leaked URL is worthless by the
    time anyone finds it. Cannot exceed the R2 temporary credentials' own hour — a presigned URL dies
@@ -56,8 +57,8 @@ Deno.serve(async (req) => {
   const asCaller = createClient(env('SUPABASE_URL'), env('SUPABASE_ANON_KEY'), {
     global: { headers: { Authorization: authHeader } }, auth: { persistSession: false },
   });
-  const { data: userData } = await asCaller.auth.getUser();
-  if (!userData?.user) return json(401, { error: 'Not authenticated' });
+  const { data: userData, error: authError } = await asCaller.auth.getUser();
+  if (!userData?.user) return json(401, callerAuthFailureBody(authError, authHeader));
 
   const { data: profile } = await asCaller
     .from('profiles').select('role').eq('id', userData.user.id).single();

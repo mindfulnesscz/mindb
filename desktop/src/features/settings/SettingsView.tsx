@@ -9,6 +9,7 @@ import { reportError } from '../../services/reportError';
 import { CloudDestinations } from '../cloud/CloudDestinations';
 import css from './SettingsView.module.css';
 import { DiagnosticsCard } from './DiagnosticsCard';
+import { CdnGarbageCollectionCard } from './CdnGarbageCollectionCard';
 
 export function SettingsView() {
   const { settings, setField, markClean } = useSettingsStore();
@@ -96,6 +97,7 @@ export function SettingsView() {
           </div>
 
           <DiagnosticsCard />
+          <CdnGarbageCollectionCard />
         </div>
       </div>
     </div>
