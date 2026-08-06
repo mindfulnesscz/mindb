@@ -2,11 +2,25 @@
 
 Prepend the **SHARED CONTEXT block** from `DONE_01_security-hardening-S0-S7.md`.
 
-**Priority: after `00a`/`00b`, before 3.2.2 ships.** Nothing here is a crash or a leak; all of it is
-what a client sees when they open a delivered folder.
+**C1, C2 and C3 are LANDED** in 3.2.2 (commit `affecad`), in one change, with `lint`, `typecheck`,
+`test:packages`, `test:desktop`, `test:rust`, `lint:rust`, `build:desktop` and `build:docs` green.
 
-_Filed and revised 2026-08-06. Target layout below is approved — earlier framings in this file's
-history (hide the thumbnails; defer the shared folder) are superseded._
+**The premise below was wrong on one point, and it is the interesting one.** This brief opens "nothing
+here is a crash or a leak". C1's reproduce step found a leak: in the `folders` publish layout,
+`publishDir` applied its artifact filter to files but recursed into **every** subdirectory
+unconditionally, so a `<stem>-thumb/` previews folder was descended into and its `001.webp`,
+`002.webp` … copied into the client's target as deliverables. The page files are the one artifact
+with no marker in their names — which is why a filename filter never caught them and nothing
+downstream did either. Fixed by applying the exclusion to the directory entry *before* the descent.
+Targets published by an earlier build keep the stale folder until the next publish reconciles it.
+
+**Known gap, accepted:** hiding a manifest means a leading dot, which Windows does not honour.
+`FILE_ATTRIBUTE_HIDDEN` is not set — Sotto ships macOS only (`release-desktop.yml` builds one macOS
+bundle) and has no Windows CI, so the call would be code no build here can compile or exercise. The
+one place to add it is documented above `manifest_path` in `render.rs`.
+
+_Filed and revised 2026-08-06; closed 2026-08-07. Target layout below is approved — earlier framings
+in this file's history (hide the thumbnails; defer the shared folder) are superseded._
 
 ---
 
