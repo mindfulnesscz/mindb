@@ -35,11 +35,11 @@ Stream work use the same stop signal, so the run is not marked complete before t
 
 ### Scan
 
-`scanAllAssets` walks the configured source folder looking for folders named `OUT` (configurable — the naming convention settings default to `[03] OUT`) and collects every publishable file inside them (skipping `-thumb` files and `versions/`, which is handled separately by Version history sync). This file list feeds every step below — nothing after this point re-scans the disk.
+`scanAllAssets` walks the configured source folder looking for folders named `OUT` (configurable — the naming convention settings default to `[03] OUT`) and collects every publishable file inside them (skipping each folder's `thumbnails/` artifacts and `versions/`, which is handled separately by Version history sync). This file list feeds every step below — nothing after this point re-scans the disk.
 
 ### 1 — Generate thumbnails
 
-For each collected asset, the Rust backend renders a WebP thumbnail (PPTX/PDF via LibreOffice + `pdftoppm`, images directly) at the configured width/quality. Skipped for file types that don't support thumbnailing. Raster thumbnails record the source size + mtime and render settings in a sidecar manifest; an existing WebP is reused only while that fingerprint still matches. Document thumbnails and page previews use the equivalent `pages.json` fingerprint.
+For each collected asset, the Rust backend renders a WebP thumbnail (Office documents via bundled LibreOffice, PDFs via bundled PDFium, images directly) at the configured width/quality. Skipped for file types that don't support thumbnailing. Every output goes into a `thumbnails/` folder beside the assets it serves — see [thumbnail generation](/desktop/thumbnails) for the layout and for how a pre-3.2.2 library is migrated into it. Raster thumbnails record the source size + mtime and render settings in a hidden manifest; an existing WebP is reused only while that fingerprint still matches. Document thumbnails and page previews use the equivalent `.pages.json` fingerprint.
 
 ### CDN upload
 
@@ -76,7 +76,7 @@ Finds folders matching the configured package prefix (e.g. `📦` or `[00] 📦`
 
 Highest version only. Package folders become a **hard mirror of live OUT**:
 - Files no longer present in OUT (or superseded by a higher version) are **deleted** from the source package — not `🚫`-disconnected. Disconnect renaming is only for publish **targets**, where live links may still exist.
-- **Thumbnails are never kept** in source packages (`*-thumb.webp` is purged on sync).
+- **Render artifacts are never kept** in source packages. A `thumbnails/` folder that somehow reached one is purged as a unit, directory included.
 
 Migrated `Name __hash` asset folders are **not** package anchors (even with `.dchub.json`); destination export still publishes their OUT via the normal folders walk.
 

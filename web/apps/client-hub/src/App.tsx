@@ -7,6 +7,7 @@ import AdminLandingPage from './features/admin/AdminLandingPage'
 import ClientPortalPage from './features/portal/ClientPortalPage'
 import SettingsView from './features/settings/SettingsView'
 import { RouteErrorBoundary } from './components/RouteErrorBoundary'
+import { BuildBadge } from './components/BuildBadge'
 import MagicLinkConfirmationPage from './features/auth/MagicLinkConfirmationPage'
 
 // ── Standalone settings page ──────────────────────────────────
@@ -87,8 +88,12 @@ export default function App() {
   }
 
   return (
-    // One boundary around the route tree, keyed on the path: a page that throws no longer blanks the
-    // app, and navigating away recovers without a reload.
+    <>
+    {/* Outside the boundary on purpose: when a route has crashed, the build you are looking at is
+        the first thing a bug report needs. */}
+    <BuildBadge />
+    {/* One boundary around the route tree, keyed on the path: a page that throws no longer blanks the
+        app, and navigating away recovers without a reload. */}
     <RouteErrorBoundary>
       <Routes>
       {/* DC admin portal */}
@@ -119,5 +124,6 @@ export default function App() {
       <Route path=":slug/a/:assetId" element={<ClientPortalPage />} />
       </Routes>
     </RouteErrorBoundary>
+    </>
   )
 }

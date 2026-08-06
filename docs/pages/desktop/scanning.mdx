@@ -1,6 +1,6 @@
 # Scanning and file selection
 
-The pipeline recursively searches the source tree for directories whose name case-insensitively equals the configured `outFolder` (default `[03] OUT`). Once an `OUT` exists at a level, traversal focuses on that publishing branch. Files inside nested folders below `OUT` are included, except the `versions` subtree, hidden entries, thumbnail names, excluded entries, and temporary Office files.
+The pipeline recursively searches the source tree for directories whose name case-insensitively equals the configured `outFolder` (default `[03] OUT`). Once an `OUT` exists at a level, traversal focuses on that publishing branch. Files inside nested folders below `OUT` are included, except the `versions` subtree, hidden entries, each folder's `thumbnails/` render artifacts, excluded entries, and temporary Office files.
 
 A publishable item must be a non-hidden file with a dot in its name and must not begin with `~$`. Names containing `[99]` are always skipped, as are names containing the configured `excludeMark` (default `⦰`) — anywhere in the name, on a file or on any folder along the path. Exclusion is the only filtering mode: everything not marked is in scope.
 

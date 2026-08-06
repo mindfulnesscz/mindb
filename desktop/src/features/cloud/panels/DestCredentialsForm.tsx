@@ -45,7 +45,8 @@ export function DestCredentialsForm({
   }
 
   async function pickFolder() {
-    const selected = await openDialog({ directory: true, multiple: false });
+    // recursive: grant the whole subtree, not just one level. See pipeline/FolderPicker for why.
+    const selected = await openDialog({ directory: true, multiple: false, recursive: true });
     if (selected) patchConfig({ path: selected as string } as Partial<LocalDestConfig>);
   }
 

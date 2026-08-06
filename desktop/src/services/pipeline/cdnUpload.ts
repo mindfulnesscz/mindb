@@ -15,7 +15,8 @@ import { stat, readTextFile } from '@tauri-apps/plugin-fs';
 import { invoke } from '@tauri-apps/api/core';
 import {
   filterHighestVersions, storageTarget, assetUrl, tierFor,
-  pageTarget, pagePrefix, pageObjectName, type AccessLevel, type ObjectKind,
+  pageTarget, pagePrefix, pageObjectName, thumbPathFor, pagesDirFor, pagesManifestPath,
+  type AccessLevel, type ObjectKind,
 } from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
 import { cdnStemKey } from '../supabaseService';
@@ -209,8 +210,10 @@ export async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<vo
   const thumbFiles = cdnAssets.map(srcPath => {
     const fileName = srcPath.split('/').pop()!;
     const stem     = fileName.substring(0, fileName.lastIndexOf('.'));
-    const dir      = srcPath.substring(0, srcPath.lastIndexOf('/') + 1);
-    return { thumbPath: `${dir}${stem}-thumb.webp`, stem, srcPath };
+    const dir      = srcPath.substring(0, srcPath.lastIndexOf('/'));
+    // A CONSTRUCTED read path, not a discovered one — which is why moving the artifacts locally
+    // costs two lines here and nothing at all on R2, where keys come from folder identity.
+    return { thumbPath: thumbPathFor(dir, stem), stem, srcPath };
   });
 
   if (!thumbFiles.length) {
@@ -385,7 +388,7 @@ export async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<vo
 /** What the local renderer left behind for one document, read from its manifest. */
 async function readPagesManifest(pagesDir: string): Promise<{ rendered: number; total: number } | null> {
   try {
-    const raw = await readTextFile(`${pagesDir}/pages.json`);
+    const raw = await readTextFile(pagesManifestPath(pagesDir));
     const m = JSON.parse(raw) as { rendered?: number; total?: number };
     if (typeof m.rendered !== 'number' || typeof m.total !== 'number') return null;
     return { rendered: m.rendered, total: m.total };
@@ -414,8 +417,8 @@ export async function runPagesUpload(ctx: RunContext, stats: RunStats): Promise<
     const fileName = srcPath.split('/').pop()!;
     if (!PAGE_PREVIEW_EXTS.has(extensionOf(fileName))) continue;
     const stem = fileName.slice(0, fileName.lastIndexOf('.'));
-    const dir = srcPath.slice(0, srcPath.lastIndexOf('/') + 1);
-    const pagesDir = `${dir}${stem}-thumb`;
+    const dir = srcPath.slice(0, srcPath.lastIndexOf('/'));
+    const pagesDir = pagesDirFor(dir, stem);
     const manifest = await readPagesManifest(pagesDir);
     if (manifest && manifest.rendered > 0) {
       docs.push({ srcPath, pagesDir, rendered: manifest.rendered });

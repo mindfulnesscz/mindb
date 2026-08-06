@@ -97,6 +97,21 @@ Deno.serve(async (req) => {
   let moved = 0, skipped = 0, failed = 0, reflagged = 0;
   const done: string[] = [];
 
+  /* ── Why an asset failed, per asset ───────────────────────────────────────────
+     A bare `2 failed` sent the operator to the Supabase dashboard's function logs, which is the one
+     place a desktop user cannot reach mid-run — so a reconcile failure was effectively undiagnosable
+     from where it was noticed. The causes are genuinely different (an unset CF_STREAM_TOKEN, a
+     source object already deleted, an unservable key) and want different responses, so the reason
+     travels back with the response and into `cdn_move_queue.last_error` instead of only to stderr. */
+  type FailureStage = 'thumbnail_url' | 'download_url' | 'stream' | 'page' | 'database';
+  interface ReconcileFailure { asset_id: string; stage: FailureStage; reason: string }
+  const failures: ReconcileFailure[] = [];
+  const fail = (asset_id: string, stage: FailureStage, reason: string) => {
+    failed++;
+    failures.push({ asset_id, stage, reason });
+    console.error(`${asset_id} ${stage}: ${reason}`);
+  };
+
   /* ── Video protection follows the level too ───────────────────────────────────
      A gated video is protected by Stream's `requireSignedURLs`, set per video through Cloudflare's
      API. So the access level is baked into the delivery object here exactly as it is baked into an
@@ -104,16 +119,16 @@ Deno.serve(async (req) => {
      to anyone holding the uid. Cheaper than the R2 case — one call, no bytes move — and this queue
      already knows precisely which assets changed level.
 
-     Returns false on any failure so the asset stays queued and is retried. Never silently true:
-     "we could not tell whether that video is protected" must not be recorded as reconciled. */
+     Returns a REASON on any failure so the asset stays queued and is retried, and so the caller can
+     say which of these it hit. Null means reconciled; "we could not tell whether that video is
+     protected" must never be recorded as reconciled. */
   const streamToken = env('CF_STREAM_TOKEN');
-  async function reconcileStreamFlag(uid: string, wantSigned: boolean): Promise<boolean> {
+  async function reconcileStreamFlag(uid: string, wantSigned: boolean): Promise<string | null> {
     /* Absent token with a video to protect is a failure, not a skip. Making it a hard 503 for the
        whole function instead would stop image re-keying working on any project that has not set
        the secret yet, which is a bigger outage for a smaller problem. */
     if (!streamToken) {
-      console.error(`CF_STREAM_TOKEN not set — cannot verify protection of stream video ${uid}`);
-      return false;
+      return `stream token not configured for this environment — set CF_STREAM_TOKEN to protect video ${uid}`;
     }
     const api = `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${uid}`;
     const headers = { Authorization: `Bearer ${streamToken}`, 'Content-Type': 'application/json' };
@@ -122,12 +137,11 @@ Deno.serve(async (req) => {
     if (current.status === 404) {
       // The row points at a video that no longer exists. Not this function's job to repair, but it
       // must not be reported as protected.
-      console.error(`stream video ${uid} is gone; row still references it`);
-      return false;
+      return `stream video ${uid} no longer exists, but the row still references it`;
     }
     const currentBody = await current.json().catch(() => null);
-    if (!current.ok) { console.error(`stream GET ${uid}: ${current.status}`); return false; }
-    if (currentBody?.result?.requireSignedURLs === wantSigned) return true;
+    if (!current.ok) return `stream API rejected the read for ${uid} (HTTP ${current.status})`;
+    if (currentBody?.result?.requireSignedURLs === wantSigned) return null;
 
     const set = await fetch(api, {
       method: 'POST', headers, body: JSON.stringify({ requireSignedURLs: wantSigned }),
@@ -136,11 +150,10 @@ Deno.serve(async (req) => {
     // Read the flag back rather than trusting the status. A 200 that did not apply the change is
     // exactly the behaviour the creation API has, and it is what makes this whole check necessary.
     if (!set.ok || setBody?.result?.requireSignedURLs !== wantSigned) {
-      console.error(`could not set requireSignedURLs=${wantSigned} on ${uid}: ${set.status}`);
-      return false;
+      return `could not set requireSignedURLs=${wantSigned} on video ${uid} (HTTP ${set.status})`;
     }
     reflagged++;
-    return true;
+    return null;
   }
 
   for (const a of assets ?? []) {
@@ -169,8 +182,8 @@ Deno.serve(async (req) => {
 
       if (currentTier === targetTier && key === targetKey) { skipped++; continue; }
       if (targetTier === 'gated' && !GATED_KEY_SHAPE.test(targetKey)) {
-        failed++; assetFailed = true;
-        console.error(`unservable key refused: ${targetKey}`);
+        fail(a.id, column, `refused to write an unservable key the gate cannot parse: ${targetKey}`);
+        assetFailed = true;
         continue;
       }
 
@@ -180,8 +193,8 @@ Deno.serve(async (req) => {
         { creds: creds[targetTier], bucket: bucketOf(targetTier), key: targetKey },
       );
       if (!result.ok) {
-        failed++; assetFailed = true;
-        console.error(`${a.id} ${column}: ${result.reason}`);
+        fail(a.id, column, `copy ${key} → ${targetKey} failed: ${result.reason}`);
+        assetFailed = true;
         continue;
       }
       patch[column] = assetUrl(domainOf(targetTier), targetKey, result.sha256);
@@ -191,8 +204,9 @@ Deno.serve(async (req) => {
     /* Video protection first: it is one cheap API call and it is the security-critical half. Putting
        it after the page work meant a page failure could keep the asset queued forever while its
        video kept serving at the wrong protection — see the note below. */
-    if (a.stream_uid && !(await reconcileStreamFlag(a.stream_uid, tierFor(level) !== 'public'))) {
-      failed++; assetFailed = true;
+    if (a.stream_uid) {
+      const reason = await reconcileStreamFlag(a.stream_uid, tierFor(level) !== 'public');
+      if (reason) { fail(a.id, 'stream', reason); assetFailed = true; }
     }
 
     /* ── Per-page document previews ────────────────────────────────────────
@@ -221,8 +235,8 @@ Deno.serve(async (req) => {
     for (const mv of planPageMoves(level, a.client_id, a.stable_id, a.child_id,
                                    a.preview_page_count ?? 0)) {
       if (mv.targetTier === 'gated' && !GATED_KEY_SHAPE.test(mv.targetKey)) {
-        failed++; assetFailed = true;
-        console.error(`unservable page key refused: ${mv.targetKey}`);
+        fail(a.id, 'page', `refused to write an unservable page key: ${mv.targetKey}`);
+        assetFailed = true;
         continue;
       }
 
@@ -235,8 +249,8 @@ Deno.serve(async (req) => {
          so three misses per page are expected. Counting those as failures is what jammed the queue. */
       if (!result.ok) {
         if (result.reason !== 'source missing') {
-          failed++; assetFailed = true;
-          console.error(`${a.id} page ${mv.sourceKey}: ${result.reason}`);
+          fail(a.id, 'page', `copy ${mv.sourceKey} → ${mv.targetKey} failed: ${result.reason}`);
+          assetFailed = true;
         }
         continue;
       }
@@ -246,14 +260,18 @@ Deno.serve(async (req) => {
       if (!del.ok && del.status !== 404) {
         // The copy succeeded so the portal is already correct; the stale WIDER copy surviving is the
         // security problem, so it is worth reporting and retrying.
-        failed++; assetFailed = true;
-        console.error(`${a.id} page ${mv.sourceKey}: delete of superseded object failed ${del.status}`);
+        fail(a.id, 'page',
+          `copied to ${mv.targetKey} but could not delete the wider original ${mv.sourceKey} (HTTP ${del.status})`);
+        assetFailed = true;
       }
     }
 
     if (Object.keys(patch).length) {
       const { error } = await db.from('assets').update(patch).eq('id', a.id);
-      if (error) { failed++; assetFailed = true; }
+      if (error) {
+        fail(a.id, 'database', `bytes moved but the row could not be repointed: ${error.message}`);
+        assetFailed = true;
+      }
     }
     // Thumbnail/original sources stay in place so the move remains reversible by repointing the
     // URLs. The next desktop upload touching this identity now sweeps both namespaces across all
@@ -264,13 +282,19 @@ Deno.serve(async (req) => {
   }
 
   if (done.length) await db.from('cdn_move_queue').delete().in('asset_id', done);
-  // A failed asset stays queued, with the reason, so the next call retries it rather than losing it.
+
+  /* A failed asset stays queued WITH ITS REASON, so the next call retries it rather than losing it —
+     and so someone reading the table later can see why without correlating timestamps against
+     function logs. Written per asset rather than as one bulk update, because the reasons differ;
+     bounded by BATCH, so this is at most 25 statements. */
   const stuck = (assets ?? []).map(a => a.id).filter(id => !done.includes(id));
-  if (stuck.length) {
+  for (const id of stuck) {
+    const reason = failures.find(f => f.asset_id === id);
     await db.from('cdn_move_queue')
-      .update({ attempts: 1, last_error: 'see function logs' }).in('asset_id', stuck);
+      .update({ attempts: 1, last_error: reason ? `${reason.stage}: ${reason.reason}` : 'unknown' })
+      .eq('asset_id', id);
   }
 
   const { count } = await db.from('cdn_move_queue').select('*', { count: 'exact', head: true });
-  return json(200, { moved, skipped, failed, reflagged, remaining: count ?? 0 });
+  return json(200, { moved, skipped, failed, reflagged, remaining: count ?? 0, failures });
 });

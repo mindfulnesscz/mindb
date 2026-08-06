@@ -5,6 +5,255 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [3.2.2] — 2026-08-06
+
+A hotfix for 3.2.1, which could not run a pipeline at all on a fresh install — and, alongside it, the
+reason the app appeared to hang for the whole render phase, and a taxonomy export that could not be
+imported back. It also cleans up what a client actually sees: render artifacts move out of the OUT
+folder into one `thumbnails/` folder, and page previews stop leaking into local exports.
+
+**Deployment**
+
+- **This release carries a migration and will not be complete without it.**
+  `20260806210000_tags_no_self_parent` repairs any `tags` row where `parent_id = id` and then adds
+  the constraint that prevents it. Apply with `supabase migration up` — pending migrations only,
+  never a reset — local → staging → production. Until it runs, an affected client's taxonomy export
+  still needs repairing by hand before it will import.
+- **The first run also migrates artifacts on disk**, moving each OUT folder's loose thumbnails,
+  previews and render caches into a `thumbnails/` folder beside them. It is automatic, needs no
+  operator action, and is a move rather than a regenerate — nothing re-renders and no CDN object
+  changes. It is reported in the run log as `⇄ artifact layout: N moved into thumbnails/`.
+- **Re-run any local export destination after upgrading.** Targets published by an earlier build may
+  hold page-preview folders that should never have been delivered (see below); the reconcile pass
+  disconnects them on the next publish.
+- No environment variables or secrets change.
+
+### Fixed
+
+- **A failed sign-in signed you in as the previous user of that browser.** An OAuth denial, an expired
+  magic link, or a `?code=` whose exchange was refused produced no error and no signed-out state — the
+  portal rendered the session already in `localStorage`, with that user's tenant, assets, and role. At
+  the UI it is indistinguishable from a cross-tenant leak.
+
+  Three things composed into it. supabase-js keeps an existing session when a URL login fails, on
+  purpose ("a failed attempt shouldn't invalidate a valid session"), and reports the failure only as
+  the resolved value of an internal promise — no throw, no `onAuthStateChange`. Its PKCE detection
+  also requires a stored code-verifier *alongside* the `?code=`, so a return into a browser that lost
+  the verifier was not classified as a callback at all and fell through to "restore from storage". And
+  the two components that did parse `error=` out of the URL — `AdminSignIn`, `ClientPortalPage` — do
+  not render when a session was restored, so the one case that mattered was the one case they missed.
+
+  The return is now resolved in one place, `web/apps/client-hub/src/lib/authReturn.ts`, called by
+  `AuthProvider` before any persisted session is trusted: the portal client is built with
+  `detectSessionInUrl: false`, the `?code=` is exchanged explicitly, and any failure drops the local
+  token and surfaces as `AuthContext.authError`. The sign-in surfaces render that one value and no
+  longer read `window.location`. Provider sign-in also drops the existing local token before
+  redirecting. URL cleanup keeps the query and strips only an auth hash, so a filtered `redirectTo`
+  still survives an expired link. See [Authentication → Returning from a
+  redirect](docs/pages/auth.mdx).
+
+- **A tag could become its own parent, which made the client's taxonomy un-importable.** Exporting a
+  client's taxonomy produced a file the portal's own importer refused — `node "format.document"
+  cannot parent itself`, followed by `cycle detected` for every node beneath it. The export was
+  faithful; three `tags` rows carried `parent_id = id`.
+
+  The desktop sync resolves a parent group by **name** (`dimension::name`) in one pass and finds the
+  row to update by **key or shortcode** in another. Nothing connected the two, so both could land on
+  the same row — a keyed, shortcode-less group whose name is also the leaf's `parentGroup` — and the
+  sync patched that row to be its own parent.
+
+  That path is reproduced in a test that fails against the old code, but it is not proven to be how
+  the reported rows got that way: their stored `key` is null, so the lookup above could not have
+  matched them. Some other writer, or an older build, produced them. That is why the database
+  constraint matters more than either code guard — it is the one that closes a path nobody has
+  identified yet.
+
+  Refused in three places now, because the symptom appeared so far from the cause: the sync leaves
+  the tag ungrouped and says so in the run log; the exporter emits `parent_key: null` and warns which
+  rows still need fixing, so a corrupt database can no longer produce an unusable file; and
+  `tags_parent_id_not_self` rejects it in the database, including via a manual edit. The migration
+  repairs existing rows before adding the constraint. Deeper cycles (`a → b → a`) remain a write-path
+  and validator concern — a `CHECK` sees only one row — and an export now breaks such a cycle rather
+  than shipping a file that cannot be re-imported. See
+  [Taxonomy](docs/pages/data-model/taxonomy.mdx).
+
+- **The window froze for the entire render phase, and the 8-way concurrency never happened.** Every
+  blocking Tauri command was declared synchronous, and Tauri v2 runs a command without the `async`
+  keyword *on the main thread* unless it is declared `#[tauri::command(async)]`. The main thread
+  drives the OS event loop, so `generate_document_previews`, `generate_thumbnail`, `file_md5` and
+  `files_equal` each held the UI hostage for as long as they ran — up to ~6.4s per Office document,
+  and on macOS a spinning beachball with a window that would not repaint when another window
+  uncovered it.
+
+  The second half is the one that does not show up as a symptom: the pipeline dispatches these eight
+  at a time, but sync commands serialise onto that single thread, so the batching bought nothing and
+  the freezes were cumulative rather than concurrent. The worker pool's measured 8-way throughput
+  (86 pages/s single-page, 233 multi-page) was never actually being realised in the app. Declaring
+  the four commands `#[tauri::command(async)]` moves them to worker threads with no change to any
+  body or call site — the frontend already awaits every `invoke`. The trivial commands (keychain,
+  reveal) stay synchronous on purpose.
+
+- **LibreOffice claimed a Dock tile partway through a run.** `--headless` suppresses document
+  *windows* but does not stop LibreOffice initialising AppKit and registering with LaunchServices,
+  and because the app ships a full nested `LibreOffice.app`, macOS was willing to give it a tile.
+  Conversions now pass the rest of the standard headless set — `--invisible --nodefault --nologo
+  --nolockcheck` alongside the existing `--headless --norestore` and the private
+  `-env:UserInstallation` profile.
+
+  The obvious alternative is recorded as a prohibition rather than an option: setting `LSUIElement`
+  or `LSBackgroundOnly` in the nested bundle's `Info.plist` breaks the sealed signature `ditto`
+  preserves, which notarisation requires. Flags are the only lever.
+
+- **A hung conversion blocked the whole run, forever.** Both subprocesses — the LibreOffice
+  conversion and the PDFium render worker — called `Command::output()`, which has no deadline, so a
+  wedged profile, a first-run prompt or a Gatekeeper check on an unsigned build parked a pipeline
+  worker slot indefinitely. Even after the threading fix above, that stalls the run. Both now go
+  through a 60s deadline (~10x the measured ~6.4s conversion) that kills the child and reports which
+  file and which step timed out; the pipeline already isolates per-file errors, so one bad document
+  fails that document and the run continues.
+
+- **A build with no bundled LibreOffice now fails loudly instead of borrowing the host's.** Engine
+  resolution was `bundled → PATH → /Applications`. The order was right, but the failure mode was
+  not: a bundle produced by a bare `tauri build` instead of `npm run build:app` — which places
+  LibreOffice with `ditto`, because Tauri's `bundle.resources` dereferences symlinks and breaks the
+  sealed signature — kept working on every machine that happened to have LibreOffice installed, which
+  is every dev machine and the CI runner, and failed only on a client's.
+
+  On macOS and Windows, a release build now uses the bundled engine or errors with the expected path
+  and `npm run build:app`. Host fallbacks survive only where they are legitimate: Linux, where
+  LibreOffice is a declared `deb`/`rpm` dependency, and `tauri dev`, gated on `cfg!(debug_assertions)`
+  so it cannot exist in a shipped build. Two checks keep the guarantee honest —
+  `scripts/package-desktop.mjs` asserts the placed `soffice` is present and executable **in the
+  finished `.app`** after `ditto`, and the release workflow repeats the assertion on the artifacts it
+  is about to publish. See
+  [Third-party engines](docs/pages/reference/third-party-engines.mdx).
+
+- **Native commands refused every real working folder.** A fresh 3.2.1 install failed each asset with
+  `Refusing <x> outside Sotto's approved working directories`, and a run ended in hundreds of errors
+  across thumbnails, CDN upload and collect. Two independent causes, both introduced with the S5
+  command-surface hardening:
+  - The folder pickers called `open({ directory: true })` without `recursive`, so Tauri granted only
+    the picked folder and its immediate children. Every asset lives deeper than that — a source
+    folder nests project / shoot / `OUT` — so the grant never covered the files the pipeline touches.
+  - `path_policy` read the persisted working directories **only at startup**. On a fresh install the
+    configuration is written afterwards, as clients are set up, so at boot there was nothing to grant
+    and every native command refused for the rest of the session. The grants are now re-read once on
+    a scope miss before refusing.
+
+  The boundary itself is unchanged: roots still come only from Rust reading the machine-local
+  configuration or from a folder the user picked, never from an IPC argument.
+
+- **The filesystem capability is a deliberate scope again**, replacing 3.2.1's machine-wide `**`
+  stopgap: `$HOME/**` + `/Volumes/**` + `$APPDATA/**`, declared once through `fs:scope` (the plugin
+  unions the global scope with each command scope, so one declaration covers every command).
+  `requireLiteralLeadingDot: false` stays in the fs plugin config — the plugin reads it only from
+  there, it defaults to true on unix, and without it the globs stop matching `.dchub.json`.
+
+  Note these are two independent mechanisms: `tauri-plugin-fs` seeds its runtime scope from
+  `FsScope::default()` — empty — so capability globs are invisible to `path_policy` and vice versa.
+  Changing one never fixes the other, which is why 3.2.1's `**` did not help the native commands.
+
+- **A document's page previews were published to local export targets.** In the `folders` layout,
+  the publish walk applied its artifact filter to files but recursed into every subdirectory
+  unconditionally — so a `<stem>-thumb/` previews folder was descended into and its `001.webp`,
+  `002.webp` … copied into the client's folder as deliverables. The page files are the one artifact
+  with no marker in their names, which is exactly why a filename filter never caught them, and
+  nothing downstream did either.
+
+  The exclusion is now applied to the directory entry *before* the descent, in both `publishDir` and
+  `publishFolder`. Targets published by an earlier build keep the stale folder until the next
+  publish reconciles it — see Deployment above.
+
+- **Reconcile failures say why.** `cdn-reconcile` returns `failures[]` of `{asset_id, stage, reason}`
+  and writes the same reason to `cdn_move_queue.last_error`; the desktop prints them as warnings
+  under the run summary instead of the opaque `⟳ 0 moved · 2 failed`. Identical reasons are grouped,
+  because one unset secret fails every video in the batch. An unset `CF_STREAM_TOKEN` now reads as
+  "stream token not configured for this environment" rather than a bare failure.
+
+### Changed
+
+- **A delivered OUT folder now shows deliverables, not machinery.** Every render artifact moved into
+  one `thumbnails/` folder beside the files it serves — `OUT/thumbnails/` for the files directly
+  under OUT, and the gallery's own folder for gallery children. A document's title thumbnail joins
+  the other thumbnails instead of getting a folder of its own; only the per-page previews keep a
+  subfolder, inside `thumbnails/`, because they really are a set. The `.json` render caches are
+  dot-prefixed. A three-image OUT folder goes from nine visible entries to four; a deck's gallery
+  from seven to three.
+
+  Two consequences worth stating plainly. **Location, not naming, now decides what is an artifact**:
+  the exclusion applies to the `thumbnails/` folder as a unit, which is the first version of this
+  rule that covers the page files — they are called `001.webp` and carry no marker, so a filter
+  applied to filenames alone never caught them. And the rule lives in exactly one place
+  (`packages/domain/src/artifactLayout.ts`), instead of the eight ad-hoc `-thumb` substring tests it
+  replaces, one of which was always going to be the one someone forgot.
+
+  Migration is automatic and free. An existing library is moved in place at the start of the render
+  stage: the manifests travel with the artifacts they describe, so **nothing re-renders** (~6.4s per
+  Office document saved across the library), and R2 keys are derived from folder identity rather
+  than a local path, so **no object moves and nothing orphans**. `-thumb` deliberately stays in the
+  thumbnail filenames as a safety net for libraries that have not run yet.
+
+  The hidden manifests use a leading dot, which macOS and Linux honour and **Windows does not** —
+  Windows needs `FILE_ATTRIBUTE_HIDDEN`. Sotto ships macOS only, so that attribute is not set; the
+  one place to set it is where the manifests are written in `render.rs`.
+
+  `render::validate_preview_area` — the guard in front of `remove_dir_all`, running in both the
+  Tauri command and the one-shot PDFium worker — was rewritten for the new layout and is stricter
+  than a location test: both outputs are computed from the source path and compared exactly, so a
+  sibling inside the *same* `thumbnails/` folder is refused too.
+
+### Added
+
+- **A destination-boundary test.** Local publish (both layouts), the package mirror and cloud export
+  are each handed an OUT folder holding every artifact shape at once — current layout, legacy
+  layout, page previews, hidden caches — and must deliver exactly the assets. `cloudExport` now
+  filters explicitly rather than inheriting a filtered list; it had no test of its own and was clean
+  only because its input happened to arrive pre-filtered.
+
+- **Regression coverage for the bugs above**: the prune guard's four decisions for thumbnails and
+  originals (red against the pre-fix behaviour), the `path_policy` re-read, the fs capability's
+  shape, and an out-of-appdata pipeline smoke test that runs scan → identity → thumbnail → CDN
+  upload against a **real** temp directory via the new `realFs` harness — the shape of path the
+  in-memory `vfs` cannot represent, and the one 3.2.1 broke.
+
+- **Build badge in both apps**, so which build and which backend is never a guess. The desktop shows
+  the active environment and version in the nav rail; the portal pins the same pair to the corner —
+  always for staff, and for everyone whenever the backend is not production. The portal derives its
+  label from the Supabase project ref rather than a separate env var, so the badge cannot disagree
+  with the backend it describes. See
+  [which build am I looking at](docs/pages/reference/versioning.mdx).
+
+### Documentation
+
+- [Desktop native security](docs/pages/desktop/native-security.mdx) **dropped a claim that was no
+  longer true.** It stated the filesystem capability "contains no repository-wide or machine-wide
+  `**` rule" while 3.2.1 shipped exactly that on ten permissions. It now describes the real scope,
+  and separates the two independent mechanisms that made the regression so hard to read.
+- [Access levels](docs/pages/cloud-storage/access-levels.mdx) and
+  [Video](docs/pages/cloud-storage/video.mdx) document what a reconcile failure reports, and why an
+  environment can run for months before an unset `CF_STREAM_TOKEN` surfaces.
+- [Testing](docs/pages/reference/testing.mdx) documents `realFs` — and, as importantly, what it
+  cannot prove: Tauri's capability scope and `path_policy` do not exist under vitest, so the
+  end-to-end check is still a packaged build on a clean profile.
+- [Thumbnails](docs/pages/desktop/thumbnails.mdx) explains why the measured 8-way throughput was
+  never realised in the app before 3.2.2, and states the rule that keeps it: a blocking command must
+  be `#[tauri::command(async)]`, and `async fn` is not an equivalent fix.
+- [Third-party engines](docs/pages/reference/third-party-engines.mdx) documents the mandatory-bundled
+  rule and its two packaging assertions, the headless flag set and why `Info.plist` is not an
+  alternative, and the subprocess deadline.
+- [Thumbnails](docs/pages/desktop/thumbnails.mdx) **corrected its resolution precedence**, which
+  still described the unconditional `bundled → PATH → vendor install` chain, and now names the flag
+  set and the deadline alongside it.
+- [Troubleshooting](docs/pages/operations/troubleshooting.mdx) gains entries for the freeze, the two
+  newly diagnosable failures, and reading the build badge first — and **corrects advice that had
+  become actively wrong**: "install LibreOffice, Poppler, and WebP tools" predated in-process Rust
+  rendering with bundled engines, and a host install is now deliberately ignored, so following it
+  cost time and changed nothing. Replaced with the messages a person actually sees, plus the Linux
+  exception where LibreOffice genuinely is a package dependency.
+- [Versioning](docs/pages/reference/versioning.mdx) is the home for "which build am I looking at",
+  and [File layout](docs/pages/reference/file-layout.mdx) lists `realFs` and `lib/buildInfo`.
+
+
 ## [3.2.1] — 2026-08-06
 
 A security and correctness release. An external audit produced 42 findings; this closes all of them,

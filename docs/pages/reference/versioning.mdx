@@ -8,6 +8,36 @@ listed below keep their own package versions.
 
 Desktop, web, schema, and documentation evolve as one product. A shared version makes a release tag identify one compatible snapshot and prevents the previous situation where Git, npm, Cargo, Tauri, and the changelog all reported different values.
 
+## Which build am I looking at?
+
+Both apps display their version and the backend they are talking to, because the version alone does
+not identify a session: a 3.2.2 desktop build can point at staging, and two browser tabs can be on
+different deployments. Getting this wrong means running a pipeline against the wrong Supabase
+project, so neither app makes you go looking.
+
+| Where | Shows | Source |
+|---|---|---|
+| Desktop | Active environment name + version, in the nav rail | The active environment, read at runtime — the desktop switches environments without restarting |
+| Portal | `<Environment> · v<version>`, pinned bottom-left | Derived from the Supabase project ref in the URL the app is actually using |
+
+Both are `__APP_VERSION__`, injected by each app's Vite config from `package.json` — so the badge
+cannot disagree with the release version.
+
+**Production is quiet; anything else is loud.** A non-production backend renders in amber (staging or
+an unrecognised project) or blue (a local stack), because "I thought I was on production" is the
+mistake worth interrupting. In the portal the badge is visible to staff at all times, and to
+*everyone* when the backend is not production — a client looking at a staging deploy is worth making
+obvious to whoever is nearby, while a build stamp on a real client's gallery is just noise.
+
+**The portal's label is derived, not configured.** It comes from the Supabase project ref, not a
+`VITE_APP_ENV`. An env-name variable is a second thing to set per deployment and its failure mode is
+backwards: forget it and production reads "unknown"; worse, a staging deploy inherits a stale
+"production" and reassures you about the one thing you were checking. The Supabase URL is already
+correct per environment because nothing works if it is wrong. An unrecognised ref renders the ref
+itself and is never labelled production. See `web/apps/client-hub/src/lib/buildInfo.ts`.
+
+Hover either badge for the full backend URL.
+
 ## Commands
 
 Run version commands only from the repository root:

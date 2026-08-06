@@ -45,10 +45,14 @@ export function clearConfig(): void {
 function makeClient(): SottoClient | null {
   const { url, anonKey } = getConfig()
   if (!url || !anonKey) return null
-  // Browser flow: detectSessionInUrl exchanges the post-redirect `?code=` on
-  // load. Shared PKCE defaults (and the code-verifier same-browser caveat) live
-  // in createAuthClient.
-  return createAuthClient({ url, anonKey }, { detectSessionInUrl: true })
+  /* detectSessionInUrl is OFF deliberately — do not turn it back on. It exchanges the post-redirect
+     `?code=` before any of our code runs and reports a *failed* exchange only as the resolved value
+     of an internal promise, while keeping the previous session in storage. That is how a failed
+     sign-in became "you are looking at the last user's account".
+     `lib/authReturn.ts` owns the return instead, and the two must stay in step: with both enabled,
+     whichever runs first spends the code and the other fails on an empty verifier. Shared PKCE
+     defaults (and the code-verifier same-browser caveat) live in createAuthClient. */
+  return createAuthClient({ url, anonKey }, { detectSessionInUrl: false })
 }
 
 // Singleton — never reassigned; a config save reloads the page, which rebuilds it.

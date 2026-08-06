@@ -4,7 +4,7 @@
 
 The collect/distribute stage finds package folders by `packagePrefix` only (e.g. `📦`). Migrated `Name __hash` asset folders are not anchors.
 
-For each package it collects the **highest version only** from every `OUT` under the package’s parent tree (siblings and nested assets), then hard-mirrors those files into the package. Orphans and thumbnails are deleted from the package (never `🚫`-disconnected). Other package folders are not walked, so anchors don’t pull from each other.
+For each package it collects the **highest version only** from every `OUT` under the package’s parent tree (siblings and nested assets), then hard-mirrors those files into the package. Orphans and render artifacts are deleted from the package (never `🚫`-disconnected); a `thumbnails/` folder that somehow reached one is removed as a unit, directory included. Other package folders are not walked, so anchors don’t pull from each other.
 
 ## Local target publishing
 

@@ -4,7 +4,21 @@ The portal offers **OAuth sign-in (Microsoft, Google, GitHub)** plus an **email 
 
 ## OAuth providers
 
-The portal sign-in shows **Continue with Microsoft / Google / GitHub** above the email option. Provisioning is identical to the email path: OAuth returns the user's verified email, so the domain-whitelist trigger below still maps them to a client and role. A first-time OAuth user on a non-whitelisted domain lands as `public` and is assigned by an admin. Neither OAuth nor magic-link signup uses portal `client_id` metadata for access; whitelist matching is by verified email domain.
+The portal sign-in shows **Continue with Microsoft / Google / GitHub** above the email option. Provisioning is identical to the email path: OAuth returns the user's verified email, so on the sign-in that **creates** the user the domain-whitelist trigger below maps them to a client and role. A first-time OAuth user on a non-whitelisted domain lands as `public` and is assigned by an admin. Neither OAuth nor magic-link signup uses portal `client_id` metadata for access; whitelist matching is by verified email domain.
+
+### One user, many identities
+
+**A verified email identifies a person, not a provider.** GoTrue links a new OAuth identity to an *existing* user whenever the provider returns a verified email that already belongs to one — same `user.id`, so the same `profiles` row, `role`, and `client_id`. Sign in with Google, then with GitHub on an account whose primary verified address is the same, and you land on one user carrying two identities.
+
+Three consequences worth having in writing:
+
+- **`handle_new_user` is first-sign-in-only.** It runs on user *creation*. A second provider linking into an existing user does not re-run it, so it cannot change their role or tenant. **The provider someone signs in with does not determine their tenant — the provider that first created them does.** A user created through a non-whitelisted route stays `public` no matter how many times they later sign in from a whitelisted domain.
+- **There is no toggle for this on hosted Supabase.** It is intended GoTrue behaviour. (`enable_manual_linking` is a *different* feature — the manual `linkIdentity` API — and turning it on or off does not affect automatic linking.)
+- **For support:** "I signed in with the wrong provider and got someone else's account" is almost always one user with two identities, not two users. Check **Authentication → Users →** the user's **Identities** before looking for a cross-tenant bug.
+
+> **⛔ Do not exercise providers against production.** Testing a second provider against a live project is how you create a user that then absorbs the next real sign-in on that address — including a client's. Test on **staging** (`tvrxnwbhzborkkkdeyuk`), with a **distinct email per provider** so nothing links. A GitHub account in particular often has a university address as its primary verified one (the Student Developer Pack requires it), and GoTrue takes the primary verified address, not the one you expect.
+
+Linked identities are visible only in the Supabase dashboard today; the admin **Users** table shows email and role.
 
 The Supabase callback URL is the redirect URI for every provider. It is **one per Supabase project**, so there are three — local, staging, production — and none of them is a portal domain:
 
@@ -168,6 +182,21 @@ If the confirmation route has a production problem, restore the previous hosted 
 **before** rolling back the portal. That temporarily restores direct Supabase confirmation links (and
 their scanner limitation), but it prevents newly issued emails from pointing to a route that no longer
 exists. The local template changes only when the local Auth stack is restarted.
+
+## Returning from a redirect
+
+Every redirect back into the portal — OAuth callback or magic link — is resolved in **one** place: `web/apps/client-hub/src/lib/authReturn.ts`, called by `AuthProvider` **before any persisted session is trusted**. It classifies the URL, exchanges a `?code=` explicitly, and on any failure calls `signOut({ scope: 'local' })` so the message reaches the sign-in surface as `AuthContext.authError`.
+
+Two rules keep it correct. Both were learned the hard way; a change that breaks either is a silent wrong-user bug, not a cosmetic one.
+
+- **`detectSessionInUrl` stays `false` on the portal client.** supabase-js deliberately keeps an existing session when a URL login fails ("a failed attempt shouldn't invalidate a valid session") and reports the failure only as the resolved value of an internal promise — no throw, no `onAuthStateChange`. Its PKCE detection also requires a stored code-verifier alongside the `?code=`, so a return into a browser that has lost the verifier is not even *classified* as a callback and falls straight through to "restore the session from storage". Combined with a previous user's token still in `sb-<ref>-auth-token`, a failed sign-in rendered the portal as **that** user, with their tenant, assets, and role, and no error anywhere. Turning the flag back on also races the explicit exchange: whichever runs first spends the code and the other fails on an empty verifier.
+- **Components do not parse the URL.** `AdminSignIn`, `SignInModal`, and `ClientPortalPage` render `authError`; none of them reads `window.location`. Reading it in a leaf component is what hid the failure: those components do not render when a session was restored, which is exactly the case that mattered.
+
+URL cleanup keeps the **query** and strips only an **auth hash**. The gallery's filters live in the query and `redirectTo` carries the filtered URL, so dropping the search would wipe the view the recipient was being sent back to. Note that `type` is a *filter* param (`FILTER_PARAMS.entityTypes`) and is deliberately not treated as an auth param.
+
+Sign-in with a provider also drops any existing local token **before** redirecting, so a deliberate re-auth can never resolve backwards to the previous user.
+
+Regression coverage: `src/lib/authReturn.test.ts` (parsing, URL cleanup, exchange outcomes) and `src/context/AuthContext.authReturn.test.tsx` (a stale session plus a provider denial, and a stale session plus a refused `?code=` exchange, each asserting the sign-in surface renders and the previous user's email does not).
 
 ## Sign-in flow
 

@@ -9,6 +9,7 @@ import {
   type OAuthProvider,
 } from '@sotto/auth'
 import { supabase, isConfigured, getConfig } from '../lib/supabase'
+import { resolveAuthReturn } from '../lib/authReturn'
 import { configureErrorSink } from '../lib/reportError'
 import { configureSessionEndedHandler } from '../lib/edgeFunction'
 import { useCdnCookie } from '../hooks/useCdnCookie'
@@ -22,6 +23,10 @@ interface AuthContextValue {
   session: Session | null
   profile: ProfileRow | null
   loading: boolean
+  /** Why the last auth return failed, for whichever sign-in surface is on screen. One source: the
+   *  sign-in components read it, they do not parse the URL themselves. */
+  authError: string | null
+  clearAuthError: () => void
   checkEmail: (email: string) => Promise<EmailAuthType>
   sendMagicLink: (email: string, userData?: Record<string, string>, redirectTo?: string) => Promise<string | null>
   signInWithProvider: (provider: OAuthProvider, redirectTo?: string) => Promise<string | null>
@@ -52,6 +57,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [session?.user.id])
   const [profile, setProfile] = useState<ProfileRow | null>(null)
   const [loading, setLoading] = useState(configured)
+  const [authError, setAuthError] = useState<string | null>(null)
 
   /* Gated thumbnails and downloads are served by the cdn-gate Worker, which authorizes from a
      cookie rather than from this session. Minting it here, off the access token, means it is in
@@ -59,22 +65,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
      when VITE_CDN_GATE_URL is unset — see cdnGate.ts on why that is a supported state. */
   useCdnCookie(session?.access_token)
 
+  /* Resolve the auth return BEFORE the persisted session is trusted, then subscribe.
+   *
+   * The order is the fix. `getSession()` cannot tell "restored a valid old session" from "just
+   * failed to establish a new one", and `onAuthStateChange` replays the current session to every new
+   * subscriber as INITIAL_SESSION — so touching either first would render the app around the
+   * previous user while the failed return is still unexamined. `resolveAuthReturn` has already
+   * dropped that token by the time we get here. */
   useEffect(() => {
-    if (!supabase || !configured) { setLoading(false); return }
+    const client = supabase
+    if (!client || !configured) { setLoading(false); return }
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    let cancelled = false
+    let unsubscribe = () => {}
+
+    void (async () => {
+      const outcome = await resolveAuthReturn(client, window.location.href)
+      if (cancelled) return
+
+      if (outcome.url !== window.location.href) {
+        window.history.replaceState(null, '', outcome.url)
+      }
+      if (outcome.error) setAuthError(outcome.error)
+
+      const { data: { session } } = await client.auth.getSession()
+      if (cancelled) return
       setSession(session)
       if (session) fetchProfile(session.user.id)
       else setLoading(false)
-    })
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
-      if (session) fetchProfile(session.user.id)
-      else { setProfile(null); setLoading(false) }
-    })
+      const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => {
+        setSession(session)
+        if (session) fetchProfile(session.user.id)
+        else { setProfile(null); setLoading(false) }
+      })
+      unsubscribe = () => subscription.unsubscribe()
+    })()
 
-    return () => subscription.unsubscribe()
+    return () => { cancelled = true; unsubscribe() }
   }, [])
 
   /* A revoked session is invisible from here: the access token still passes signature checks, so
@@ -136,6 +164,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * client. (OAuth can't carry a client_id into user metadata; a first-time
    * user on a non-whitelisted domain gets role 'public' and is assigned by an
    * admin — same as an unknown magic-link user.)
+   *
+   * Drops any existing token from this browser first (local scope — the point is
+   * this browser, not the session's validity elsewhere). A deliberate re-auth
+   * must never be able to resolve backwards to the previous user if the return
+   * fails; `authReturn` covers the same ground on the way back, and this closes
+   * the window in between.
    */
   async function signInWithProvider(
     provider: OAuthProvider,
@@ -143,6 +177,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   ): Promise<string | null> {
     if (!supabase) return 'Supabase not configured'
     try {
+      await supabase.auth.signOut({ scope: 'local' })
       await signInWithProviderCore(supabase, provider, redirectTo ?? window.location.href)
       return null
     } catch (e) {
@@ -177,8 +212,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (supabase) await signOutCore(supabase)
   }
 
+  function clearAuthError() { setAuthError(null) }
+
   return (
-    <AuthContext.Provider value={{ session, profile, loading, checkEmail, sendMagicLink, signInWithProvider, completeProfile, signOut }}>
+    <AuthContext.Provider value={{ session, profile, loading, authError, clearAuthError, checkEmail, sendMagicLink, signInWithProvider, completeProfile, signOut }}>
       {children}
     </AuthContext.Provider>
   )

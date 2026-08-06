@@ -10,16 +10,19 @@
  * per-page previews need, and it was measured to preserve formatting poppler-rendered output kept
  * (text highlights on a real deck) at ~28ms/page.
  *
- * LibreOffice is still resolved from the host here — it is bundled in a later step. Its job is
- * narrow: convert an Office document to PDF, after which the PDFium path above does the rendering.
+ * LibreOffice is bundled too (macOS/Windows; a package dependency on Linux). Its job is narrow:
+ * convert an Office document to PDF, after which the PDFium path above does the rendering. In a
+ * release build the bundled copy is the ONLY copy that may be used — see `soffice_from`.
  *
  * WIDTH/HEIGHT CONTRACT. Callers pass a target width; height always follows the source aspect
  * ratio. This mirrors `cwebp -resize <width> 0` exactly, so thumbnails do not change size or
  * proportion as a result of this swap.
  */
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use image::imageops::FilterType;
 use pdfium_render::prelude::*;
@@ -197,10 +200,22 @@ fn pdfium_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 /// Hidden argv flag that turns this executable into a one-shot render worker.
 pub const WORKER_FLAG: &str = "--sotto-render-worker";
 
-/// A deletable page-preview directory is never an arbitrary caller path. It is the exact
-/// `<source-stem>-thumb` sidecar documented by the pipeline, and its title thumbnail is the sibling
-/// `<source-stem>-thumb.webp` file. This check also runs inside the one-shot worker immediately
-/// before `remove_dir_all`, so the destructive boundary is local to the operation that needs it.
+/// The artifacts folder that serves the assets beside it.
+///
+/// The layout contract itself lives in `packages/domain/src/artifactLayout.ts`, which is what the
+/// pipeline composes these paths from; Rust cannot import it, so this constant is the second copy
+/// and must not drift. Everything else here is COMPUTED from the source path.
+const THUMBNAILS_DIR: &str = "thumbnails";
+
+/// A deletable page-preview directory is never an arbitrary caller path.
+///
+/// This is not a naming convention — it is the guard in front of `remove_dir_all`, and it also runs
+/// inside the one-shot worker immediately before that call, so the destructive boundary is local to
+/// the operation that needs it. Both outputs are derived from `src` and compared exactly: for
+/// `<dir>/<stem>.<ext>` the only acceptable targets are `<dir>/thumbnails/<stem>-thumb.webp` and
+/// `<dir>/thumbnails/<stem>`. Nothing here is caller-supplied, and nothing about it may be relaxed
+/// into a prefix test — "somewhere under thumbnails/" would let one document's render delete
+/// another's previews.
 pub fn validate_preview_area(src: &Path, thumb: &Path, pages_dir: &Path) -> Result<(), String> {
     let parent = src
         .parent()
@@ -208,16 +223,16 @@ pub fn validate_preview_area(src: &Path, thumb: &Path, pages_dir: &Path) -> Resu
     let stem = src
         .file_stem()
         .ok_or_else(|| format!("preview source has no file stem: {}", src.display()))?;
+    let artifacts = parent.join(THUMBNAILS_DIR);
     let mut thumb_name = stem.to_os_string();
     thumb_name.push("-thumb.webp");
-    let mut pages_name = stem.to_os_string();
-    pages_name.push("-thumb");
-    let expected_thumb = parent.join(thumb_name);
-    let expected_pages = parent.join(pages_name);
+    let expected_thumb = artifacts.join(thumb_name);
+    let expected_pages = artifacts.join(stem);
 
     if thumb != expected_thumb || pages_dir != expected_pages {
         return Err(format!(
-            "Refusing preview outputs outside the source's preview sidecars (expected {} and {})",
+            "Refusing preview outputs outside the source folder's own {THUMBNAILS_DIR}/ \
+             (expected {} and {})",
             expected_thumb.display(),
             expected_pages.display(),
         ));
@@ -274,6 +289,74 @@ pub struct RenderOutcome {
     pub rendered: u32,
 }
 
+/* ── Subprocess deadlines ───────────────────────────────────────────────── */
+
+/// How long either child process below may run before it is killed.
+///
+/// Neither child has an internal deadline, and both hold a pipeline worker slot for as long as they
+/// live, so a hang is not a slow file — it is a run that never finishes. LibreOffice is the realistic
+/// offender: a wedged user profile, a first-run prompt, or a Gatekeeper check on an unsigned build
+/// can park it indefinitely. 60s is ~10x the measured ~6.4s conversion and ~40x a 50-page render at
+/// the 28ms/page figure in `run_worker`, so it cannot fire on work that is merely slow.
+const SUBPROCESS_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How often the wait loop wakes to ask whether the child has exited.
+const POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+/// `Command::output()` with a deadline: kill the child on expiry instead of blocking forever.
+///
+/// `std` has no timed wait, so this is the hand-rolled equivalent. Both pipes are drained on their
+/// own threads because a child that fills a pipe buffer blocks until someone reads it — reading them
+/// only after the wait would turn a full buffer into exactly the deadlock this exists to prevent.
+///
+/// Killing `soffice` does not necessarily reap the `soffice.bin` it spawned; that orphan is left to
+/// the OS. Freeing the worker slot is the point — the run continues, and the file reports an error.
+fn output_with_timeout(cmd: &mut Command, timeout: Duration, what: &str) -> Result<Output, String> {
+    fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut buf);
+            }
+            buf
+        })
+    }
+
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("launch {what}: {e}"))?;
+
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+    let deadline = Instant::now() + timeout;
+
+    let status = loop {
+        match child.try_wait().map_err(|e| format!("wait for {what}: {e}"))? {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait(); // reap, and close the pipes the drain threads are holding
+                let _ = stdout.join();
+                let _ = stderr.join();
+                return Err(format!(
+                    "{what} did not finish within {}s and was killed",
+                    timeout.as_secs()
+                ));
+            }
+            None => std::thread::sleep(POLL_INTERVAL),
+        }
+    };
+
+    Ok(Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    })
+}
+
 /// Render a PDF in a short-lived WORKER PROCESS: page 1 to `thumb`, and optionally N pages.
 ///
 /// PDFium cannot be used concurrently. Not "is slower when threaded" — it FAILS: with the crate's
@@ -290,11 +373,11 @@ fn run_worker(job: &RenderJob) -> Result<RenderOutcome, String> {
     let exe = std::env::current_exe().map_err(|e| format!("locate own executable: {e}"))?;
     let payload = serde_json::to_string(job).map_err(|e| format!("encode render job: {e}"))?;
 
-    let out = Command::new(&exe)
-        .arg(WORKER_FLAG)
-        .arg(&payload)
-        .output()
-        .map_err(|e| format!("spawn render worker: {e}"))?;
+    let out = output_with_timeout(
+        Command::new(&exe).arg(WORKER_FLAG).arg(&payload),
+        SUBPROCESS_TIMEOUT,
+        &format!("render worker for {}", job.src),
+    )?;
 
     if !out.status.success() {
         // The worker prints one diagnostic line; surface it rather than an exit code.
@@ -409,6 +492,12 @@ fn render_pdf(job: &RenderJob) -> Result<RenderOutcome, String> {
     };
 
     let first = render_one(0)?;
+    // The thumbnail lives in the source folder's `thumbnails/`, which may not exist yet. Created
+    // here rather than in the command so the worker is self-sufficient — it is also what runs for
+    // an Office document, where the command never sees this path at all.
+    if let Some(parent) = Path::new(&job.thumb).parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
     write_webp(&first, Path::new(&job.thumb), job.width, job.quality)?;
 
     let Some(pages_dir) = job.pages_dir.as_deref() else {
@@ -448,31 +537,61 @@ fn page_path(dir: &Path, page: u32) -> PathBuf {
 
 /* ── Office documents ───────────────────────────────────────────────────── */
 
-/// Locate LibreOffice: bundled engine first, then the host.
+/// Locate LibreOffice: the bundled engine, and — where it is permitted — the host.
 ///
 /// The macOS app-bundle path is checked explicitly because a GUI app's PATH does not include
 /// Homebrew's prefix and LibreOffice's own installer does not add itself to PATH at all.
-fn soffice(app: &tauri::AppHandle) -> Option<PathBuf> {
+fn soffice(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     soffice_from(
         native::tool_path(app, LIBREOFFICE_ENGINE, &libreoffice_rel()),
         native::system_tool("soffice"),
         host_install(),
+        host_fallback_allowed(),
     )
 }
 
-/// Precedence: BUNDLED beats anything installed on the host.
+/// May a host LibreOffice stand in for the bundled engine?
 ///
-/// Order is the whole point, so it lives in a function that can be tested without an AppHandle.
-/// Bundled must win: the shipped copy is the version whose deck rendering was reviewed, and a
-/// host install of some other version would silently change how client decks look. The host
-/// fallbacks exist for `tauri dev` on a machine that has not run `npm run deps:native`, and for
-/// Linux, where LibreOffice is a declared package dependency rather than a bundled engine.
+/// Linux: yes, always — LibreOffice is a declared `deb`/`rpm` dependency there, so there is no
+/// bundled engine to miss. macOS/Windows: only under `tauri dev`, where the tree may not have had
+/// `npm run deps:native` run against it. A release build must never take the fallback.
+fn host_fallback_allowed() -> bool {
+    cfg!(target_os = "linux") || cfg!(debug_assertions)
+}
+
+/// Precedence: BUNDLED beats anything installed on the host — and in a shipped macOS/Windows build
+/// it is the ONLY thing that may be used.
+///
+/// The policy is the whole point, so it lives in a function that can be tested without an AppHandle.
+/// Bundled must win: the shipped copy is the version whose deck rendering was reviewed, and a host
+/// install of some other version would silently change how client decks look.
+///
+/// FAILING LOUDLY MATTERS MORE THAN THE ORDER. If placement silently did not happen — a bare
+/// `tauri build` instead of `npm run build:app` — a fallback would keep the app working on every
+/// machine that happens to have LibreOffice in /Applications, including every dev machine, and fail
+/// only on a client's. So when the fallback is not permitted, a missing bundle is a hard error that
+/// names the expected path and the command that would have placed it.
 fn soffice_from(
     bundled: Option<PathBuf>,
     on_path: Option<PathBuf>,
     host: Option<PathBuf>,
-) -> Option<PathBuf> {
-    bundled.or(on_path).or(host)
+    allow_host_fallback: bool,
+) -> Result<PathBuf, String> {
+    if let Some(engine) = bundled {
+        return Ok(engine);
+    }
+    if !allow_host_fallback {
+        return Err(format!(
+            "the bundled LibreOffice engine is missing (expected at \
+             resources/native/{LIBREOFFICE_ENGINE}/{}). Build with `npm run build:app` — a bare \
+             `tauri build` omits it. A host install is deliberately not used in a release build, \
+             because the shipped version is the one whose rendering was reviewed.",
+            libreoffice_rel()
+        ));
+    }
+    on_path
+        .or(host)
+        .ok_or_else(|| native::missing_tool("soffice", "LibreOffice, or run `npm run deps:native`"))
 }
 
 /// Well-known install location that the vendor's own installer does not add to `PATH`.
@@ -503,15 +622,28 @@ fn libreoffice_rel() -> String {
 /// `-env:UserInstallation` is NOT optional. LibreOffice keeps a single user profile and locks it, so
 /// concurrent conversions sharing one profile either serialise or fail outright. The pipeline runs
 /// eight of these at a time, so each conversion gets a private throwaway profile.
+///
+/// THE FLAG SET IS THE WHOLE DOCK FIX. `--headless` suppresses document *windows* but does not stop
+/// LibreOffice initialising AppKit and registering with LaunchServices, and because we ship a full
+/// nested `LibreOffice.app` macOS is then willing to give it a Dock tile mid-run. The rest of the
+/// standard headless set is what keeps it out of the Dock, off the menu bar, and away from the
+/// splash screen and lock-file checks that can turn a conversion into a prompt nobody can answer.
+///
+/// Setting `LSUIElement`/`LSBackgroundOnly` in the nested bundle's `Info.plist` is the obvious
+/// alternative and MUST NOT be used: it breaks the sealed signature `package-desktop.mjs` preserves
+/// with `ditto`, which is a hard prerequisite for notarisation. If flags ever prove insufficient the
+/// next step is invoking `soffice.bin` directly, not editing the bundle.
 fn office_to_pdf(app: &tauri::AppHandle, src: &str, work_dir: &Path) -> Result<PathBuf, String> {
-    let soffice = soffice(app).ok_or_else(|| {
-        native::missing_tool("soffice", "LibreOffice (bundled in a later release)")
-    })?;
+    let soffice = soffice(app)?;
 
     let profile = work_dir.join("profile");
-    let out = Command::new(&soffice)
-        .args([
+    let out = output_with_timeout(
+        Command::new(&soffice).args([
             "--headless",
+            "--invisible",
+            "--nodefault",
+            "--nologo",
+            "--nolockcheck",
             "--norestore",
             &format!("-env:UserInstallation=file://{}", profile.display()),
             "--convert-to",
@@ -519,9 +651,10 @@ fn office_to_pdf(app: &tauri::AppHandle, src: &str, work_dir: &Path) -> Result<P
             "--outdir",
             &work_dir.to_string_lossy(),
             src,
-        ])
-        .output()
-        .map_err(|e| format!("launch {}: {e}", soffice.display()))?;
+        ]),
+        SUBPROCESS_TIMEOUT,
+        &format!("LibreOffice conversion of {src}"),
+    )?;
 
     // LibreOffice names the output after the input stem, in --outdir.
     let stem = Path::new(src)
@@ -615,7 +748,7 @@ pub fn page_budget(ext: &str, limit: u32) -> u32 {
 
 /* ── The pages manifest ─────────────────────────────────────────────────── */
 
-/// `pages.json`, written beside the rendered pages.
+/// `.pages.json`, written beside the rendered pages.
 ///
 /// Existence alone cannot decide whether previews are current, which is how the plain `-thumb.webp`
 /// check works. Three things invalidate them and none are visible from a directory listing: the
@@ -643,8 +776,23 @@ pub struct PagesManifest {
 /// Current manifest format. Bump to force regeneration across the library.
 pub const PAGES_MANIFEST_VERSION: u32 = 1;
 
+/* ── Hiding the render caches ─────────────────────────────────────────────────
+   Both manifests are caches, not metadata: they hold the source's size+mtime and the settings the
+   output was rendered at, which is the only way to know a render is stale — a directory listing
+   cannot see that the source changed or that the page limit did. Delete them and the whole library
+   re-renders (~6.4s per Office document). So they stay, and stop being visible instead.
+
+   Only the manifests are dot-prefixed. The thumbnails and page previews keep visible names: they
+   are useful to look at in the source folder, and `thumbnails/` is what keeps them tidy.
+
+   WINDOWS GAP, ACCEPTED DELIBERATELY. Windows does not hide dot-prefixed files — it uses
+   FILE_ATTRIBUTE_HIDDEN, set via SetFileAttributesW. Sotto ships macOS only today (the release
+   workflow builds a single macOS bundle and there is no Windows CI), so a windows-only FFI call
+   would be code no build here can compile or exercise. When a Windows build is added, the one place
+   to set the attribute is right after each `std::fs::write` below. */
+
 pub fn manifest_path(pages_dir: &Path) -> PathBuf {
-    pages_dir.join("pages.json")
+    pages_dir.join(".pages.json")
 }
 
 /// mtime (ms since epoch) and size of a file — the cheap fingerprint.
@@ -665,7 +813,7 @@ pub(crate) fn fingerprint(src: &Path) -> Result<(i64, u64), String> {
 ///
 /// Existence used to be the entire cache key, so replacing/restoring a source file never refreshed
 /// its thumbnail. This mirrors the document-preview manifest's size+mtime decision while keeping
-/// the generated sidecar beside the thumbnail (and therefore covered by every `-thumb` exclusion).
+/// the cache beside the thumbnail it describes — inside `thumbnails/`, and hidden.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThumbnailManifest {
@@ -678,8 +826,17 @@ pub struct ThumbnailManifest {
 
 pub const THUMBNAIL_MANIFEST_VERSION: u32 = 1;
 
+/// `.<thumbnail-file-name>.json`, hidden beside the thumbnail it describes.
+///
+/// Derived from the thumbnail's own name so it travels with it: the migration MOVES artifacts into
+/// `thumbnails/` rather than re-rendering them, and a manifest keyed on anything else would be left
+/// behind — which reads as "cache miss" and re-renders the library.
 pub fn thumbnail_manifest_path(dest: &Path) -> PathBuf {
-    PathBuf::from(format!("{}.json", dest.display()))
+    match dest.file_name().and_then(|n| n.to_str()) {
+        Some(name) => dest.with_file_name(format!(".{name}.json")),
+        // No file name to hide behind: keep the old sibling form rather than losing the cache.
+        None => PathBuf::from(format!("{}.json", dest.display())),
+    }
 }
 
 pub fn thumbnail_current(
@@ -756,7 +913,7 @@ pub fn previews_current(
     (matches && complete).then_some(manifest)
 }
 
-/// Write `pages.json` last, once every page is on disk.
+/// Write `.pages.json` last, once every page is on disk.
 ///
 /// Ordering matters: the manifest is what marks the set complete, so writing it before the pages
 /// would let an interrupted run leave a directory that passes `previews_current` while missing files.
@@ -977,24 +1134,112 @@ mod tests {
         assert_eq!(page_budget("pdf", 0), 0, "a zero budget stays zero");
     }
 
+    fn bundled_engine() -> PathBuf {
+        PathBuf::from("/app/Resources/resources/native/libreoffice/soffice")
+    }
+    fn on_path_engine() -> PathBuf {
+        PathBuf::from("/opt/homebrew/bin/soffice")
+    }
+    fn host_engine() -> PathBuf {
+        PathBuf::from("/Applications/LibreOffice.app/Contents/MacOS/soffice")
+    }
+
     #[test]
     fn bundled_libreoffice_wins_over_anything_on_the_host() {
-        let bundled = PathBuf::from("/app/Resources/resources/native/libreoffice/soffice");
-        let on_path = PathBuf::from("/opt/homebrew/bin/soffice");
-        let host = PathBuf::from("/Applications/LibreOffice.app/Contents/MacOS/soffice");
-
         assert_eq!(
-            soffice_from(Some(bundled.clone()), Some(on_path.clone()), Some(host.clone())),
-            Some(bundled),
+            soffice_from(Some(bundled_engine()), Some(on_path_engine()), Some(host_engine()), true),
+            Ok(bundled_engine()),
             "a bundled engine must beat both host locations",
         );
         assert_eq!(
-            soffice_from(None, Some(on_path.clone()), Some(host.clone())),
-            Some(on_path),
+            soffice_from(Some(bundled_engine()), Some(on_path_engine()), Some(host_engine()), false),
+            Ok(bundled_engine()),
+            "and must still be used when the fallback is forbidden",
+        );
+    }
+
+    /* Where a fallback is allowed at all — Linux, and `tauri dev` — it keeps working, in the order
+       that finds a dev shell's install before the vendor's own directory. */
+    #[test]
+    fn host_locations_are_searched_only_when_the_fallback_is_permitted() {
+        assert_eq!(
+            soffice_from(None, Some(on_path_engine()), Some(host_engine()), true),
+            Ok(on_path_engine()),
             "with no bundle, PATH comes before the vendor install dir",
         );
-        assert_eq!(soffice_from(None, None, Some(host.clone())), Some(host));
-        assert_eq!(soffice_from(None, None, None), None, "nothing found must be None, not a guess");
+        assert_eq!(soffice_from(None, None, Some(host_engine()), true), Ok(host_engine()));
+        assert!(
+            soffice_from(None, None, None, true).is_err(),
+            "nothing found must be an error, not a guess",
+        );
+    }
+
+    /* THE REGRESSION THIS GUARDS. A release build whose engine was never placed — a bare
+       `tauri build` instead of `npm run build:app` — must fail loudly. Falling back to
+       /Applications would keep it working on every machine that has LibreOffice installed,
+       including every dev machine, and fail only on a client's. */
+    #[test]
+    fn a_release_build_with_no_bundled_engine_errors_instead_of_using_the_host() {
+        let err = soffice_from(None, Some(on_path_engine()), Some(host_engine()), false)
+            .expect_err("a release build must not resolve LibreOffice from the host");
+
+        assert!(err.contains("npm run build:app"), "the error must name the fix: {err}");
+        assert!(
+            err.contains(LIBREOFFICE_ENGINE) && err.contains(&libreoffice_rel()),
+            "the error must name the expected path: {err}",
+        );
+        assert!(
+            !err.contains("/Applications") && !err.contains("/opt/homebrew"),
+            "the error must not read as though a host copy were usable: {err}",
+        );
+    }
+
+    /* The policy itself, rather than the pure function that applies it: shipping a macOS or Windows
+       build that silently accepts a host install is the failure this whole path exists to prevent. */
+    #[test]
+    fn only_linux_and_debug_builds_may_fall_back_to_a_host_install() {
+        if cfg!(target_os = "linux") {
+            assert!(host_fallback_allowed(), "LibreOffice is a package dependency on Linux");
+        } else {
+            assert_eq!(
+                host_fallback_allowed(),
+                cfg!(debug_assertions),
+                "on macOS/Windows the fallback is a `tauri dev` convenience and nothing more",
+            );
+        }
+    }
+
+    /* A child that never exits must not hold its worker slot forever — before this, one wedged
+       LibreOffice blocked the whole run. `sleep` stands in for the hang; the deadline is short so
+       the test costs a fraction of a second. Unix-only because it needs a shell and `sleep`; the
+       code under test is platform-agnostic and CI builds on unix. */
+    #[test]
+    #[cfg(unix)]
+    fn a_child_that_outlives_its_deadline_is_killed_and_reported() {
+        let err = output_with_timeout(
+            Command::new("sleep").arg("30"),
+            Duration::from_millis(150),
+            "wedged test child",
+        )
+        .expect_err("a child past its deadline must not return output");
+
+        assert!(err.contains("wedged test child"), "the error must name the work: {err}");
+        assert!(err.contains("killed"), "the error must say the child was killed: {err}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_child_that_finishes_in_time_returns_its_output() {
+        let out = output_with_timeout(
+            Command::new("sh").args(["-c", "printf done; printf oops >&2"]),
+            Duration::from_secs(30),
+            "prompt test child",
+        )
+        .expect("a child well inside its deadline must succeed");
+
+        assert!(out.status.success());
+        assert_eq!(out.stdout, b"done", "stdout must be captured, not discarded");
+        assert_eq!(out.stderr, b"oops", "stderr must be captured — it is what error reporting uses");
     }
 
     #[test]
@@ -1049,21 +1294,49 @@ mod tests {
         }
     }
 
+    /* The guard in front of `remove_dir_all`. Both outputs must be the ones COMPUTED from the
+       source, inside that source folder's own `thumbnails/` — the previews root is no longer a
+       sibling of the source, so "near the source" is not a check any more. */
     #[test]
-    fn preview_area_is_the_exact_source_sidecar() {
+    fn preview_area_is_the_computed_target_inside_the_source_folders_thumbnails() {
         let src = Path::new("/approved/Deck.pdf");
-        assert!(validate_preview_area(
-            src,
-            Path::new("/approved/Deck-thumb.webp"),
-            Path::new("/approved/Deck-thumb"),
-        )
-        .is_ok());
-        assert!(validate_preview_area(
-            src,
-            Path::new("/approved/Deck-thumb.webp"),
-            Path::new("/outside/delete-me"),
-        )
-        .is_err());
+        let thumb = Path::new("/approved/thumbnails/Deck-thumb.webp");
+        let pages = Path::new("/approved/thumbnails/Deck");
+
+        assert!(validate_preview_area(src, thumb, pages).is_ok());
+
+        // The pre-3.2.2 sidecars are no longer where previews go.
+        assert!(
+            validate_preview_area(src, Path::new("/approved/Deck-thumb.webp"), Path::new("/approved/Deck-thumb")).is_err(),
+            "the old sibling layout must not be accepted once the writer moved",
+        );
+        // Another document's previews, inside the SAME thumbnails/ folder. A prefix test would
+        // pass this and let one render delete another document's pages.
+        assert!(
+            validate_preview_area(src, thumb, Path::new("/approved/thumbnails/Other")).is_err(),
+            "a sibling inside thumbnails/ is still outside this source's preview area",
+        );
+        // A different folder's thumbnails/, and somewhere else entirely.
+        assert!(validate_preview_area(src, thumb, Path::new("/elsewhere/thumbnails/Deck")).is_err());
+        assert!(validate_preview_area(src, thumb, Path::new("/outside/delete-me")).is_err());
+        // The thumbnail is checked just as strictly as the directory.
+        assert!(validate_preview_area(src, Path::new("/approved/thumbnails/Other-thumb.webp"), pages).is_err());
+    }
+
+    /* Both manifests are caches, not metadata: delete them and the whole library re-renders. They
+       stay on disk and stop being visible instead — dot-prefixed, beside what they describe (see
+       the Windows note above `manifest_path`). */
+    #[test]
+    fn the_render_manifests_are_hidden_beside_what_they_describe() {
+        let thumbs = Path::new("/approved/[03] OUT/thumbnails");
+        assert_eq!(
+            thumbnail_manifest_path(&thumbs.join("Deck v2-thumb.webp")),
+            thumbs.join(".Deck v2-thumb.webp.json"),
+        );
+        assert_eq!(
+            manifest_path(&thumbs.join("Deck v2")),
+            thumbs.join("Deck v2").join(".pages.json"),
+        );
     }
 
     /// The bundled PDFium, or None when `npm run deps:native` has not been run.
@@ -1167,8 +1440,8 @@ mod tests {
         let Some(lib_dir) = pdfium_lib_dir() else { return };
         let work = TempDir::new("sotto-pages").unwrap();
         let src = work.path().join("in.pdf");
-        let thumb = work.path().join("in-thumb.webp");
-        let pages = work.path().join("in-thumb");
+        let thumb = work.path().join("thumbnails").join("in-thumb.webp");
+        let pages = work.path().join("thumbnails").join("in");
         std::fs::write(&src, minimal_pdf()).unwrap();
 
         let outcome = render_pdf(&job(&lib_dir, &src, &thumb, Some(&pages), 50)).unwrap();
@@ -1188,8 +1461,8 @@ mod tests {
         let Some(lib_dir) = pdfium_lib_dir() else { return };
         let work = TempDir::new("sotto-pages-cap").unwrap();
         let src = work.path().join("in.pdf");
-        let thumb = work.path().join("in-thumb.webp");
-        let pages = work.path().join("in-thumb");
+        let thumb = work.path().join("thumbnails").join("in-thumb.webp");
+        let pages = work.path().join("thumbnails").join("in");
         std::fs::write(&src, minimal_pdf()).unwrap();
 
         // limit 0 renders nothing, yet `total` must still describe the document — that difference is
@@ -1208,8 +1481,8 @@ mod tests {
         let Some(lib_dir) = pdfium_lib_dir() else { return };
         let work = TempDir::new("sotto-pages-stale").unwrap();
         let src = work.path().join("in.pdf");
-        let thumb = work.path().join("in-thumb.webp");
-        let pages = work.path().join("in-thumb");
+        let thumb = work.path().join("thumbnails").join("in-thumb.webp");
+        let pages = work.path().join("thumbnails").join("in");
         std::fs::write(&src, minimal_pdf()).unwrap();
         std::fs::create_dir_all(&pages).unwrap();
         let orphan = pages.join("007.webp");

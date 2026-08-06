@@ -161,7 +161,7 @@ export async function syncTagsFromVocabulary(
       const key = tag.key.trim() || `${slot}.${slugifyKeyPart(tag.label)}`;
       desiredKeys.add(key);
 
-      const parentId = tag.parentGroup
+      const resolvedParentId = tag.parentGroup
         ? (parentIdByGroupKey.get(`${slot}::${tag.parentGroup.trim()}`) ?? null)
         : null;
 
@@ -169,6 +169,20 @@ export async function syncTagsFromVocabulary(
         byKey.get(key) ??
         byShortcode.get(shortcode) ??
         null;
+
+      /* Pass 1 resolves the parent group by NAME; the lookup above finds the row to update by key or
+         shortcode. Nothing links those two, so both can land on the SAME row — a keyed,
+         shortcode-less group whose name is also this leaf's parentGroup. Writing that produces
+         `parent_id = id`, which carries no information, cannot be expressed in the taxonomy import
+         format, and turns every later export into a file the portal refuses ("cannot parent itself",
+         then "cycle detected" for everything beneath it).
+         Ungrouped is the honest outcome, and it is said out loud rather than quietly dropped. */
+      const parentId = existingLeaf && resolvedParentId === existingLeaf.id ? null : resolvedParentId;
+      if (parentId !== resolvedParentId) {
+        appendLog('warn',
+          `  ⚠  "${tag.label}" (${slot}) cannot be its own parent — its group "${tag.parentGroup?.trim()}" `
+          + 'resolves to this same tag; leaving it ungrouped');
+      }
 
       if (existingLeaf) {
         const patch: Record<string, unknown> = {};

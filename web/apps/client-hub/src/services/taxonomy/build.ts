@@ -70,6 +70,43 @@ export function buildTaxonomyDocument(
     }
   })
 
+  /* A document that cannot be re-imported is not an export.
+   *
+   * `parent_key` mirrors whatever `parent_id` the rows carry, so a self-referencing or cyclic row
+   * produced a file the portal's own validator rejects — "cannot parent itself", then "cycle
+   * detected" for everything beneath it. The user sees that on IMPORT, one step removed from the
+   * corruption and with no hint which side is at fault.
+   *
+   * A self-parent carries no information, so dropping it loses nothing; a cycle has no valid root,
+   * so it is broken at the edge that closes it. Both are reported rather than quietly repaired —
+   * the rows still need fixing, and this only stops the file from being unusable meanwhile. */
+  const parentOf = new Map(nodes.map(n => [n.key, n.parent_key ?? null]))
+  const repaired: string[] = []
+  const detach = (node: TaxonomyNodeInput) => {
+    node.parent_key = null
+    parentOf.set(node.key, null)
+    repaired.push(node.key)
+  }
+
+  for (const node of nodes) {
+    if (node.parent_key && node.parent_key === node.key) detach(node)
+  }
+  for (const node of nodes) {
+    const seen = new Set<string>([node.key])
+    let cursor = parentOf.get(node.key) ?? null
+    while (cursor) {
+      if (seen.has(cursor)) { detach(node); break }
+      seen.add(cursor)
+      cursor = parentOf.get(cursor) ?? null
+    }
+  }
+  if (repaired.length) {
+    console.warn(
+      `Taxonomy export: ${repaired.length} node(s) had a self-referencing or cyclic parent and were `
+      + `exported without one — the underlying tag rows still need fixing: ${repaired.join(', ')}`,
+    )
+  }
+
   const labels = client.dimensionLabels
   return {
     version: TAXONOMY_JSON_VERSION,

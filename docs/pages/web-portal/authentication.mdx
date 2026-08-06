@@ -10,7 +10,14 @@ tenant access never comes from caller-supplied signup metadata.
 
 On first authentication, the database trigger creates the profile and checks the verified email
 domain against client whitelists. Without a match, the user remains `public` until an administrator
-assigns access. Subsequent logins do not rerun first-user assignment automatically.
+assigns access. Subsequent logins do not rerun first-user assignment automatically — including a
+sign-in through a *different* provider, which GoTrue links into the existing user rather than
+creating a new one. See [One user, many identities](/auth#one-user-many-identities).
+
+A failed return from either path (expired link, provider denial, a `?code=` whose exchange is
+refused) signs the browser out locally and renders the sign-in surface with the reason. It never
+falls back to a previously stored session — see
+[Returning from a redirect](/auth#returning-from-a-redirect) for why that needs saying.
 
 The email first opens the inert `/auth/confirm` route. That page does not spend the token on load;
 only its **Continue signing in** button constructs the Supabase verification URL. This protects the

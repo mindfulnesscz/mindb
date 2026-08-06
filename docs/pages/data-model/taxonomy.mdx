@@ -46,3 +46,36 @@ segment before export-name translation, so separators and traversal-only segment
 chosen output folder.
 
 See [Platform division](/getting-started/platform-division) and [Naming and vocabulary](/desktop/naming).
+
+## A tag can never be its own parent
+
+`parent_id = id` carries no information: it cannot render in the filter tree, cannot be expressed as
+a `parent_key`, and makes any ancestor walk non-terminating. It is refused in three places, because
+the failure it caused surfaced a long way from its cause:
+
+| Guard | Where |
+|---|---|
+| Desktop sync will not write it — the tag is left ungrouped and the run log says so | `desktop/src/services/supabase/tagSync.ts` |
+| Export will not emit it — the node is written with `parent_key: null`, with a console warning naming the rows that still need fixing | `taxonomy/build.ts` |
+| The database rejects it outright, including a manual SQL edit | `tags_parent_id_not_self` |
+
+**What went wrong before those existed.** Pass 1 of the desktop sync resolves a parent group by
+*name* (`dimension::name`); pass 2 finds the row to update by *key or shortcode*. Nothing connected
+the two, so both could land on the same row — a keyed, shortcode-less group whose name is also the
+leaf's `parentGroup` — and the sync patched that row to be its own parent. The export then mirrored
+it faithfully into a file the portal's own importer refused:
+
+```
+node "format.document" cannot parent itself; cycle detected involving "format.3d"
+```
+
+Read that message as **"these rows are wrong"**, not "this file is wrong" — the exporter was
+reporting the database accurately. Children of a self-parenting node are reported as cycles too;
+they are collateral, and fixing the parent clears them.
+
+Deeper cycles (`a → b → a`) are **not** caught by the constraint — a `CHECK` sees one row at a time.
+The write paths prevent them and `validateTaxonomyDocument` detects them, which is why an export
+breaks a cycle at the edge that closes it rather than shipping a file that cannot be re-imported.
+
+To repair an already-exported file by hand, set the offending `parent_key` to `null`; a self-parent
+has no intended value to recover.
