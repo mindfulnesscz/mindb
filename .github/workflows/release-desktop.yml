@@ -61,6 +61,17 @@ jobs:
       # which silently falls back to a host install on the runner and fails on a user's machine.
       # See docs/pages/reference/third-party-engines.mdx.
       - run: npm run build:app
+      # Independent of the identical assertion inside package-desktop.mjs, and deliberately so: this
+      # one guards the artifacts about to be PUBLISHED. A release build refuses to fall back to a
+      # host LibreOffice, so a bundle without the placed engine is a DMG that fails on every client
+      # machine — and on this runner, which has no LibreOffice, that would once have been invisible.
+      - name: Verify the bundled engine is in the published app
+        run: |
+          set -euo pipefail
+          app=$(ls -d desktop/src-tauri/target/release/bundle/macos/*.app)
+          engine="$app/Contents/Resources/resources/native/libreoffice/LibreOffice.app/Contents/MacOS/soffice"
+          test -x "$engine" || { echo "::error::missing or non-executable bundled LibreOffice: $engine"; exit 1; }
+          echo "bundled engine ok: $engine"
       - name: Publish release with artifacts
         uses: softprops/action-gh-release@v3
         with:

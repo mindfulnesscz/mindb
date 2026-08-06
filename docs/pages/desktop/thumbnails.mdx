@@ -143,24 +143,30 @@ download, ~800MB on disk — so a clean machine needs no install step. On Linux 
 package dependency instead; see [Third-party engines](/reference/third-party-engines) for the
 licensing and signing consequences.
 
-Resolution precedence, in `render::soffice_from`:
+Resolution, in `render::soffice_from`: the **bundled** engine under `resources/native/libreoffice/`,
+and — only where a fallback is legitimate — `soffice` on `PATH`, then the vendor's own install
+location (`/Applications/LibreOffice.app/...`, `C:\Program Files\...`), which its installer does not
+add to `PATH`.
 
-1. **Bundled** engine under `resources/native/libreoffice/`
-2. `soffice` on `PATH`
-3. The vendor's own install location (`/Applications/LibreOffice.app/...`, `C:\Program Files\...`),
-   which its installer does not add to `PATH`
-
-Bundled must win, and a test pins that. The shipped copy is the version whose deck rendering was
-reviewed and accepted; a different version installed on the host would silently change how client
-decks look. The host fallbacks exist for `tauri dev` before `npm run deps:native` has run, and for
-Linux.
+The shipped copy is the version whose deck rendering was reviewed and accepted; a different version
+installed on the host would silently change how client decks look. So since 3.2.2 a **release** build
+on macOS or Windows uses the bundled engine or errors — it does not fall through. The fallbacks
+survive for Linux, where LibreOffice is a package dependency, and for `tauri dev` before
+`npm run deps:native` has run, gated on `cfg!(debug_assertions)`. Tests pin both the precedence and
+the refusal; see [the mandatory bundled
+engine](/reference/third-party-engines#on-macos-and-windows-the-bundled-engine-is-mandatory) for the
+packaging assertions that make it safe to depend on.
 
 Each conversion gets a private profile via `-env:UserInstallation`. This is **not optional**:
 LibreOffice locks a single shared profile, so eight concurrent conversions would otherwise serialise
-or fail outright.
+or fail outright. It also runs `--headless --invisible --nodefault --nologo --nolockcheck
+--norestore`: `--headless` alone still let macOS give the nested `LibreOffice.app` a Dock tile
+mid-run.
 
 Rendering cost is ~6.4s per deck, which dominates the Office path completely — PDFium's ~28ms per
-page is under half a percent of it.
+page is under half a percent of it. Both the conversion and the render worker run under a 60s
+deadline and are killed on expiry, so a wedged LibreOffice fails one document rather than holding a
+pipeline slot for the rest of the run.
 
 ## Per-page previews
 

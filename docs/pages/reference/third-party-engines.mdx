@@ -35,6 +35,43 @@ The version is pinned to the 26.2.x line — the line whose deck rendering was r
 **Treat a major-version bump as a visual change**, not a routine dependency update: layout and font
 substitution can shift. Re-render a corpus of real decks and compare before shipping one.
 
+### On macOS and Windows the bundled engine is mandatory
+
+`render.rs::soffice_from` resolves the bundled engine and, in a **release** build on macOS or
+Windows, nothing else. A missing bundle is a hard error naming the expected path and
+`npm run build:app`; it does **not** fall back to `/Applications/LibreOffice.app` or to `PATH`.
+
+That is a deliberate trade of convenience for a failure that is visible. The fallback used to make a
+build with no placed engine work perfectly on any machine that happened to have LibreOffice
+installed — which is every dev machine and the CI runner — and fail only on a client's. The
+fallbacks that remain are narrow:
+
+- **Linux**, always: LibreOffice is a declared package dependency there, so there is no bundled
+  engine to miss.
+- **`tauri dev`** (`cfg!(debug_assertions)`), so a tree that has not run `npm run deps:native` still
+  works. It cannot exist in a release build.
+
+Two checks make the mandatory rule safe to rely on: `scripts/package-desktop.mjs` asserts the placed
+`soffice` is present and executable **in the finished `.app`** after the `ditto` step, and the
+release workflow repeats the assertion on the artifacts it is about to publish.
+
+### Headless flags, and why `Info.plist` is not an option
+
+Conversions run with `--headless --invisible --nodefault --nologo --nolockcheck --norestore` plus a
+private `-env:UserInstallation` profile. `--headless` alone suppresses document *windows* but does
+not stop LibreOffice initialising AppKit and registering with LaunchServices — and because we ship a
+full nested `LibreOffice.app`, macOS will then give it a **Dock tile** partway through a run.
+
+Setting `LSUIElement` / `LSBackgroundOnly` in the nested bundle's `Info.plist` is the obvious
+alternative and **must not be done**: it breaks the sealed signature `ditto` preserves, which is a
+hard prerequisite for notarisation. Flags are the only lever. If they prove insufficient, the next
+step is invoking `soffice.bin` directly, not editing the bundle.
+
+Both subprocesses — the conversion and the PDFium render worker — run under a **60s deadline** and
+are killed on expiry. A hung LibreOffice (wedged profile, first-run prompt, Gatekeeper check on an
+unsigned build) would otherwise hold a pipeline worker slot forever. On expiry the file reports an
+error and the run continues.
+
 ## MPL-2.0 obligations
 
 MPL-2.0 is file-level copyleft and explicitly permits distributing the covered work alongside
@@ -86,7 +123,8 @@ So LibreOffice is excluded from `bundle.resources` and placed by `scripts/packag
 1. `npm run deps:native` — fetch engines.
 2. `tauri build` — produces the `.app` (with PDFium) and a DMG without the placed engines.
 3. `ditto` each placed engine into `Contents/Resources/resources/native/`, removing any stale copy
-   first so a previous LibreOffice version cannot linger.
+   first so a previous LibreOffice version cannot linger — then **assert the placed executable
+   exists and is executable in the finished `.app`**. `ditto` exiting 0 is not the same claim.
 4. **Signing slot** — currently a no-op. Sign inside-out here: every nested Mach-O, then each placed
    engine's bundle, then the outer `.app`. Developer ID, hardened runtime, timestamped. Then
    `codesign --verify --deep --strict` and `spctl -a -vvv`.
@@ -96,8 +134,9 @@ So LibreOffice is excluded from `bundle.resources` and placed by `scripts/packag
 Nothing may modify the bundle after step 4. Notarisation and stapling attach after step 5.
 
 Use `npm run build:app` rather than `npm run tauri build` for anything you intend to distribute —
-a bare `tauri build` produces an app with **no LibreOffice at all**, which silently falls back to a
-host install on the build machine and fails on a clean one.
+a bare `tauri build` produces an app with **no LibreOffice at all**. That used to fall back silently
+to a host install on the build machine and fail on a clean one; it now fails at packaging time, and
+again in the release workflow.
 
 Expect to need entitlements that LibreOffice requires under hardened runtime — `allow-jit`,
 `allow-unsigned-executable-memory`, and `disable-library-validation` for its dlopen'd plugins. Budget

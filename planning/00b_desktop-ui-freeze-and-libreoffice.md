@@ -2,8 +2,12 @@
 
 Prepend the **SHARED CONTEXT block** from `DONE_01_security-hardening-S0-S7.md`.
 
-**Part A is LANDED** (commit `d66d3b2`) — but was written in an environment with no Rust toolchain,
-so **it has never been compiled**. Run `npm run check` before merging. Parts B and C are open.
+**Parts A, B and C are LANDED.** A (commit `d66d3b2`) now compiles — `cargo check --all-targets`,
+clippy `-D warnings` and the 89-test lib suite are all green on this machine, closing the "never been
+compiled" gap. B and C landed alongside this note.
+
+**What remains is measurement on a packaged build, which cannot be done from a checkout:** the timed
+8-way run, and confirming no Dock icon appears. See "Still to verify" at the foot of each part.
 
 _Filed 2026-08-06 from a report of a spinning beachball during a run on the installed build, with a
 LibreOffice Dock icon appearing partway through._
@@ -25,7 +29,7 @@ appeared in the Dock was our own bundled copy, not the host's.
 
 ---
 
-## A. The freeze: heavy commands ran on the main thread — LANDED, UNVERIFIED
+## A. The freeze: heavy commands ran on the main thread — LANDED, COMPILES
 
 **Root cause.** Tauri v2, verbatim: *"Commands without the `async` keyword are executed on the main
 thread unless defined with `#[tauri::command(async)]`."* Four commands did seconds of work and were
@@ -53,12 +57,11 @@ with no change to its body or to any call site. Deliberately NOT converted to `a
 parks blocking work on the async runtime's executor, the same bug in a different place. Keychain and
 reveal commands stay sync.
 
-**Still to do:**
-- `npm run check` — this has never been compiled.
-- **Measure.** Time a batch of eight documents. Expect ~50s of freeze to become ~7s of responsive
-  work. If it goes responsive but not faster, the batching has a second bottleneck worth finding.
+**Still to verify:** **measure.** Time a batch of eight documents on a packaged build. Expect ~50s of
+freeze to become ~7s of responsive work. If it goes responsive but not faster, the batching has a
+second bottleneck worth finding.
 
-## B. LibreOffice appears in the Dock, and can hang forever
+## B. LibreOffice appears in the Dock, and can hang forever — LANDED
 
 **B1 — the Dock icon.** `render.rs:512` passes `--headless --norestore` plus, correctly, a private
 `-env:UserInstallation` profile per conversion (`render.rs:504-507` explains why that is not
@@ -66,7 +69,8 @@ optional at 8-way). On macOS `--headless` suppresses document *windows* but does
 LibreOffice initialising AppKit and registering with LaunchServices. Because we ship a full nested
 `LibreOffice.app`, macOS is willing to give it a Dock tile.
 
-**Do:** add the rest of the standard headless set — `--invisible --nodefault --nologo --nolockcheck`.
+**Landed:** the full set is now `--headless --invisible --nodefault --nologo --nolockcheck
+--norestore`. **Still to verify:** a run on a packaged build with no Dock tile and no window.
 
 **Constraint worth stating so nobody tries it:** the obvious alternative — setting `LSUIElement` /
 `LSBackgroundOnly` in the nested `LibreOffice.app/Contents/Info.plist` — **must not be done.** It
@@ -79,11 +83,18 @@ step is invoking `soffice.bin` directly, not editing the bundle.
 prompt, Gatekeeper check on an unsigned build — blocks forever. Even after A, it stalls a worker slot
 and the run.
 
-**Do:** give both subprocess calls a timeout (60s is a reasonable start against the ~6.4s baseline),
-kill the child on expiry, and surface a clear per-file error so one bad document fails that document,
-not the run.
+**Landed:** both go through `render.rs::output_with_timeout` — 60s, child killed on expiry, error
+naming the work (`LibreOffice conversion of <src>` / `render worker for <src>`). `std` has no timed
+wait, so it drains both pipes on threads and polls `try_wait`; draining matters, because a child that
+fills a pipe buffer blocks until read, which is the same hang. Covered by two unit tests.
 
-## C. Guarantee the bundled engine — kill the silent host fallback
+Per-file isolation needed no change: `thumbnails.ts:113` and `:145` already `try`/`catch` inside each
+`Promise.all` member, so the timeout error is logged against that file and the batch continues.
+
+Known residue, deliberately not chased: killing `soffice` does not reap the `soffice.bin` it spawned.
+Freeing the worker slot is the point.
+
+## C. Guarantee the bundled engine — kill the silent host fallback — LANDED
 
 This is the substance of "the app must not rely on LibreOffice being installed."
 
@@ -96,19 +107,17 @@ LibreOffice, which silently falls back to a host install on the runner and fails
 machine"* — the app keeps working on any machine that has LibreOffice in /Applications, and fails
 only on a client's. On a dev machine both exist, so the fallback is invisible.
 
-**Do:**
+**Landed:**
 
-- On **macOS and Windows**, make the bundled engine mandatory: if `native::tool_path` misses, return
-  a hard error naming the expected path and `npm run build:app`. Do not fall through to the host.
-- Keep `on_path` / `host` for **Linux only** (LibreOffice is a declared `deb`/`rpm` dependency there,
-  `tauri.conf.json:33-46`) and for `tauri dev` — gate the dev fallback on `cfg!(debug_assertions)` so
-  it cannot exist in a release build.
-- Extend `soffice_from`'s AppHandle-free unit tests, including "release build, no bundled engine ->
-  `Err`, not host".
-- Add a packaging assertion in `scripts/package-desktop.mjs` after the `ditto` step: the placed
-  `soffice` exists and is executable in the finished `.app`; fail the build if not. The script
-  validates the source tree today but never re-checks the destination.
-- Add the same check to the release workflow so CI cannot publish an engine-less DMG.
+- `soffice_from` now returns `Result<PathBuf, String>` and takes an `allow_host_fallback` flag from
+  `host_fallback_allowed()` = `cfg!(target_os = "linux") || cfg!(debug_assertions)`. A release
+  macOS/Windows build with no bundled engine gets an `Err` naming the expected path and
+  `npm run build:app`, never `/Applications`.
+- Four AppHandle-free unit tests, including the release-build-errors case, which also asserts the
+  message does not read as though a host copy were usable.
+- `package-desktop.mjs` asserts the placed `soffice` is a file and `X_OK` **in the finished `.app`**
+  after `ditto` (`PLACED_BY_US` now carries the `entry` path). The release workflow repeats the check
+  on the artifacts it is about to publish, before `action-gh-release`.
 
 ## D. Follow-ups (not blocking, recorded so they aren't lost)
 
@@ -126,14 +135,18 @@ only on a client's. On a dev machine both exist, so the fallback is invisible.
 
 ## Definition of done
 
-- `npm run check` green on the landed part A, and a timed run confirming 8-way throughput matches
-  `render.rs:288`'s figures.
-- No LibreOffice Dock icon or window during a run on a packaged build.
-- Both `.output()` calls time out, kill the child, and report a per-file error; a deliberately hung
-  conversion fails one file and lets the run continue.
-- A release build with the engine removed **fails loudly** instead of using `/Applications`; covered
-  by a `soffice_from` unit test.
-- `package-desktop.mjs` and the release workflow both fail if the placed `soffice` is missing or
-  non-executable in the finished `.app`.
-- `docs/pages/reference/third-party-engines.mdx` updated for the mandatory-bundled rule and the flag
-  set. (CLAUDE.md already carries the `#[tauri::command(async)]` rule, added with part A.)
+- [x] Part A compiles — `cargo check --all-targets`, `clippy -D warnings`, 89 lib tests green.
+- [ ] A timed run confirming 8-way throughput matches `render.rs`'s figures. **Needs a packaged
+      build; cannot be done from a checkout.**
+- [ ] No LibreOffice Dock icon or window during a run on a packaged build. **Same — needs a build.**
+- [x] Both `.output()` calls time out, kill the child, and report a per-file error; the JS side
+      already isolates the failure to one file.
+- [x] A release build with the engine removed **fails loudly** instead of using `/Applications`;
+      covered by `a_release_build_with_no_bundled_engine_errors_instead_of_using_the_host`.
+- [x] `package-desktop.mjs` and the release workflow both fail if the placed `soffice` is missing or
+      non-executable in the finished `.app`.
+- [x] `docs/pages/reference/third-party-engines.mdx` updated for the mandatory-bundled rule, the flag
+      set, the `Info.plist` prohibition and the subprocess deadline. CLAUDE.md carries all four rules.
+
+**The two open boxes are one action:** `npm run build:app`, install, run a batch of eight Office
+documents, and watch the Dock and the clock.

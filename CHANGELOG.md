@@ -85,6 +85,41 @@ imported back.
   body or call site — the frontend already awaits every `invoke`. The trivial commands (keychain,
   reveal) stay synchronous on purpose.
 
+- **LibreOffice claimed a Dock tile partway through a run.** `--headless` suppresses document
+  *windows* but does not stop LibreOffice initialising AppKit and registering with LaunchServices,
+  and because the app ships a full nested `LibreOffice.app`, macOS was willing to give it a tile.
+  Conversions now pass the rest of the standard headless set — `--invisible --nodefault --nologo
+  --nolockcheck` alongside the existing `--headless --norestore` and the private
+  `-env:UserInstallation` profile.
+
+  The obvious alternative is recorded as a prohibition rather than an option: setting `LSUIElement`
+  or `LSBackgroundOnly` in the nested bundle's `Info.plist` breaks the sealed signature `ditto`
+  preserves, which notarisation requires. Flags are the only lever.
+
+- **A hung conversion blocked the whole run, forever.** Both subprocesses — the LibreOffice
+  conversion and the PDFium render worker — called `Command::output()`, which has no deadline, so a
+  wedged profile, a first-run prompt or a Gatekeeper check on an unsigned build parked a pipeline
+  worker slot indefinitely. Even after the threading fix above, that stalls the run. Both now go
+  through a 60s deadline (~10x the measured ~6.4s conversion) that kills the child and reports which
+  file and which step timed out; the pipeline already isolates per-file errors, so one bad document
+  fails that document and the run continues.
+
+- **A build with no bundled LibreOffice now fails loudly instead of borrowing the host's.** Engine
+  resolution was `bundled → PATH → /Applications`. The order was right, but the failure mode was
+  not: a bundle produced by a bare `tauri build` instead of `npm run build:app` — which places
+  LibreOffice with `ditto`, because Tauri's `bundle.resources` dereferences symlinks and breaks the
+  sealed signature — kept working on every machine that happened to have LibreOffice installed, which
+  is every dev machine and the CI runner, and failed only on a client's.
+
+  On macOS and Windows, a release build now uses the bundled engine or errors with the expected path
+  and `npm run build:app`. Host fallbacks survive only where they are legitimate: Linux, where
+  LibreOffice is a declared `deb`/`rpm` dependency, and `tauri dev`, gated on `cfg!(debug_assertions)`
+  so it cannot exist in a shipped build. Two checks keep the guarantee honest —
+  `scripts/package-desktop.mjs` asserts the placed `soffice` is present and executable **in the
+  finished `.app`** after `ditto`, and the release workflow repeats the assertion on the artifacts it
+  is about to publish. See
+  [Third-party engines](docs/pages/reference/third-party-engines.mdx).
+
 - **Native commands refused every real working folder.** A fresh 3.2.1 install failed each asset with
   `Refusing <x> outside Sotto's approved working directories`, and a run ended in hundreds of errors
   across thumbnails, CDN upload and collect. Two independent causes, both introduced with the S5
@@ -146,6 +181,12 @@ imported back.
 - [Thumbnails](docs/pages/desktop/thumbnails.mdx) explains why the measured 8-way throughput was
   never realised in the app before 3.2.2, and states the rule that keeps it: a blocking command must
   be `#[tauri::command(async)]`, and `async fn` is not an equivalent fix.
+- [Third-party engines](docs/pages/reference/third-party-engines.mdx) documents the mandatory-bundled
+  rule and its two packaging assertions, the headless flag set and why `Info.plist` is not an
+  alternative, and the subprocess deadline.
+- [Thumbnails](docs/pages/desktop/thumbnails.mdx) **corrected its resolution precedence**, which
+  still described the unconditional `bundled → PATH → vendor install` chain, and now names the flag
+  set and the deadline alongside it.
 - [Troubleshooting](docs/pages/operations/troubleshooting.mdx) gains entries for the freeze, the two
   newly diagnosable failures, and reading the build badge first — and **corrects advice that had
   become actively wrong**: "install LibreOffice, Poppler, and WebP tools" predated in-process Rust
