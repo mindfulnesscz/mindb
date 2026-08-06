@@ -30,7 +30,24 @@ const WORKING_DIR_FIELDS: &[&str] = &[
 pub fn restore_persisted_scope(app: &tauri::AppHandle) -> Result<(), String> {
     let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     allow_directory(app, &app_data)?;
+    grant_persisted_working_directories(app);
+    Ok(())
+}
 
+/// Grant every working directory named by the machine-local configuration.
+///
+/// Best-effort per directory: a client whose folder lives on an unmounted volume must not stop the
+/// other clients' folders from being granted, and at startup must not stop the app from booting.
+///
+/// This is also called again on a scope miss (see `require_in_scope`). The startup pass alone is not
+/// enough: on a fresh install the configuration is written *after* launch, as the user sets up their
+/// clients, so at boot there is nothing to grant and every native command would refuse for the rest
+/// of the session. Re-reading is safe because the roots still come from Rust reading app-local
+/// config — never from an IPC argument, so a caller cannot grant itself a directory by naming one.
+fn grant_persisted_working_directories(app: &tauri::AppHandle) {
+    let Ok(app_data) = app.path().app_data_dir() else {
+        return;
+    };
     for name in CONFIG_FILES {
         let path = app_data.join(name);
         let Ok(bytes) = std::fs::read(&path) else {
@@ -43,11 +60,10 @@ pub fn restore_persisted_scope(app: &tauri::AppHandle) -> Result<(), String> {
         collect_working_directories(&value, &mut dirs);
         for dir in dirs {
             if dir.is_dir() {
-                allow_directory(app, &dir)?;
+                let _ = allow_directory(app, &dir);
             }
         }
     }
-    Ok(())
 }
 
 fn allow_directory(app: &tauri::AppHandle, path: &Path) -> Result<(), String> {
@@ -136,8 +152,13 @@ fn require_in_scope(
     resolved: &Path,
     label: &str,
 ) -> Result<(), String> {
-    let scope = app.fs_scope();
-    if scope_allows_both(raw, resolved, |path| scope.is_allowed(path)) {
+    let allowed = scope_allows_with_refresh(
+        raw,
+        resolved,
+        |path| app.fs_scope().is_allowed(path),
+        || grant_persisted_working_directories(app),
+    );
+    if allowed {
         Ok(())
     } else {
         Err(format!(
@@ -145,6 +166,23 @@ fn require_in_scope(
             raw.display()
         ))
     }
+}
+
+/// Re-read the persisted grants once before refusing.
+///
+/// The scope is otherwise only populated at startup and by the folder picker, so a folder the user
+/// configured during this session is invisible to it until the app restarts.
+fn scope_allows_with_refresh(
+    raw: &Path,
+    resolved: &Path,
+    mut is_allowed: impl FnMut(&Path) -> bool,
+    mut refresh: impl FnMut(),
+) -> bool {
+    if scope_allows_both(raw, resolved, &mut is_allowed) {
+        return true;
+    }
+    refresh();
+    scope_allows_both(raw, resolved, &mut is_allowed)
 }
 
 fn scope_allows_both(
@@ -238,6 +276,67 @@ mod tests {
             Path::new("/outside/secret.pdf"),
             in_scope,
         ));
+    }
+
+    /// The fresh-install regression: the folder is configured after launch, so the boot-time pass
+    /// granted nothing. Re-reading the persisted config on a miss is what makes the session usable
+    /// without a restart.
+    #[test]
+    fn scope_miss_rereads_the_persisted_grants_before_refusing() {
+        use std::cell::Cell;
+
+        let granted = Cell::new(false);
+        let refreshes = Cell::new(0);
+        let path = Path::new("/work/source/deep/asset.jpeg");
+
+        let allowed = scope_allows_with_refresh(
+            path,
+            path,
+            |_| granted.get(),
+            || {
+                refreshes.set(refreshes.get() + 1);
+                granted.set(true);
+            },
+        );
+
+        assert!(allowed, "a folder configured after launch must be accepted");
+        assert_eq!(refreshes.get(), 1);
+    }
+
+    #[test]
+    fn a_path_outside_every_configured_root_is_still_refused_after_the_reread() {
+        use std::cell::Cell;
+
+        let refreshes = Cell::new(0);
+        let path = Path::new("/etc/passwd");
+
+        let allowed = scope_allows_with_refresh(
+            path,
+            path,
+            |_| false,
+            || refreshes.set(refreshes.get() + 1),
+        );
+
+        assert!(!allowed, "re-reading must not widen the boundary");
+        assert_eq!(refreshes.get(), 1, "and must be attempted at most once");
+    }
+
+    #[test]
+    fn an_already_granted_path_does_not_touch_the_config() {
+        use std::cell::Cell;
+
+        let refreshes = Cell::new(0);
+        let path = Path::new("/work/source/asset.jpeg");
+
+        let allowed = scope_allows_with_refresh(
+            path,
+            path,
+            |_| true,
+            || refreshes.set(refreshes.get() + 1),
+        );
+
+        assert!(allowed);
+        assert_eq!(refreshes.get(), 0, "the hot path must not re-read on every call");
     }
 
     #[cfg(unix)]

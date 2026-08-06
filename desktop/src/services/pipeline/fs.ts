@@ -45,10 +45,10 @@ export async function collectFiles(dir: string, s: AppSettings, directOnly = fal
   for (const e of entries) {
     if (e.name.startsWith('.')) continue;
     if (shouldSkip(e.name, s)) continue;
-    /* Before the file/directory branch, so it covers the `<stem>-thumb/` previews FOLDER and not
-       just the `-thumb.webp` sidecar. Checking only files here let the walk descend into a previews
-       folder and collect `001.webp` as a publishable asset — page names deliberately carry no
-       `-thumb`, so nothing downstream would have caught it. */
+    /* Before the file/directory branch, so it covers the `thumbnails/` FOLDER and not just the
+       sidecars inside it. Checking only files here let the walk descend into a previews folder and
+       collect `001.webp` as a publishable asset — page names carry no marker of any kind, so
+       nothing downstream would have caught it. */
     if (isPreviewArtifact(e.name)) continue;
     const childPath = await join(dir, e.name);
     if (e.isFile && isPublishableFile(e.name)) {

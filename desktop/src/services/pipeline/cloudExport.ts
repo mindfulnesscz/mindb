@@ -11,7 +11,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { stat, readFile, readTextFile, writeTextFile, exists } from '@tauri-apps/plugin-fs';
 import { join, appDataDir } from '@tauri-apps/api/path';
 import {
-  assetIdentityKey, buildVocabMap, translateExportName, stripWorkflowPrefix,
+  assetIdentityKey, buildVocabMap, translateExportName, stripWorkflowPrefix, isArtifactPath,
 } from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
 import { resolveExportShape } from '../../domain/client';
@@ -157,6 +157,23 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
     nestedOverride: string | null;
   };
 
+  /* THE EXPORT BOUNDARY. A client destination receives assets — never a thumbnail, a previews
+     folder or a render cache.
+
+     Both job sources are already filtered upstream, and this stage relied on that: it had no test
+     of its own and was clean only because `collectedAssets` arrives scan-filtered. That is exactly
+     the shape in which one new caller ships a client a `thumbnails/` folder, so the rule is applied
+     here too, against the path that is actually about to be uploaded. */
+  function assetsOnly(jobs: CloudFileJob[], destName: string): CloudFileJob[] {
+    const kept = jobs.filter(job =>
+      !isArtifactPath(job.nestedOverride ?? `${job.relativeDir}/${job.fileName}`));
+    const dropped = jobs.length - kept.length;
+    if (dropped) {
+      appendLog('skip', `  ⊘  ${destName}: ${dropped} render artifact(s) held back from the destination`);
+    }
+    return kept;
+  }
+
   async function packageFileJobsNested(): Promise<CloudFileJob[]> {
     const source = settings.sourceFolder;
     if (!source) return [];
@@ -221,6 +238,8 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
     } else {
       appendLog('dim', `  ${dest.name}: full folders under OUT`);
     }
+
+    files = assetsOnly(files, dest.name);
 
     if (!files.length) {
       appendLog('dim', `  ${dest.name}: no assets — skipping.`);

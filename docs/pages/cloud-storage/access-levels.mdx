@@ -242,6 +242,20 @@ Steps 3 and 4 need a caller to drain the queue. The portal does it after an edit
 after a run, so in practice it is seconds — but an empty `cdn_move_queue` is the only proof that
 bytes and levels agree.
 
+### When the reconcile fails
+
+A failed asset stays queued and is retried, so nothing is lost. Since 3.2.2 it also says **why**:
+`cdn-reconcile` returns a `failures[]` of `{asset_id, stage, reason}`, writes the same reason to
+`cdn_move_queue.last_error`, and the desktop prints it under the run summary as a warning rather than
+the previous opaque `2 failed`. `stage` is one of `thumbnail_url`, `download_url`, `stream`, `page`,
+or `database`. Identical reasons are grouped — one unset secret fails every video in the batch, and
+that should read as one line, not twenty-five.
+
+The reason that most often surprises people is **`stream: stream token not configured for this
+environment`**: `CF_STREAM_TOKEN` is only needed once an environment has videos, so a project can run
+for months without it and then fail every video the first time one changes level. It is a per-project
+secret — check it on each Supabase project separately.
+
 ### Changing many at once
 
 There is no bulk control in the portal, on purpose — "make these 300 assets public" is not an action

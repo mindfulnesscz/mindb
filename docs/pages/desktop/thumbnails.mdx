@@ -1,12 +1,76 @@
 # Thumbnail generation
 
+## Where the artifacts live
+
+> A `thumbnails/` folder sits **beside the files it serves** — never nested per asset, never named
+> per asset.
+
+So it lands in `OUT/` for the files directly under OUT, and inside the gallery folder for gallery
+children — the same split [asset grouping](/data-model/assets) makes. Inside it:
+
+```text
+[03] OUT/
+├── Chair-front-v1.jpg
+├── Deck-v2.pptx
+└── thumbnails/
+    ├── Chair-front-v1-thumb.webp        ← thumbnail
+    ├── Deck-v2-thumb.webp               ← a document's title page is just another thumbnail
+    ├── .Chair-front-v1-thumb.webp.json  ← render cache, hidden
+    ├── .Deck-v2-thumb.webp.json
+    └── Deck-v2/                         ← per-page previews, a set, so they keep a folder
+        ├── 001.webp  002.webp  …
+        └── .pages.json
+```
+
+Three things this asserts:
+
+- **Location is what makes something an artifact**, not its name. Every walker excludes
+  `thumbnails/` as a *unit*, before branching on file-vs-directory — which is what finally covers
+  the page files, whose names (`001.webp`) carry no marker at all. The rule lives in exactly one
+  place, `packages/domain/src/artifactLayout.ts`, and every writer composes its paths from it.
+- **No special case for a package holding one asset.** It gets a `thumbnails/` folder too. It saves
+  one visible entry there; a rule with exceptions is what made the previous convention impossible to
+  change safely across its call sites.
+- **Only the manifests are hidden.** Thumbnails and page previews keep visible names — they are
+  useful to look at in the source folder. The `.json` files are caches, not metadata.
+
+`-thumb` survives in the thumbnail filename even though location is now authoritative: it keeps
+every legacy substring filter working as a safety net through the migration. Dropping it is a
+separate, later decision.
+
+### Artifacts belong here and on R2 — never at a destination
+
+A render artifact has exactly two homes: this folder, as the cache, and R2, as what the portal
+serves. A **client destination gets assets**: no thumbnail, no previews folder, no manifest. That
+holds for every destination writer — local publish in both layouts, the package mirror, and each
+cloud provider — and is enforced at the point of upload rather than trusted from the caller.
+
+`pipelineExportBoundary.test.ts` is the guard: it hands each writer an OUT folder containing every
+artifact shape at once and requires the destination to contain exactly the assets. It deliberately
+does not assert on `-thumb` naming, so it keeps meaning the same thing if the naming changes again.
+
+### Migrating an existing library
+
+A library still in the pre-3.2.2 layout — artifacts loose beside their sources — is migrated in
+place at the start of the render stage. It costs nothing: each manifest travels with the artifact it
+describes, so the caches still match and **nothing re-renders**, and R2 keys are built from folder
+identity rather than a local path, so **no object moves and nothing orphans**. Only entries the
+classifier positively recognises are touched, only folders holding scanned assets are visited, and
+an already-migrated destination is never overwritten.
+
 ## What green ✓ means
 
-A green line in the `THUMBNAILS` section means the specific local `<source-stem>-thumb.webp` did not exist when checked and the native generator returned `true` after creating it. It says nothing about R2 upload or database synchronization.
+A green line in the `THUMBNAILS` section means the native generator re-rendered
+`thumbnails/<source-stem>-thumb.webp`, because its recorded source fingerprint or render settings no
+longer matched. It says nothing about R2 upload or database synchronization.
 
-Before generation, TypeScript checks candidate destination files in batches of 16. Existing files count as `exist` in the pre-filter and are not sent to Rust. Remaining jobs run eight at a time. Rust performs a second existence check, so a race or file appearing between checks produces `↷ skipped (exists)`.
+TypeScript does **not** pre-filter by existence. It hands every thumbnable file to Rust, eight at a
+time, and Rust decides from the manifest — existence alone cannot see that a source's bytes were
+replaced or that the width/quality settings changed. A file already current comes back as
+`↷ thumbnail current`.
 
-Therefore a wall of green lines means local sidecar thumbnails were absent—not that content changed. Common causes are a new source location, removed sidecars, renamed/versioned source stems, or a first run.
+So a wall of green lines means the recorded inputs stopped matching — most often a first run, a new
+source location, deleted artifacts, or a settings change — not necessarily that content changed.
 
 ## Rendering path
 
@@ -118,6 +182,14 @@ Multi-page scales better because one worker per *document* amortises process spa
 across all its pages. Concurrency is not managed here — it comes from the pipeline's existing
 8-at-a-time batching.
 
+That batching only delivers these numbers if the Tauri commands it calls are declared
+`#[tauri::command(async)]`. Tauri v2 runs a command without the `async` keyword on the **main
+thread**, so up to 3.2.1 all eight invocations serialised onto the one thread that also drives the
+event loop: the table above was measured in the worker pool but never realised in the app, and the
+window froze for the whole render phase. Fixed in 3.2.2. Any new command that blocks — rendering,
+hashing, reading a whole file — must carry `(async)` for the same reason; `async fn` is **not** an
+equivalent fix, because that moves blocking work onto the async runtime's executor instead.
+
 For Office documents none of this dominates: LibreOffice's conversion is ~6.4s per deck against
 PDFium's ~28ms per page, so the rasterising step is under half a percent of the work.
 
@@ -135,47 +207,54 @@ download, ~800MB on disk — so a clean machine needs no install step. On Linux 
 package dependency instead; see [Third-party engines](/reference/third-party-engines) for the
 licensing and signing consequences.
 
-Resolution precedence, in `render::soffice_from`:
+Resolution, in `render::soffice_from`: the **bundled** engine under `resources/native/libreoffice/`,
+and — only where a fallback is legitimate — `soffice` on `PATH`, then the vendor's own install
+location (`/Applications/LibreOffice.app/...`, `C:\Program Files\...`), which its installer does not
+add to `PATH`.
 
-1. **Bundled** engine under `resources/native/libreoffice/`
-2. `soffice` on `PATH`
-3. The vendor's own install location (`/Applications/LibreOffice.app/...`, `C:\Program Files\...`),
-   which its installer does not add to `PATH`
-
-Bundled must win, and a test pins that. The shipped copy is the version whose deck rendering was
-reviewed and accepted; a different version installed on the host would silently change how client
-decks look. The host fallbacks exist for `tauri dev` before `npm run deps:native` has run, and for
-Linux.
+The shipped copy is the version whose deck rendering was reviewed and accepted; a different version
+installed on the host would silently change how client decks look. So since 3.2.2 a **release** build
+on macOS or Windows uses the bundled engine or errors — it does not fall through. The fallbacks
+survive for Linux, where LibreOffice is a package dependency, and for `tauri dev` before
+`npm run deps:native` has run, gated on `cfg!(debug_assertions)`. Tests pin both the precedence and
+the refusal; see [the mandatory bundled
+engine](/reference/third-party-engines#on-macos-and-windows-the-bundled-engine-is-mandatory) for the
+packaging assertions that make it safe to depend on.
 
 Each conversion gets a private profile via `-env:UserInstallation`. This is **not optional**:
 LibreOffice locks a single shared profile, so eight concurrent conversions would otherwise serialise
-or fail outright.
+or fail outright. It also runs `--headless --invisible --nodefault --nologo --nolockcheck
+--norestore`: `--headless` alone still let macOS give the nested `LibreOffice.app` a Dock tile
+mid-run.
 
 Rendering cost is ~6.4s per deck, which dominates the Office path completely — PDFium's ~28ms per
-page is under half a percent of it.
+page is under half a percent of it. Both the conversion and the render worker run under a 60s
+deadline and are killed on expiry, so a wedged LibreOffice fails one document rather than holding a
+pipeline slot for the rest of the run.
 
 ## Per-page previews
 
-A document gets a **title thumbnail** (unchanged, and the only one that reaches packages and target
-destinations) plus a folder of per-page previews for the web portal:
+A document gets a **title thumbnail** — the only artifact that would ever reach a package, and it
+does not: it sits with every other thumbnail — plus a folder of per-page previews for the web portal:
 
 ```text
 (PRD)(SlD) Deck v2.pptx
-(PRD)(SlD) Deck v2-thumb.webp     ← title page — packages, target destinations, R2 thumbnails
-(PRD)(SlD) Deck v2-thumb/         ← per-page previews, web preview only
-    001.webp  002.webp  …
-    pages.json
+thumbnails/
+    (PRD)(SlD) Deck v2-thumb.webp     ← title page — R2 thumbnails
+    (PRD)(SlD) Deck v2/               ← per-page previews, web preview only
+        001.webp  002.webp  …
+        .pages.json
 ```
 
-The folder name ends in `-thumb`, which is load-bearing rather than cosmetic: `name.includes('-thumb')`
-is already the exclusion filter across the pipeline's walkers, and `scan.ts` applies it *before*
-branching on file-vs-directory, so the folder is invisible to OUT collection and packaging with no new
-rules. Page files are named zero-padded so lexical order is page order in shells, R2 listings and the
-portal alike.
+The page set keeps a folder because it *is* a set, but that folder no longer needs a name that
+earns its own exclusion: it sits inside `thumbnails/`, which every walker refuses as a unit. Page
+files are zero-padded so lexical order is page order in shells, R2 listings and the portal alike.
 
-The native command and the one-shot render worker both enforce this layout. A page render may only
-replace the exact `<source-stem>-thumb/` sibling and write the exact `<source-stem>-thumb.webp`
-thumbnail. A caller-supplied directory elsewhere is refused before `remove_dir_all` runs.
+The native command and the one-shot render worker both enforce this layout. Both outputs are
+**computed from the source path** and compared exactly: for `<dir>/<stem>.<ext>` the only acceptable
+targets are `<dir>/thumbnails/<stem>-thumb.webp` and `<dir>/thumbnails/<stem>`. Anything else —
+including a sibling inside the *same* `thumbnails/` folder, which a prefix test would wave through —
+is refused before `remove_dir_all` runs.
 
 Eligible types are PDF, PowerPoint and Word. **Spreadsheets are capped at one page** — a wide sheet
 printed to PDF paginates into dozens of near-empty slices, so the full allowance would spend real time
@@ -192,11 +271,11 @@ One worker process per **document**, not per page — spawn plus PDFium init is 
 double the cost of a 28ms page but disappears when amortised across a document's pages. Measured: a
 20-page PDF renders in 0.93s end to end, including spawn.
 
-### `pages.json` decides what is current
+### `.pages.json` decides what is current
 
-Existence checking — how the plain `-thumb.webp` cache works — cannot see the three things that
-invalidate previews: the source changed, an administrator changed the page limit, or the width/quality
-settings changed. So the manifest records its inputs:
+Existence checking cannot see the three things that invalidate previews: the source changed, an
+administrator changed the page limit, or the width/quality settings changed. So the manifest records
+its inputs:
 
 ```json
 { "version": 1, "srcMtimeMs": …, "srcSize": …,
@@ -234,6 +313,15 @@ would stop producing the still it produces today.
 
 ## Cache semantics and limitations
 
-Existence—not mtime or content hash—governs local regeneration. Editing `Deck v3.pdf` without changing its stem leaves an old sidecar in place. Delete the sidecar to force regeneration. Conversely, R2 uses content hashes; these are intentionally different cache layers.
+Local regeneration is governed by the hidden manifests, which record the source's **mtime + size**
+and the width/quality the output was rendered at. Editing `Deck v3.pdf` without renaming it *does*
+refresh its thumbnail — the fingerprint stops matching. Hashing is deliberately avoided here:
+documents reach 20MB+, and reading the whole library on every run is exactly the cost this cache
+exists to remove. R2 uses content hashes instead; these are intentionally different cache layers.
+
+**Deleting the manifests re-renders the library** (~6.4s per Office document). They are hidden, not
+optional. Note that hiding means a leading dot, which macOS and Linux honour and **Windows does
+not** — Windows uses `FILE_ATTRIBUTE_HIDDEN`, and Sotto ships macOS only today, so that attribute is
+not set. When a Windows build is added, set it where the manifests are written in `render.rs`.
 
 Next: [R2 publishing](/desktop/cdn) and [Logs](/desktop/logs).

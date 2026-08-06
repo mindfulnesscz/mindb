@@ -227,15 +227,17 @@ describe('collect — the mirror purge (destructive)', () => {
     ]);
   });
 
-  /* A document's per-page previews live in `<stem>-thumb/` beside it. They are web-preview only and
-     must never be packaged or collected as assets.
+  /* A document's per-page previews are web-preview only and must never be packaged or collected as
+     assets. This fixture is deliberately in the PRE-3.2.2 shape — `<stem>-thumb/` loose beside the
+     source — because an unmigrated library still has one on disk; the current layout is covered by
+     pipelineExportBoundary.test.ts.
 
-     This is the failure mode worth guarding: the page files are named `001.webp`, which contains no
-     `-thumb`, so the long-standing `name.includes('-thumb')` file filter does NOT catch them. The
-     exclusion only works if it is applied to the DIRECTORY before a walker descends. Two walkers
-     were missing that — `pipeline/fs.ts` (which would have collected the pages as publishable
-     assets, then given each one a thumbnail of its own) and `dam/scan.ts` (which would have
-     registered every previews folder as an orphan asset folder in the vault). */
+     This is the failure mode worth guarding: the page files are named `001.webp` and carry no
+     marker at all, so a filter applied to filenames does NOT catch them. The exclusion only works
+     if it is applied to the DIRECTORY before a walker descends. Two walkers were missing that —
+     `pipeline/fs.ts` (which would have collected the pages as publishable assets, then given each
+     one a thumbnail of its own) and `dam/scan.ts` (which would have registered every previews
+     folder as an orphan asset folder in the vault). */
   it('never collects or packages a document\'s per-page previews', async () => {
     seedCampaign();
     const previews = `${SRC}/Campaign/Asset One __a1b2c3d4/[03] OUT/(PRD)(SlD) Deck v2-thumb`;

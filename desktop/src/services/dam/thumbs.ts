@@ -9,6 +9,7 @@ import {
 } from '@tauri-apps/plugin-fs';
 import { join } from '@tauri-apps/api/path';
 import { invoke } from '@tauri-apps/api/core';
+import { isPreviewArtifact, thumbPathFor } from '@sotto/domain';
 import {
   listDir, fileExists, isUnchanged,
 } from './fs';
@@ -31,7 +32,7 @@ export async function galleryFirstThumbnable(folder: string): Promise<string | n
   const entries = await listDir(folder);
   const candidates = entries
     .filter(e => {
-      if (!e.isFile || e.name.startsWith('.') || e.name.includes('-thumb')) return false;
+      if (!e.isFile || e.name.startsWith('.') || isPreviewArtifact(e.name)) return false;
       const ext = '.' + (e.name.split('.').pop() || '').toLowerCase();
       return GALLERY_THUMB_EXTS.has(ext);
     })
@@ -53,7 +54,7 @@ export async function ensureThumb(
     const destPath  = await join(attRoot, destName);
     const srcDir    = srcFile.substring(0, srcFile.lastIndexOf('/'));
     const srcStem   = srcFile.split('/').pop()!.replace(/\.[^.]+$/, '');
-    const preExisting = await join(srcDir, srcStem + '-thumb.webp');
+    const preExisting = thumbPathFor(srcDir, srcStem);
 
     if (await fileExists(preExisting)) {
       if (!await isUnchanged(preExisting, destPath)) await copyFile(preExisting, destPath);

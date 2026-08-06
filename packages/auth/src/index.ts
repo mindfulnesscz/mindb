@@ -3,12 +3,17 @@
  * Both clients sign in against the *same* Supabase project, profiles, and roles.
  * What is shared lives here: the typed client factory and the provider-agnostic
  * sign-in calls. What is genuinely platform-specific stays in each app and is
- * passed in as options:
- *   - web returns from the provider by browser redirect, so the client is built
- *     with `detectSessionInUrl: true` and the `?code=` is exchanged on load.
- *   - desktop has no page to return to: a Rust loopback listener captures the
- *     `?code=` and calls `exchangeCodeForSession` manually, so it builds the
- *     client with `detectSessionInUrl: false` and a per-environment storageKey.
+ * passed in as options. **Both** platforms exchange the `?code=` themselves and
+ * build the client with `detectSessionInUrl: false`:
+ *   - desktop has no page to return to, so a Rust loopback listener captures the
+ *     `?code=` and calls `exchangeCodeForSession`. It also sets a per-environment
+ *     storageKey.
+ *   - web returns by browser redirect and could delegate to `detectSessionInUrl`,
+ *     but that path reports a FAILED exchange only as the resolved value of an
+ *     internal promise while keeping the previous session in storage — a failed
+ *     sign-in then presents as the previous user's account. `web/apps/client-hub`
+ *     resolves the return itself in `src/lib/authReturn.ts`, at app level, before
+ *     any session is trusted.
  *
  * These functions throw on error (the idiomatic shape). Callers that prefer a
  * soft failure — e.g. the web modal mapping a failed pre-check to 'unknown', or

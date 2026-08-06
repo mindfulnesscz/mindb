@@ -24,7 +24,8 @@
  */
 
 import { spawn } from 'node:child_process';
-import { readFile, readdir, rm, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -32,8 +33,15 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NATIVE_SRC = join(ROOT, 'desktop/src-tauri/resources/native');
 const BUNDLE = join(ROOT, 'desktop/src-tauri/target/release/bundle');
 
-/** Engines Tauri must NOT copy, because they are directory trees with symlinks. */
-const PLACED_BY_US = ['libreoffice'];
+/* Engines Tauri must NOT copy, because they are directory trees with symlinks.
+ *
+ * `entry` is the executable Rust resolves at runtime (`render.rs::libreoffice_rel`). It is checked
+ * in the FINISHED .app, not just in the source tree: `ditto` copying a directory is not the same
+ * claim as the app having a working engine, and since a release build now refuses to fall back to a
+ * host install, an engine-less bundle is a DMG that fails on every client machine. */
+const PLACED_BY_US = [
+  { engine: 'libreoffice', entry: 'LibreOffice.app/Contents/MacOS/soffice' },
+];
 
 function run(cmd, args, opts = {}) {
   return new Promise((ok, fail) => {
@@ -45,6 +53,25 @@ function run(cmd, args, opts = {}) {
 
 async function exists(p) {
   try { await stat(p); return true; } catch { return false; }
+}
+
+/** Assert a placed engine's executable is present AND runnable at `path`, or throw saying which. */
+async function assertExecutable(path, engine) {
+  // `stat` follows symlinks, which is what we want: `entry` may be one, and a dangling link is
+  // exactly the kind of half-copy this check exists to catch.
+  const info = await stat(path).catch(() => null);
+  if (!info?.isFile()) {
+    throw new Error(
+      `${engine} was not placed: ${path} is missing from the finished app. ` +
+      `The app refuses to fall back to a host LibreOffice in a release build, so this DMG would ` +
+      `fail on every machine.`,
+    );
+  }
+  try {
+    await access(path, constants.X_OK);
+  } catch {
+    throw new Error(`${engine} was placed but ${path} is not executable (mode ${(info.mode & 0o777).toString(8)})`);
+  }
 }
 
 /** The single .app in the macos bundle dir — its name follows productName, so do not hardcode it. */
@@ -67,7 +94,7 @@ async function main() {
   console.log('▸ Fetching native engines');
   await run('node', [join(ROOT, 'scripts/fetch-native-deps.mjs')]);
 
-  for (const engine of PLACED_BY_US) {
+  for (const { engine } of PLACED_BY_US) {
     if (!await exists(join(NATIVE_SRC, engine))) {
       throw new Error(`${engine} missing from ${NATIVE_SRC} — fetch-native-deps did not provide it`);
     }
@@ -80,13 +107,16 @@ async function main() {
   const destRoot = join(app, 'Contents/Resources/resources/native');
 
   console.log(`\n▸ Placing engines with ditto → ${destRoot}`);
-  for (const engine of PLACED_BY_US) {
+  for (const { engine, entry } of PLACED_BY_US) {
     const dest = join(destRoot, engine);
     // Remove any stale copy first: ditto merges into an existing tree, which would leave files from
     // a previous LibreOffice version behind and silently change what ships.
     await rm(dest, { recursive: true, force: true });
     await run('ditto', [join(NATIVE_SRC, engine), dest]);
-    console.log(`  ✓ ${engine}`);
+    // Verify the DESTINATION, not the source we already checked. ditto exiting 0 is not proof the
+    // app can launch the engine, and this is the last moment the failure is cheap.
+    await assertExecutable(join(dest, entry), engine);
+    console.log(`  ✓ ${engine} — ${entry} present and executable`);
   }
 
   /* ── SIGNING GOES HERE ──────────────────────────────────────────────────

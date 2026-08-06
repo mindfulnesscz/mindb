@@ -13,6 +13,8 @@
  *                     someone's disk, a row in Postgres and an object on the CDN. If the two
  *                     apps ever disagree on this regex, published assets orphan.
  * - `naming`        — which folders are packages / OUT, and what the run skips.
+ * - `artifactLayout` — where render artifacts live. One `thumbnails/` folder beside the files it
+ *                     serves; the desktop writes there, every walker excludes it by location.
  * - `version`       — version parsing and "highest version wins". Decides what ships.
  * - `vocabulary`    — the three-dimension taxonomy and the shortcode string it renders.
  * - `filenameTranslator` — shortcodes ⇄ human labels. The portal shows what the pipeline wrote.
@@ -25,6 +27,7 @@
 
 export * from './stableId';
 export * from './naming';
+export * from './artifactLayout';
 export * from './version';
 export * from './vocabulary';
 export * from './filenameTranslator';

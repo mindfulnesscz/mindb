@@ -20,6 +20,8 @@ The Vocabulary screen can scaffold a migrated asset instead of relying on a manu
 
 The desktop allocates a client-unique eight-character stable ID, creates `<folder> __<stableId>` with `IN`, `WRK`, and `OUT` subdirectories, writes `.dchub.json`, writes a package `readme.md`, reserves child `c1` with an empty filename placeholder in `OUT`, and creates an internal draft row in Supabase.
 
+The run adds one more entry to `OUT` on its own: a `thumbnails/` folder holding every render artifact for the files beside it. It is excluded from every destination and never counts as an asset — see [thumbnail generation](/desktop/thumbnails) for the layout.
+
 The placeholder has no extension, so the normal publish scanner ignores it. Replace it with the real versioned file before publishing. Folder creation can succeed before the Supabase draft request fails; the UI reports that partial state and the operator should reconcile it rather than creating another package blindly.
 
 This flow requires an active client with a source/creation folder and a signed-in **editor/admin** session (RLS). Prefer it for migrated clients so packages get stable IDs from the start.

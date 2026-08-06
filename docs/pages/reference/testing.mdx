@@ -72,8 +72,26 @@ Desktop has three in-memory harnesses in `desktop/src/test/`:
 | `vfs` | `@tauri-apps/plugin-fs` | Monotonic mtimes, and an `ops` log so a test can assert what was destroyed |
 | `invokeStub` | the Rust bridge | Records `upload_to_r2`, `generate_thumbnail`, `delete_r2_object` |
 | `fetchStub` | the cloud providers' `fetch` | Route-based replies; asserts which request was made |
+| `realFs` | `@tauri-apps/plugin-fs`, on a real temp dir | The deliberate exception below |
 
 Use these rather than touching the network or the disk.
+
+### The one deliberate exception: `realFs`
+
+`vfs` roots everything at `/src`, so every path looks alike to the code under test. Real client
+folders do not: they are absolute, deeply nested, and full of spaces, parentheses and emoji
+(`~/Library/CloudStorage/Dropbox-…/04 PROJECTS/11 M5/M5 Photos __6801071c/OUT/…`). The 3.2.1 fs-scope
+regression failed on every asset in exactly that shape while the whole suite stayed green.
+
+`realFs` backs the same API with `node:fs` against a temp directory, and
+`services/pipeline/outOfAppdata.smoke.test.ts` runs scan → identity → thumbnail → CDN upload through
+it, asserting that no "forbidden path" or "no folder identity" appears. Pair it with
+`invokeStub.useFsBackend(realFs.stubBackend())`, or the render fakes write into `vfs` while the
+pipeline reads the temp dir and the CDN stage reports "no thumb".
+
+It does **not** exercise Tauri's capability scope or `path_policy` — neither exists under vitest.
+Those are guarded separately by `src/app/fsCapability.test.ts` and the Rust unit tests in
+`path_policy.rs`. Three narrow guards; the real proof is a packaged build on a clean profile.
 
 ## Tests that touch a real database own their tenant
 

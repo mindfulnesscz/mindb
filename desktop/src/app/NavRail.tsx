@@ -6,6 +6,7 @@ import { useAuthStore } from '../store/authStore';
 import { signOut } from '../services/authService';
 import { reportError } from '../services/reportError';
 import { ClientPickerModal, ClientAvatar } from '../features/clients/ClientPickerModal';
+import { BuildBadge } from './BuildBadge';
 import css from './NavRail.module.css';
 
 const ITEMS: { dest: NavDest; icon: React.FC<{ size?: number }>; label: string }[] = [
@@ -76,6 +77,9 @@ export function NavRail() {
           <LogOut size={20} />
           <span className={css.navLabel}>Sign out</span>
         </button>
+
+        {/* ── Build + backend, so "which one am I running?" is never a guess ── */}
+        <BuildBadge />
 
         {/* ── DC mark ── */}
         <div className={css.dcMark} title="Disrupt Collective">

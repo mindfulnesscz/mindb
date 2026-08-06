@@ -61,18 +61,5 @@ export function isThumbFile(stem: string): boolean {
   return stem.includes('-thumb');
 }
 
-/**
- * A generated preview artifact sitting beside an asset — either the `<stem>-thumb.webp` sidecar or
- * the `<stem>-thumb/` folder of per-page previews.
- *
- * Use this on EVERY directory entry a walker sees, not just the files. The name matches both cases
- * on purpose, which is why the previews folder is called `<stem>-thumb`: existing walkers already
- * excluded `-thumb`, so the folder inherits that. But the exclusion has to be applied BEFORE
- * branching on file-vs-directory. A walker that only checks files will descend into
- * `<stem>-thumb/` and collect `001.webp` as an asset — the page names deliberately do not contain
- * `-thumb`, so nothing downstream catches it, and the page previews would be published as assets,
- * synced to the DAM, and given thumbnails of their own.
- */
-export function isPreviewArtifact(name: string): boolean {
-  return name.includes('-thumb');
-}
+/* Whether an entry is a generated render artifact is a question about WHERE it lives, not what it
+   is called — see `isPreviewArtifact` and the layout contract in ./artifactLayout. */

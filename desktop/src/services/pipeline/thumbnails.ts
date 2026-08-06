@@ -1,4 +1,8 @@
-/* THUMBNAILS stage — the -thumb.webp beside each thumbnable asset, plus per-page previews.
+/* THUMBNAILS stage — one `thumbnails/` folder per asset folder, plus per-page previews.
+ *
+ * Where the outputs go is `@sotto/domain`'s artifactLayout, never composed here: Rust recomputes
+ * the same two paths from the source and refuses anything else before it deletes a previews
+ * directory, so a second copy of the rule would show up as a refusal rather than a wrong file.
  *
  * Rendering itself is in Rust; this stage only decides what needs doing. Two paths:
  *
@@ -11,6 +15,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import { thumbPathFor, pagesDirFor } from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
 import { THUMB_EXTS, PAGE_PREVIEW_EXTS, extensionOf, DEFAULT_PREVIEW_PAGE_LIMIT } from './naming';
 
@@ -67,13 +72,13 @@ export async function runThumbnails(ctx: RunContext, stats: RunStats): Promise<v
     const fileName = srcFile.split('/').pop()!;
     const dotIdx   = fileName.lastIndexOf('.');
     const stem     = dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName;
-    const dir      = srcFile.slice(0, srcFile.lastIndexOf('/') + 1);
-    const destFile = dir + stem + '-thumb.webp';
+    const dir      = srcFile.slice(0, srcFile.lastIndexOf('/'));
+    const destFile = thumbPathFor(dir, stem);
 
     if (PAGE_PREVIEW_EXTS.has(extensionOf(fileName))) {
-      // The previews folder shares the thumbnail's `-thumb` stem, which is what keeps it out of
-      // every walker and every package (see isPreviewArtifact).
-      docJobs.push({ srcFile, fileName, destFile, pagesDir: dir + stem + '-thumb' });
+      // The title thumbnail joins the other thumbnails; only the page previews, which are a SET,
+      // keep a folder of their own — and it sits inside `thumbnails/` with them.
+      docJobs.push({ srcFile, fileName, destFile, pagesDir: pagesDirFor(dir, stem) });
     } else {
       // The native command owns the source fingerprint and render-settings cache. Calling it for
       // an existing thumbnail is cheap and is what lets it detect restored/changed source bytes.
@@ -85,7 +90,7 @@ export async function runThumbnails(ctx: RunContext, stats: RunStats): Promise<v
   if (files.length > 0) {
     const s0 = files[0];
     const n0 = s0.split('/').pop()!;
-    const d0 = s0.slice(0, s0.lastIndexOf('/') + 1) + n0.slice(0, n0.lastIndexOf('.')) + '-thumb.webp';
+    const d0 = thumbPathFor(s0.slice(0, s0.lastIndexOf('/')), n0.slice(0, n0.lastIndexOf('.')));
     appendLog('dim', `  src[0]:  ${s0}`);
     appendLog('dim', `  dest[0]: ${d0}`);
   }
