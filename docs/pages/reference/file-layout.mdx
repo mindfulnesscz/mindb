@@ -26,7 +26,7 @@ Everything both applications must agree about lives here, at the repository root
 | `desktop/src/services/dam` | Obsidian vault and canvas builder |
 | `desktop/src/domain` | `client.ts` only — it mixes portal identity with machine-local config, so it is not shareable. Everything else moved to `packages/domain` |
 | `desktop/src/store` | Zustand settings / client / pipeline / environment state |
-| `desktop/src/test` | In-memory harnesses: `vfs`, `invokeStub`, `fetchStub` |
+| `desktop/src/test` | Test harnesses: `vfs`, `invokeStub`, `fetchStub` in memory, plus `realFs` — a real-temp-dir backing for the out-of-appdata smoke test ([why](/reference/testing#the-one-deliberate-exception-realfs)) |
 | `desktop/src-tauri/src` | Native commands: thumbnails, R2 signing, cloud, Supabase proxy, reveal bridge |
 
 ## Portal
@@ -36,6 +36,7 @@ Everything both applications must agree about lives here, at the repository root
 | `web/apps/client-hub/src/features` | Portal, gallery and admin screens |
 | `web/apps/client-hub/src/services` | Browser data access |
 | `web/apps/client-hub/src/context` | Auth and role/client state |
+| `web/apps/client-hub/src/lib` | Supabase client config, and `buildInfo.ts` — the [build badge](/reference/versioning#which-build-am-i-looking-at)'s environment label, derived from the project ref |
 
 ## Backend, tooling, docs
 

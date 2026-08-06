@@ -54,7 +54,23 @@ A hotfix for 3.2.1, which could not run a pipeline at all on a fresh install.
   the active environment and version in the nav rail; the portal pins the same pair to the corner —
   always for staff, and for everyone whenever the backend is not production. The portal derives its
   label from the Supabase project ref rather than a separate env var, so the badge cannot disagree
-  with the backend it describes.
+  with the backend it describes. See
+  [which build am I looking at](docs/pages/reference/versioning.mdx).
+
+### Documentation
+
+- [Desktop native security](docs/pages/desktop/native-security.mdx) **dropped a claim that was no
+  longer true.** It stated the filesystem capability "contains no repository-wide or machine-wide
+  `**` rule" while 3.2.1 shipped exactly that on ten permissions. It now describes the real scope,
+  and separates the two independent mechanisms that made the regression so hard to read.
+- [Access levels](docs/pages/cloud-storage/access-levels.mdx) and
+  [Video](docs/pages/cloud-storage/video.mdx) document what a reconcile failure reports, and why an
+  environment can run for months before an unset `CF_STREAM_TOKEN` surfaces.
+- [Testing](docs/pages/reference/testing.mdx) documents `realFs` — and, as importantly, what it
+  cannot prove: Tauri's capability scope and `path_policy` do not exist under vitest, so the
+  end-to-end check is still a packaged build on a clean profile.
+- [Troubleshooting](docs/pages/operations/troubleshooting.mdx) gains entries for the two new
+  diagnosable failures and for reading the build badge first.
 
 
 ## [3.2.1] — 2026-08-06

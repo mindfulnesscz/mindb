@@ -9,6 +9,9 @@ Start by locating the failing boundary: scan, local conversion, local copy, R2, 
 - Portal query fails: inspect browser network response, Supabase configuration, generated types, column types, and RLS.
 - Downloads fail despite visible card: check status/role helper, singular `download_url`, object existence, URL encoding, and public-domain policy.
 - Admin action fails while the header shows you signed in: suspect a [revoked session](/auth#revoked-sessions-a-tab-that-looks-signed-in-but-is-not) before the feature — reads keep working off a token the edge functions already refuse.
+- **Unsure which build or backend you are on**: read the badge — nav rail on the desktop, bottom-left in the portal. It names the environment and version, and colours anything that is not production. See [which build am I looking at](/reference/versioning#which-build-am-i-looking-at). Check this *first* when behaviour disagrees with the code you just changed.
+- **`Refusing <x> outside Sotto's approved working directories`**: a native command was handed a path outside the approved roots. Fixed in 3.2.2 for the two causes that made it fire on every asset of a fresh install (a non-recursive picker grant, and persisted roots read only at startup). If it recurs, the path is genuinely outside `$HOME` and `/Volumes` — reassign the folder with **Browse**, and see [filesystem scope](/desktop/native-security#filesystem-scope).
+- **`⟳ CDN reconcile — … N failed`**: since 3.2.2 each failure is printed under that line with its stage and reason, and stored in `cdn_move_queue.last_error`. Read those before opening the function logs. The most common is a missing per-project `CF_STREAM_TOKEN` — see [when the reconcile fails](/cloud-storage/access-levels#when-the-reconcile-fails).
 - Cloud failures: use [provider troubleshooting](/cloud-storage/troubleshooting).
 
 Preserve the exact section, filename, HTTP status, and response body; generic final counters lose important context.

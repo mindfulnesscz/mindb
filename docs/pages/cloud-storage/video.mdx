@@ -236,6 +236,12 @@ Without `CF_STREAM_TOKEN`, `stream-upload` returns an explicit 503 "not provisio
 failing silently, and `cdn-reconcile` carries on re-keying images normally — it needs the token only
 once videos exist.
 
+That last part is the trap: a project runs for months without the token and nothing complains, then
+the first video to change level fails every reconcile attempt. Since 3.2.2 it says so — the reconcile
+reports `stream: stream token not configured for this environment` per asset, in the desktop run log
+and in `cdn_move_queue.last_error`, instead of a bare `2 failed`. It is a **per-project** secret, so
+having it on production tells you nothing about staging.
+
 ## Troubleshooting
 
 **"Video processing" on a video that has finished.** The row is stale, not the video. Compare:
