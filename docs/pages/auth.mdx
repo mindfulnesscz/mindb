@@ -238,6 +238,65 @@ For users whose email domain isn't whitelisted:
 2. Profile is created with `role = 'public'` and no tenant access; choosing a portal does not assign it
 3. An admin promotes them in the **Users** tab of the admin dashboard
 
+## Revoked sessions (a tab that looks signed in but is not)
+
+An access token stays **signature-valid and unexpired** after its session row is revoked — by a
+password change, a sign-out in another tab, or a local database that was reset. The two halves of the
+backend disagree about such a token, and the disagreement is the whole problem:
+
+| Consumer | Checks | A revoked token therefore |
+|---|---|---|
+| Edge gateway, PostgREST / RLS | Signature + `exp` only | **Works.** Reads succeed, the header renders a name |
+| GoTrue (`auth.getUser`), used by every edge function | The session row | **Fails** with `session_not_found` |
+
+So the portal renders a signed-in operator while every function refuses them. Before this was named,
+an admin page answered `Not authenticated` under a header showing a super admin — which reads as a
+bug in that page rather than a stale tab.
+
+### The contract
+
+Three backends resolve a caller against GoTrue, and one portal acts on their answer, so the
+vocabulary is shared rather than copied: **`packages/domain/src/callerAuth.ts`** owns the two codes
+(`session_invalid` / `not_authenticated`), the operator-facing messages, and which GoTrue
+`error_code` values mean a dead session. A drifted copy of those strings would not fail loudly — the
+portal's check would simply never match, and gated thumbnails would stay blank on a tab that looks
+signed in.
+
+What is **not** shared is how each backend reaches the verdict, because that depends on how it talks
+to GoTrue:
+
+| Backend | Sees | Adapter |
+|---|---|---|
+| Edge functions | supabase-js `auth.getUser()` | `supabase/functions/_shared/caller-auth-policy.ts` |
+| cdn-gate Worker `/auth` | GoTrue's raw `error_code` | `classifyGoTrueRefusal` inline in `workers/cdn-gate/src/index.ts` |
+| Portal | the `code` in the 401 body | `web/apps/client-hub/src/lib/edgeFunction.ts` |
+
+The edge functions need an adapter at all because **supabase-js intercepts `session_not_found` and
+rethrows it as a code-less `AuthSessionMissingError`** — byte-identical to what it throws locally,
+with no network call, when no Authorization header was supplied. The error therefore cannot tell a
+revoked session from an anonymous caller; the *request* can, so the classifier also takes the
+caller's `Authorization` header and asks whether a JWT was presented at all. A contract test drives
+the installed client against a stubbed GoTrue so a client upgrade that changes this fails the suite
+instead of silently disabling the feature.
+
+### What the portal does with it
+
+`edgeFunctionError` reads the code off any `functions.invoke` failure, `requestCdnCookie` reads it
+off the gate's 401, and both call the handler `AuthProvider` registers — which clears the session
+locally, dropping the tab to the sign-in screen. Local scope on purpose: a global sign-out would POST
+the dead token, fail, and leave it in storage.
+
+A 401 *without* that code never signs anyone out. An anonymous caller, a refused API key, and a
+banned account are all 401s, and re-authenticating fixes none of them.
+
+The gate matters most here despite being the least visible: `useCdnCookie` renews on a timer for as
+long as the tab is open, so before this it retried a dead token indefinitely and the only symptom was
+a gallery of blank gated thumbnails.
+
+**Diagnosing one:** `docker logs supabase_auth_dc-hub` (or the hosted Auth logs) shows the cause
+verbatim — `"error":"Session not found","path":"/user","status":403`. Requests forwarded by an edge
+function arrive with `x_forwarded_host: kong`, which distinguishes them from the browser's own calls.
+
 ## Supabase configuration
 
 In **Authentication → URL Configuration**:

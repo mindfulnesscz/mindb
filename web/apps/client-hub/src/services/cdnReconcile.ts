@@ -18,6 +18,7 @@
 
 import { supabase } from '../lib/supabase'
 import { reportError } from '../lib/reportError'
+import { edgeFunctionError } from '../lib/edgeFunction'
 
 export interface ReconcileResult {
   moved: number
@@ -33,7 +34,10 @@ export async function reconcileCdnObjects(): Promise<ReconcileResult | null> {
     // it is staff-only, and no callback secret is stored anywhere as a result.
     const { data, error } = await supabase.functions.invoke('cdn-reconcile', { body: {} })
     if (error) {
-      reportError('cdn.reconcileCdnObjects', error)
+      // Reading the body is also what notices a revoked session — otherwise the queue would just
+      // stop draining, silently, for as long as the tab stayed open. See edgeFunction.ts.
+      const detail = await edgeFunctionError(error)
+      reportError('cdn.reconcileCdnObjects', detail ? new Error(detail) : error)
       return null
     }
     return data as ReconcileResult

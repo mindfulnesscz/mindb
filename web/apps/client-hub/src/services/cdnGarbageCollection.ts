@@ -1,5 +1,6 @@
 import type { CdnGcReport } from '@sotto/domain'
 import { supabase } from '../lib/supabase'
+import { edgeFunctionError } from '../lib/edgeFunction'
 
 export interface CdnGcAnalysis {
   planId: string
@@ -61,24 +62,13 @@ export class CdnGarbageCollectionError extends Error {
   }
 }
 
-async function functionError(error: unknown): Promise<string | null> {
-  const response = (error as { context?: Response })?.context
-  if (!response || typeof response.json !== 'function') return null
-  try {
-    const body = await response.json() as { error?: string }
-    return body.error ?? null
-  } catch {
-    return null
-  }
-}
-
 export async function analyzeCdnGarbage(): Promise<CdnGcAnalysis> {
   if (!supabase) throw new CdnGarbageCollectionError('Supabase is not configured.')
   const { data, error } = await supabase.functions.invoke<AnalyzeResponse>('cdn-gc', {
     body: { action: 'analyze' },
   })
   if (error) {
-    throw new CdnGarbageCollectionError(await functionError(error) ?? error.message)
+    throw new CdnGarbageCollectionError(await edgeFunctionError(error) ?? error.message)
   }
   if (!data?.ok || !data.analysis) {
     throw new CdnGarbageCollectionError(data?.error ?? 'CDN analysis returned no report.')
@@ -101,7 +91,7 @@ export async function executeCdnGarbage(args: {
     },
   })
   if (error) {
-    throw new CdnGarbageCollectionError(await functionError(error) ?? error.message)
+    throw new CdnGarbageCollectionError(await edgeFunctionError(error) ?? error.message)
   }
   if (!data) throw new CdnGarbageCollectionError('CDN execution returned no result.')
   return data

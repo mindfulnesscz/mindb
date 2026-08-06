@@ -12,6 +12,7 @@
 
 import { supabase } from '../lib/supabase'
 import { reportError } from '../lib/reportError'
+import { edgeFunctionError } from '../lib/edgeFunction'
 
 interface CachedToken {
   token: string
@@ -116,9 +117,13 @@ export async function ensureStreamTokens(assetIds: string[]): Promise<void> {
         durationOverride.set(assetId, seconds)
       }
     } catch (e) {
+      /* Reading the body matters more here than the message does: this is the portal's most
+         frequent call, so it is the one that notices a revoked session first — and the failure it
+         would otherwise present is a grid of blank video cards. See edgeFunction.ts. */
+      const detail = await edgeFunctionError(e)
       // `cdn.` because this is delivery authorization — the same concern as the gate cookie, just
       // for the host that will not take a cookie.
-      reportError('cdn.ensureStreamTokens', e)
+      reportError('cdn.ensureStreamTokens', detail ? new Error(detail) : e)
     }
   })()
 

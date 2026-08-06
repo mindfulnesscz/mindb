@@ -10,6 +10,7 @@ import {
 } from '@sotto/auth'
 import { supabase, isConfigured, getConfig } from '../lib/supabase'
 import { configureErrorSink } from '../lib/reportError'
+import { configureSessionEndedHandler } from '../lib/edgeFunction'
 import { useCdnCookie } from '../hooks/useCdnCookie'
 import type { ProfileRow } from '@sotto/database'
 
@@ -74,6 +75,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })
 
     return () => subscription.unsubscribe()
+  }, [])
+
+  /* A revoked session is invisible from here: the access token still passes signature checks, so
+     reads keep working and nothing in this provider ever learns the session row is gone. The edge
+     functions do learn it, and say so — this is what turns that answer into a sign-out instead of a
+     portal that shows a signed-in header above "your session is no longer valid".
+
+     Local scope on purpose: the server-side session no longer exists, so a global sign-out is a
+     POST with a dead token that fails and leaves the stale token sitting in storage. */
+  useEffect(() => {
+    const client = supabase
+    if (!client) return
+    configureSessionEndedHandler(() => { void client.auth.signOut({ scope: 'local' }) })
+    return () => configureSessionEndedHandler(null)
   }, [])
 
   async function fetchProfile(userId: string) {

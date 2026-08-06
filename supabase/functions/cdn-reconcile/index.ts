@@ -22,6 +22,7 @@ import {
   effectiveLevel, tierFor, assetUrl, stripVersion, planPageMoves, type AccessLevel,
 } from '../../../packages/domain/src/assetStorage.ts';
 import { tempCredentials, copyObject, s3, type TempCreds } from '../_shared/r2.ts';
+import { callerAuthFailureBody } from '../_shared/caller-auth-policy.ts';
 
 /** How many assets one invocation will move. Bounded so a large backlog cannot exceed the
  *  function's wall-clock limit; the queue keeps the rest for the next call. */
@@ -58,8 +59,8 @@ Deno.serve(async (req) => {
   const asCaller = createClient(env('SUPABASE_URL'), env('SUPABASE_ANON_KEY'), {
     global: { headers: { Authorization: authHeader } }, auth: { persistSession: false },
   });
-  const { data: userData } = await asCaller.auth.getUser();
-  if (!userData?.user) return json(401, { error: 'Not authenticated' });
+  const { data: userData, error: authError } = await asCaller.auth.getUser();
+  if (!userData?.user) return json(401, callerAuthFailureBody(authError, authHeader));
   const { data: profile } = await asCaller
     .from('profiles').select('role').eq('id', userData.user.id).single();
   if (!profile || !['editor', 'admin', 'super_admin'].includes(profile.role)) {

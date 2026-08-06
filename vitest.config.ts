@@ -12,9 +12,11 @@ export default defineConfig({
   resolve: {
     alias: {
       '@sotto/asset-library': fromHere('./packages/asset-library/src/index.ts'),
-      // Subpath first — Vite matches aliases in order, and the bare entry would otherwise swallow
-      // `@sotto/domain/assetStorage` and resolve it to the barrel.
+      // Subpaths first — Vite matches aliases in order, and the bare entry would otherwise swallow
+      // `@sotto/domain/assetStorage` and resolve it to the barrel. Every subpath in the package's
+      // `exports` map that anything under test imports needs a line here.
       '@sotto/domain/assetStorage': fromHere('./packages/domain/src/assetStorage.ts'),
+      '@sotto/domain/callerAuth': fromHere('./packages/domain/src/callerAuth.ts'),
       '@sotto/domain': fromHere('./packages/domain/src/index.ts'),
     },
   },

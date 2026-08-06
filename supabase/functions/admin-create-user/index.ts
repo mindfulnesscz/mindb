@@ -6,6 +6,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
    the allow-list is one configurable thing (`ALLOWED_ORIGINS`) rather than three hardcoded copies of
    the agency's own domain — see ../_shared/cors.ts. */
 import { preflight, corsJson as json } from '../_shared/cors.ts';
+import { callerAuthFailureBody } from '../_shared/caller-auth-policy.ts';
 
 interface CreateUserBody {
   email?: string;
@@ -56,7 +57,7 @@ Deno.serve(async (req) => {
     auth: { persistSession: false },
   });
   const { data: userData, error: userErr } = await userClient.auth.getUser();
-  if (userErr || !userData.user) return json(req, 401, { error: 'Not authenticated' });
+  if (userErr || !userData.user) return json(req, 401, callerAuthFailureBody(userErr, authHeader));
 
   const { data: profile } = await userClient
     .from('profiles').select('role').eq('id', userData.user.id).single();

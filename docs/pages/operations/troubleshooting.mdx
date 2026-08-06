@@ -8,6 +8,7 @@ Start by locating the failing boundary: scan, local conversion, local copy, R2, 
 - Asset vanished after rename: determine whether the client was truly migrated and inspect folder suffix/manifest.
 - Portal query fails: inspect browser network response, Supabase configuration, generated types, column types, and RLS.
 - Downloads fail despite visible card: check status/role helper, singular `download_url`, object existence, URL encoding, and public-domain policy.
+- Admin action fails while the header shows you signed in: suspect a [revoked session](/auth#revoked-sessions-a-tab-that-looks-signed-in-but-is-not) before the feature — reads keep working off a token the edge functions already refuse.
 - Cloud failures: use [provider troubleshooting](/cloud-storage/troubleshooting).
 
 Preserve the exact section, filename, HTTP status, and response body; generic final counters lose important context.

@@ -7,6 +7,7 @@ import { AwsClient } from 'npm:aws4fetch';
    the allow-list is one configurable thing (`ALLOWED_ORIGINS`) rather than three hardcoded copies of
    the agency's own domain — see ../_shared/cors.ts. */
 import { preflight, corsJson as json } from '../_shared/cors.ts';
+import { callerAuthFailureBody } from '../_shared/caller-auth-policy.ts';
 
 const GRANT_TTL_SECONDS = 3600;
 
@@ -68,7 +69,7 @@ Deno.serve(async (req) => {
     { global: { headers: { Authorization: authHeader } }, auth: { persistSession: false } },
   );
   const { data: userData, error: userErr } = await supa.auth.getUser();
-  if (userErr || !userData.user) return json(req, 401, { error: 'Not authenticated' });
+  if (userErr || !userData.user) return json(req, 401, callerAuthFailureBody(userErr, authHeader));
 
   const { data: profile } = await supa
     .from('profiles').select('role').eq('id', userData.user.id).single();

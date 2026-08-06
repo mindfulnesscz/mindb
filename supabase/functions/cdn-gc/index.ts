@@ -20,6 +20,7 @@ import {
   type OrphanCdnObject,
 } from '../../../packages/domain/src/cdnGarbageCollection.ts';
 import { preflight, corsJson as json } from '../_shared/cors.ts';
+import { classifyCallerAuthFailure } from '../_shared/caller-auth-policy.ts';
 import { listObjects, s3, tempCredentials, type TempCreds } from '../_shared/r2.ts';
 import {
   deletionConfirmation,
@@ -249,7 +250,15 @@ Deno.serve(async req => {
       auth: { persistSession: false },
     });
     const { data: userData, error: authError } = await caller.auth.getUser();
-    if (authError || !userData.user) return json(req, 401, { error: 'Not authenticated' });
+    if (authError || !userData.user) {
+      /* Logged, unlike the sibling functions: this one is reached by hand, from an admin page, and
+         "which of the two 401s was it" is the first question asked when it refuses. */
+      const failure = classifyCallerAuthFailure(authError, authHeader);
+      console.warn(JSON.stringify({
+        event: 'cdn-gc-auth-refused', code: failure.code, authCode: failure.authCode,
+      }));
+      return json(req, 401, { error: failure.error, code: failure.code });
+    }
     const { data: profile, error: profileError } = await caller
       .from('profiles').select('role').eq('id', userData.user.id).single();
     if (profileError || profile?.role !== 'super_admin') {

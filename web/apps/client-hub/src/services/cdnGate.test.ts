@@ -7,7 +7,8 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { refreshDelayMs, isGatedUrl } from './cdnGate'
+import { refreshDelayMs, isGatedUrl, requestCdnCookie } from './cdnGate'
+import { configureSessionEndedHandler } from '../lib/edgeFunction'
 
 const NOW = 1_775_000_000_000
 const MIN = 60_000
@@ -75,5 +76,55 @@ describe('isGatedUrl', () => {
     setGate('https://files.disruptcollective.com')
     expect(isGatedUrl('not a url at all')).toBe(false)
     expect(isGatedUrl('')).toBe(false)
+  })
+})
+
+/* Recognising the one refusal that retrying cannot fix.
+ *
+ * `useCdnCookie` renews on a timer for as long as the tab is open, so a revoked session — whose
+ * access token stays signature-valid, and which therefore keeps looking signed in — would otherwise
+ * mean an indefinite loop of 401s behind a wall of blank gated thumbnails. The gate names the case
+ * with the shared `session_invalid` code; this is where the portal acts on it.
+ */
+describe('requestCdnCookie', () => {
+  const gate = 'https://files.disruptcollective.com'
+  const refusal = (status: number, body: unknown) =>
+    vi.fn(async () => new Response(typeof body === 'string' ? body : JSON.stringify(body), { status }))
+
+  afterEach(() => {
+    configureSessionEndedHandler(null)
+    vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+  })
+
+  function setUp(fetchStub: ReturnType<typeof refusal>) {
+    vi.stubEnv('VITE_CDN_GATE_URL', gate)
+    vi.stubGlobal('fetch', fetchStub)
+    const ended = vi.fn()
+    configureSessionEndedHandler(ended)
+    return ended
+  }
+
+  it('ends the session when the gate says it is no longer valid', async () => {
+    const ended = setUp(refusal(401, { error: 'Your session is no longer valid. Sign out and sign in again.', code: 'session_invalid' }))
+    await expect(requestCdnCookie('token')).resolves.toBeNull()
+    expect(ended).toHaveBeenCalledOnce()
+  })
+
+  it('leaves the session alone for an unprovisioned gate or a plain refusal', async () => {
+    // 503 is a deployment task and 401/not_authenticated is an anonymous caller. Signing an
+    // operator out of a working session over either would be its own bug.
+    const ended = setUp(refusal(503, { error: 'CDN gate not provisioned — set CDN_COOKIE_SECRET and COOKIE_DOMAIN' }))
+    await requestCdnCookie('token')
+    configureSessionEndedHandler(ended)
+    vi.stubGlobal('fetch', refusal(401, { error: 'Not authenticated', code: 'not_authenticated' }))
+    await requestCdnCookie('token')
+    expect(ended).not.toHaveBeenCalled()
+  })
+
+  it('does not choke on a refusal body that is not JSON', async () => {
+    const ended = setUp(refusal(502, '<html>Bad Gateway</html>'))
+    await expect(requestCdnCookie('token')).resolves.toBeNull()
+    expect(ended).not.toHaveBeenCalled()
   })
 })
