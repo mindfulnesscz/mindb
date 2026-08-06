@@ -10,13 +10,23 @@ absolute out-of-scope paths, `..` traversal, and symlink escapes.
 Approved roots are:
 
 - Sotto's app-data directory;
-- folders selected with a Tauri folder picker during this session;
-- machine-local source, destination, vault, and creation folders restored from Sotto's persisted
-  client configuration at startup.
+- folders selected with a Tauri folder picker during this session. The pickers pass
+  `recursive: true`, which is what makes the grant cover the whole subtree — without it Tauri grants
+  only the folder and its immediate children, and every asset sits deeper than that;
+- machine-local source, destination, vault, and creation folders read from Sotto's persisted client
+  configuration. These are read at startup **and re-read once on a scope miss**, because on a fresh
+  install the configuration is written after launch — at boot there is nothing yet to grant.
 
 Use the **Browse** control when assigning a new local folder. The selection grants access for the
-current session and its persisted client entry restores that grant after restart. The filesystem
-capability contains no repository-wide or machine-wide `**` rule.
+current session, and its persisted client entry restores that grant after restart.
+
+Re-reading on a miss does not widen the boundary: the roots still come from Rust reading app-local
+configuration, never from an IPC argument, so a caller cannot grant itself a directory by naming one.
+
+The `fs` capability does still carry a broad `**` allow for the **JavaScript** filesystem commands —
+a 3.2.1 stopgap, tracked in `planning/01_stabilize-hardening-regressions.md`. That does not widen the
+native command surface: `path_policy` checks the runtime scope described above, which capability
+globs do not populate.
 
 The boundary applies to native thumbnail and document-preview inputs and outputs, R2 and Dropbox
 upload sources, byte comparisons, and reveal roots. Provider credentials and request headers do not

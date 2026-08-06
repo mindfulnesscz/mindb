@@ -5,6 +5,36 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [3.2.2] — 2026-08-06
+
+A hotfix for 3.2.1, which could not run a pipeline at all on a fresh install.
+
+### Fixed
+
+- **Native commands refused every real working folder.** A fresh 3.2.1 install failed each asset with
+  `Refusing <x> outside Sotto's approved working directories`, and a run ended in hundreds of errors
+  across thumbnails, CDN upload and collect. Two independent causes, both introduced with the S5
+  command-surface hardening:
+  - The folder pickers called `open({ directory: true })` without `recursive`, so Tauri granted only
+    the picked folder and its immediate children. Every asset lives deeper than that — a source
+    folder nests project / shoot / `OUT` — so the grant never covered the files the pipeline touches.
+  - `path_policy` read the persisted working directories **only at startup**. On a fresh install the
+    configuration is written afterwards, as clients are set up, so at boot there was nothing to grant
+    and every native command refused for the rest of the session. The grants are now re-read once on
+    a scope miss before refusing.
+
+  The boundary itself is unchanged: roots still come only from Rust reading the machine-local
+  configuration or from a folder the user picked, never from an IPC argument.
+
+### Added
+
+- **Build badge in both apps**, so which build and which backend is never a guess. The desktop shows
+  the active environment and version in the nav rail; the portal pins the same pair to the corner —
+  always for staff, and for everyone whenever the backend is not production. The portal derives its
+  label from the Supabase project ref rather than a separate env var, so the badge cannot disagree
+  with the backend it describes.
+
+
 ## [3.2.1] — 2026-08-06
 
 A security and correctness release. An external audit produced 42 findings; this closes all of them,

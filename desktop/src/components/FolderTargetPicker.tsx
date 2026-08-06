@@ -48,7 +48,8 @@ export function FolderTargetPicker({ label, value, onChange }: Props) {
   }, [onChange]);
 
   async function pick() {
-    const selected = await open({ directory: true, multiple: false });
+    // recursive: grant the whole subtree, not just one level. See FolderPicker for why.
+    const selected = await open({ directory: true, multiple: false, recursive: true });
     if (selected && typeof selected === 'string') {
       setDropError(null);
       onChange(selected);
