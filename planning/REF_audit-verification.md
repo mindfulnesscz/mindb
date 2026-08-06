@@ -1,5 +1,23 @@
 # Sotto — Audit Verification (2026-08-05, evening)
 
+> **Re-check 2026-08-06:** all four items still open below are now FIXED in the current code, plus
+> the bucket-wide CDN GC landed. Updated status:
+> - `processRenameTasks` placebo → **resolved** (the no-op `renameTasks.ts` was removed entirely).
+> - GDrive duplicate-folder race + weak skip → **fixed** (per-segment in-flight dedup
+>   `gdriveFolderInflight`; md5 compared, not just size).
+> - cloudUrls bare-`stem` collision → **fixed** (keyed by `assetIdentityKey(stable,child)` on both
+>   write `recordCloudUrl` and read `exportPlan`).
+> - Unsanitized taxonomy labels → **fixed** (`sanitizeSegment()` in `filenameTranslator.ts`).
+> - Bucket-wide CDN GC → **landed** (`cdn-gc` edge fn + `cdnGarbageCollection.ts`, commit 200b1f2).
+>
+> Net: the audit is effectively fully closed. Remaining, both non-blocking: GDrive **G2** (merge the
+> already-existing duplicate folders) is still to build, and thumbnail regeneration still fingerprints
+> on mtime+size rather than a content hash (a deliberate, documented tradeoff). The prune-guard fix is
+> hand-applied on the tree and still needs its regression test (prompt 01).
+>
+> The original 2026-08-05 verification follows unchanged, for the record.
+
+
 Re-read the **current** code (post-fix snapshot, HEAD `54d0320`, all `fix/s*` + `chore/s7` branches
 in history) and checked every item in `SOTTO_AUDIT_TODO.md` against the actual implementation.
 
