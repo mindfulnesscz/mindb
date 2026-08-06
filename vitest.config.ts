@@ -58,7 +58,11 @@ export default defineConfig({
       thresholds: {
         // The shared rules both apps depend on — identity, naming, grouping. Highest bar in the repo,
         // because every asset in every client passes through them.
-        'packages/domain/src/**': { lines: 85, statements: 80, branches: 70 },
+        //
+        // Raised from 85/80/70 when `cdnGarbageCollection` got its own test file. That module is over
+        // half the branches in this directory and arrived at 47% — enough to fail the gate on its own,
+        // which is precisely what the ratchet is for. Now 98/96/91; these sit a few points below.
+        'packages/domain/src/**': { lines: 95, statements: 92, branches: 85 },
         // The one client projection: small, and the failure mode is silent, so it stays near-total.
         'packages/database/src/clients.ts': { lines: 95, statements: 95, branches: 95 },
       },
