@@ -86,7 +86,7 @@ interface SignInModalProps {
 }
 
 export default function SignInModal({ redirectTo, onClose }: SignInModalProps = {}) {
-  const { checkEmail, sendMagicLink, signInWithProvider } = useAuth()
+  const { checkEmail, sendMagicLink, signInWithProvider, authError } = useAuth()
 
   const [step,     setStep]     = useState<Step>('email')
   const [email,    setEmail]    = useState('')
@@ -102,6 +102,10 @@ export default function SignInModal({ redirectTo, onClose }: SignInModalProps = 
   const [consent,  setConsent]  = useState(false)
 
   const emailRef = useRef<HTMLInputElement>(null)
+
+  /* One source for a failed auth return: `AuthContext` resolves it before any session is trusted, so
+     this modal never parses the URL. A message from this modal's own attempt takes precedence. */
+  const shown = error || authError || ''
 
   useEffect(() => { emailRef.current?.focus() }, [])
 
@@ -262,7 +266,7 @@ export default function SignInModal({ redirectTo, onClose }: SignInModalProps = 
                   className={inputCls}
                 />
               </Field>
-              {error && <p className="text-[11px] font-sans text-signal-error">{error}</p>}
+              {shown && <p className="text-[11px] font-sans text-signal-error">{shown}</p>}
               <button
                 type="submit"
                 disabled={step === 'checking' || !email.trim()}
@@ -353,7 +357,7 @@ export default function SignInModal({ redirectTo, onClose }: SignInModalProps = 
                 </span>
               </label>
 
-              {error && <p className="text-[11px] font-sans text-signal-error">{error}</p>}
+              {shown && <p className="text-[11px] font-sans text-signal-error">{shown}</p>}
 
               <button
                 type="submit"
