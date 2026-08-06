@@ -7,9 +7,26 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [3.2.2] — 2026-08-06
 
-A hotfix for 3.2.1, which could not run a pipeline at all on a fresh install.
+A hotfix for 3.2.1, which could not run a pipeline at all on a fresh install — and, alongside it, the
+reason the app appeared to hang for the whole render phase.
 
 ### Fixed
+
+- **The window froze for the entire render phase, and the 8-way concurrency never happened.** Every
+  blocking Tauri command was declared synchronous, and Tauri v2 runs a command without the `async`
+  keyword *on the main thread* unless it is declared `#[tauri::command(async)]`. The main thread
+  drives the OS event loop, so `generate_document_previews`, `generate_thumbnail`, `file_md5` and
+  `files_equal` each held the UI hostage for as long as they ran — up to ~6.4s per Office document,
+  and on macOS a spinning beachball with a window that would not repaint when another window
+  uncovered it.
+
+  The second half is the one that does not show up as a symptom: the pipeline dispatches these eight
+  at a time, but sync commands serialise onto that single thread, so the batching bought nothing and
+  the freezes were cumulative rather than concurrent. The worker pool's measured 8-way throughput
+  (86 pages/s single-page, 233 multi-page) was never actually being realised in the app. Declaring
+  the four commands `#[tauri::command(async)]` moves them to worker threads with no change to any
+  body or call site — the frontend already awaits every `invoke`. The trivial commands (keychain,
+  reveal) stay synchronous on purpose.
 
 - **Native commands refused every real working folder.** A fresh 3.2.1 install failed each asset with
   `Refusing <x> outside Sotto's approved working directories`, and a run ended in hundreds of errors

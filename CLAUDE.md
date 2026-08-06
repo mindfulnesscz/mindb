@@ -34,6 +34,10 @@ to a shared environment to "see if it works".
 - **Thumbnail speed depends on the build profile**, now that rendering is Rust rather than `cwebp`. `[profile.dev.package."*"] opt-level = 3` in `desktop/src-tauri/Cargo.toml` is load-bearing — without it a large JPEG takes 21s instead of 0.25s. Do not remove it.
 - LibreOffice is bundled (MPL-2.0, ~800MB) on macOS/Windows and a package dependency on Linux. Bundled resolution must win over any host install: the shipped version is the one whose deck rendering was reviewed. See `docs/pages/reference/third-party-engines.mdx` for licence obligations and the macOS signing order.
 
+## Tauri command threading (2026-08-06)
+
+- **Any command that blocks must be `#[tauri::command(async)]`.** Tauri v2 runs a command declared without the `async` keyword *on the main thread*, which is the OS event loop — so a sync command doing real work freezes the window for its whole duration (that shipped as 3.2.2's beachball: ~6.4s per Office document, a window that would not repaint). It also silently defeats the pipeline's 8-at-a-time batching, because every sync command serialises onto that one thread. `(async)` moves a *sync* fn to a worker thread with no change to its body or to any call site. Do **not** convert to `async fn` instead — that parks blocking work on the async runtime's executor, which is the same bug in a different place. Trivial commands (keychain, reveal) stay sync deliberately.
+
 ## Native command security (2026-08-05)
 
 - Path-taking Rust commands must pass canonical paths through `desktop/src-tauri/src/path_policy.rs`. The allowed roots are app data plus folders approved through a Tauri folder picker; persisted machine-local client roots are read by Rust at startup **and re-read once on a scope miss** — a startup-only pass grants nothing on a fresh install, where the config is written after launch (that shipped as 3.2.1 refusing every working folder). Never replace this with an arbitrary IPC-supplied root or a lexical `starts_with` check.

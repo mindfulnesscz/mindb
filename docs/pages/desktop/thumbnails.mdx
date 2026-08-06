@@ -118,6 +118,14 @@ Multi-page scales better because one worker per *document* amortises process spa
 across all its pages. Concurrency is not managed here — it comes from the pipeline's existing
 8-at-a-time batching.
 
+That batching only delivers these numbers if the Tauri commands it calls are declared
+`#[tauri::command(async)]`. Tauri v2 runs a command without the `async` keyword on the **main
+thread**, so up to 3.2.1 all eight invocations serialised onto the one thread that also drives the
+event loop: the table above was measured in the worker pool but never realised in the app, and the
+window froze for the whole render phase. Fixed in 3.2.2. Any new command that blocks — rendering,
+hashing, reading a whole file — must carry `(async)` for the same reason; `async fn` is **not** an
+equivalent fix, because that moves blocking work onto the async runtime's executor instead.
+
 For Office documents none of this dominates: LibreOffice's conversion is ~6.4s per deck against
 PDFium's ~28ms per page, so the rasterising step is under half a percent of the work.
 

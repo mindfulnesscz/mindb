@@ -23,12 +23,30 @@ const OFFICE_EXTS: &[&str] = &[
 /// Extensions decoded directly by the `image` crate.
 const RASTER_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "bmp"];
 
+/* WHY EVERY BLOCKING COMMAND BELOW IS `#[tauri::command(async)]`.
+ *
+ * Tauri v2: "Commands without the `async` keyword are executed on the main thread unless defined
+ * with `#[tauri::command(async)]`." The main thread runs the macOS/Windows event loop, so a sync
+ * command holding it for seconds is a window that cannot repaint — the app reads as hung, and on
+ * macOS the user gets a spinning beachball for the whole render phase.
+ *
+ * Every command here does exactly that kind of work: hashing a whole file, comparing two files byte
+ * for byte, or — worst — a ~6.4s LibreOffice conversion (`render::office_previews`). The pipeline
+ * dispatches these 8 at a time (`thumbnails.ts`), and sync commands serialise all eight onto that
+ * one thread, so the batching bought nothing and the freeze was cumulative.
+ *
+ * `(async)` moves a *sync* fn onto a worker thread with no change to its body or to any call site
+ * (the frontend already awaits every `invoke`). Do NOT "fix" this by making them `async fn` instead:
+ * that parks blocking work on the async runtime's executor, which is the same bug wearing a
+ * different hat. The trivial commands — keychain, reveal — stay sync on purpose.
+ */
+
 /// Exact, streaming content comparison for local publish/cache decisions.
 ///
 /// Size + mtime is the cheap gate in TypeScript; this closes the restored-backup case where the
 /// source is older than the destination but its bytes changed without changing length. Streaming
 /// avoids loading two large creative files into the webview at once.
-#[tauri::command]
+#[tauri::command(async)]
 fn files_equal(
     app: tauri::AppHandle,
     source_path: String,
@@ -81,7 +99,7 @@ fn reader_md5(mut reader: impl Read) -> Result<String, String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn file_md5(app: tauri::AppHandle, path: String) -> Result<String, String> {
     let path = path_policy::require_allowed_file(&app, &path, "checksum source")?;
     let file = std::fs::File::open(&path)
@@ -108,7 +126,7 @@ mod checksum_tests {
 ///
 /// Rendering is in-process — see `render`. Nothing here shells out to a tool the user had to
 /// install, except LibreOffice until it is bundled.
-#[tauri::command]
+#[tauri::command(async)]
 fn generate_thumbnail(
     app: tauri::AppHandle,
     src: String,
@@ -171,7 +189,7 @@ struct PreviewReport {
 /// `limit` is the administrator's per-client page cap; spreadsheets are capped at 1 regardless (see
 /// `render::page_budget`). A document with more pages than the cap renders the first `limit` and
 /// still reports its real `total`.
-#[tauri::command]
+#[tauri::command(async)]
 fn generate_document_previews(
     app: tauri::AppHandle,
     src: String,
