@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   ID_SUFFIX_PATTERN, hasStableId, extractStableId, stripStableId,
-  appendStableId, generateStableId,
+  appendStableId, assetIdentityKey, generateStableId,
 } from './stableId';
 
 describe('ID_SUFFIX_PATTERN', () => {
@@ -71,6 +71,12 @@ describe('appendStableId', () => {
     const once = appendStableId('Product Launch', 'a1b2c3d4');
     expect(appendStableId(once, 'a1b2c3d4')).toBe(once);
     expect(appendStableId(once, 'ffff0000')).toBe('Product Launch __ffff0000');
+  });
+});
+
+describe('assetIdentityKey', () => {
+  it('combines the package identity and manifest child identity', () => {
+    expect(assetIdentityKey('a1b2c3d4', 'c7')).toBe('a1b2c3d4:c7');
   });
 });
 

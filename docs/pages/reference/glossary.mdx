@@ -3,7 +3,7 @@
 - **Asset** — one Supabase delivery record, sometimes a primary with children/variants.
 - **CDN** — R2 public delivery layer for previews and current originals (environment bucket, keys under `{client_id}/`).
 - **Child ID** — stable per-file identity within a migrated package.
-- **Cloud destination** — Local / Dropbox / OneDrive / Google Drive delivery target. Structure in `clients.cloud_destinations` (portal); OAuth tokens on the workstation.
+- **Cloud destination** — Local / Dropbox / OneDrive / Google Drive delivery target. Structure in `clients.cloud_destinations` (portal); OAuth tokens in the workstation's OS keychain.
 - **Dimension labels** — per-client display names for entity / angle / format.
 - **Disconnected** — known database record no longer represented by current source scan.
 - **Destination role** — `internal` or `client`; controls whether collected provider links enter client `download_urls`.
@@ -15,7 +15,7 @@
 - **Package** — source grouping folder used by collection and, after migration, stable identity.
 - **Parent group** — taxonomy node without `shortcode`; portal-only grouping under a dimension.
 - **Platform division** — web vs desktop field ownership; one admin surface per field group.
-- **Rename task** — DB queue row telling the desktop to apply a filesystem rename after a web tag change (planned).
+- **Rename task** — legacy reserved DB row; no active workflow enqueues or processes these rows.
 - **Reveal bridge** — desktop localhost `:7624` service that opens a package folder from a portal `stableId`.
 - **Shortcode** — tag/token used in filenames; also a column on `tags`.
 - **Sidecar thumbnail** — local `-thumb.webp` beside its source.

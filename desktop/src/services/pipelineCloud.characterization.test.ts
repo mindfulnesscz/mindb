@@ -53,4 +53,47 @@ describe('cloud export destructive safety', () => {
     expect(stats.published).toBe(1);
     expect(run.logged('[DRY] would upload 1 file(s)')).toBe(true);
   });
+
+  it('keys links by stable_id + child_id when separate assets share a file stem', async () => {
+    const first = `${SRC}/Alpha __a1111111/[03] OUT/Set A/01.jpg`;
+    const second = `${SRC}/Beta __b2222222/[03] OUT/Set B/01.jpg`;
+    vfs.put(first, 'alpha');
+    vfs.put(second, 'beta');
+    uploadDropboxFile.mockImplementation(async (_token, srcPath: string) => ({
+      url: srcPath === first ? 'https://dropbox/alpha' : 'https://dropbox/beta',
+      skipped: false,
+    }));
+    const cloudUrls = new Map<string, unknown>();
+    const run = makeCtx(makeSettings({ doFlatExport: true }), {
+      cloudUrls,
+      cloudDestinations: [{
+        id: 'dropbox-collision', name: 'Client Dropbox', role: 'client', minRole: 'member',
+        exportLayout: 'folders', includePackages: false, generateLink: true,
+        showInPortal: true, allowRevealLocal: false, enabled: true,
+        config: {
+          type: 'dropbox', clientId: 'client', remotePath: '/deliverables',
+          token: {
+            accessToken: 'token', refreshToken: '', expiresAt: Number.MAX_SAFE_INTEGER,
+            email: '', displayName: '',
+          },
+        },
+      }],
+    });
+
+    await runPipeline(run.ctx as never);
+
+    expect(cloudUrls).toEqual(new Map([
+      ['a1111111:c1', [{
+        destId: 'dropbox-collision', provider: 'dropbox', name: 'Client Dropbox',
+        url: 'https://dropbox/alpha',
+      }]],
+      ['b2222222:c1', [{
+        destId: 'dropbox-collision', provider: 'dropbox', name: 'Client Dropbox',
+        url: 'https://dropbox/beta',
+      }]],
+    ]));
+    expect(cloudUrls.has('01')).toBe(false);
+    expect(vfs.hasFile(`${SRC}/Alpha __a1111111/.dchub.json`)).toBe(true);
+    expect(vfs.hasFile(`${SRC}/Beta __b2222222/.dchub.json`)).toBe(true);
+  });
 });

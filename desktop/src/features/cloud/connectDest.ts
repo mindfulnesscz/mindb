@@ -52,7 +52,7 @@ export async function connectDestination(
     while (!signal.cancelled && !token && Date.now() < deadline) {
       await delay(intervalMs);
       if (signal.cancelled) return null;
-      const result = await pollOneDriveToken(cfg.clientId, cfg.tenantId, info.deviceCode, info.interval, signal);
+      const result = await pollOneDriveToken(cfg.clientId, cfg.tenantId, info.deviceCode, signal);
       if (result) token = result;
     }
     if (!token) throw new Error('Authorization timed out or was cancelled.');

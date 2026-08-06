@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { parseFilename, buildVocabMap } from './filenameTranslator';
+import {
+  buildVocabMap,
+  parseFilename,
+  sanitizeSegment,
+  translateExportName,
+} from './filenameTranslator';
 import { buildFilenameCode } from './vocabulary';
 import type { VocabularyData } from './vocabulary';
 
@@ -40,5 +45,24 @@ describe('buildFilenameCode', () => {
     expect(code).toContain('(PRD)');
     expect(code).toContain('Pitch Deck');
     expect(code).toMatch(/v1-2-0/);
+  });
+});
+
+describe('sanitizeSegment', () => {
+  it('keeps editable taxonomy labels inside one path segment', () => {
+    expect(sanitizeSegment('../Client\\Exports')).toBe('Client Exports');
+    expect(sanitizeSegment('..')).toBe('_');
+    expect(sanitizeSegment('CON')).toBe('_CON');
+  });
+
+  it('sanitizes taxonomy labels before building an export filename', () => {
+    const unsafeVocab = buildVocabMap({
+      ...vocab,
+      tags: [{ ...vocab.tags[0], label: '../Outside' }],
+    });
+
+    const translated = translateExportName('(PRD) Brief v1-0-0', '.pdf', unsafeVocab);
+    expect(translated).toBe('Outside — Brief v1-0-0.pdf');
+    expect(translated).not.toMatch(/[\\/]/);
   });
 });

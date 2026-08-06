@@ -14,7 +14,7 @@ The repository shares one release version. Start with the [developer routine](do
 
 ## Quick start
 
-Prerequisites: Node.js 22, npm, Rust stable, and the platform dependencies required by Tauri 2. Thumbnail
+Prerequisites: Node.js 24, npm, Rust stable, and the platform dependencies required by Tauri 2. Thumbnail
 rendering needs no separately installed tools: `npm run setup` fetches the bundled engines (PDFium and
 LibreOffice — `npm run deps:native` on its own). That download is ~290MB and ~800MB on disk; see
 [Third-party engines](docs/pages/reference/third-party-engines.mdx).

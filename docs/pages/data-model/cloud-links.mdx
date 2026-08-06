@@ -10,7 +10,10 @@
 ## Primary vs source links
 
 - **Download** always prefers the CDN original (`download_url`). Fast, no provider auth in the browser.
-- **Source links** are the Dropbox / OneDrive / Google Drive share URLs collected into `download_urls` during cloud export. Entries preferably include `destId` (destination UUID) plus `name`, `provider`, and `url`.
+- **Source links** are the Dropbox / OneDrive / Google Drive share URLs collected into
+  `download_urls` during cloud export. The run carries them under `(stable_id, child_id)`, so assets
+  with the same filename cannot overwrite one another. Entries preferably include `destId`
+  (destination UUID) plus `name`, `provider`, and `url`.
 
 Only destinations with pipeline `role: "client"` write into `download_urls`. Internal-team destinations are omitted on purpose.
 

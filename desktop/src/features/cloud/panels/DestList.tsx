@@ -35,7 +35,7 @@ export function DestList({
 
       <p className={css.empty} style={{ marginBottom: 'var(--sp-3)' }}>
         Structure (name, remote paths, roles, package export) is managed in the web portal.
-        Set local folder paths and connect OAuth here — tokens stay on this machine.
+        Set local folder paths and connect OAuth here — tokens are stored in the OS keychain.
       </p>
       {syncMsg && <p className={css.empty} style={{ marginTop: 0 }}>{syncMsg}</p>}
 

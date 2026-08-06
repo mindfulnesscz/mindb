@@ -1,6 +1,9 @@
 # Data model overview
 
-Core records are `clients`, `profiles`, `client_members`, `assets`, `tags`, `ratings`, `comments`, `asset_events`, approvals, version history, and `rename_tasks`. Generated types live in `@sotto/database` (`npm run db:types`). Live migrations under `supabase/migrations` are authoritative.
+Core records are `clients`, `profiles`, `client_members`, `assets`, `tags`, `ratings`, `comments`,
+`asset_events`, approvals, and version history. The schema still contains a legacy `rename_tasks`
+table, but no active app workflow produces or consumes it. Generated types live in
+`@sotto/database` (`npm run db:types`). Live migrations under `supabase/migrations` are authoritative.
 
 `clients` define portal identity (`slug`, branding, `dimension_labels`, domain whitelist) — **not** R2 bucket fields. `profiles` map auth users to roles (`public` / `member` / `editor` / `admin` / `super_admin`). Editors are scoped via `client_members`. Profile self-edits cannot change `role`, `client_id`, or `can_create_clients`; those authority fields are managed through admin RPCs. `assets` are delivery records (taxonomy arrays, lifecycle, identity, CDN URLs). Tags use `shortcode` and hierarchy for portal filters. Feedback/events hang off asset UUIDs — prefer [stable identity](/desktop/identity).
 

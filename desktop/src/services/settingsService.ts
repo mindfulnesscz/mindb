@@ -39,7 +39,6 @@ function mapRawToSettings(raw: Record<string, unknown>): Partial<AppSettings> {
 
   if (str(raw.source_folder))        m.sourceFolder      = str(raw.source_folder)!;
   if (str(raw.target_folder))        m.targetFolder      = str(raw.target_folder)!;
-  if (str(raw.onedrive_flat_folder)) m.onedriveFlatFolder = str(raw.onedrive_flat_folder)!;
   if (str(raw.vault_folder))         m.vaultFolder        = str(raw.vault_folder)!;
   if (bool(raw.do_thumbnails) !== undefined) m.doThumbnails   = raw.do_thumbnails as boolean;
   if (bool(raw.do_distribute) !== undefined) m.doDistribute   = raw.do_distribute as boolean;

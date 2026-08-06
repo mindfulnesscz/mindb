@@ -11,7 +11,7 @@ Where taxonomy and cloud delivery are edited, what each surface owns, and how po
 | Leaf tags (have shortcode) | `tags` rows | Portal **Tags**, or desktop Vocabulary (then Sync) | Parses filenames; may publish dirty leaves |
 | Export destination structure | `clients.cloud_destinations` | Portal **Export destinations** | Sync / pull; connect OAuth |
 | Local destination filesystem path | Machine-local only | Desktop Cloud destinations → Browse | Never written to Supabase |
-| OAuth tokens & Google client secret | Machine-local only | Desktop Settings → Cloud destinations | Never written to Supabase |
+| OAuth tokens & Google client secret | OS keychain only | Desktop Settings → Cloud destinations | Never written to Supabase or `client-local.json` |
 | Source / vault folders | Machine-local | Desktop Pipeline / Settings | Reveal bridge uses `sourceFolder` |
 
 **Rule:** never treat desktop as the admin UI for portal-owned columns. Desktop may *publish leaf tags* and *store secrets*; it must not invent parent groups or destination definitions.
@@ -85,9 +85,9 @@ Each destination in `clients.cloud_destinations` includes:
 | `exportLayout` | Required: `folders` (OUT tree) \| `flat` (one folder) |
 | `includePackages` | Optional with `folders`: refresh source packages from OUT, then copy them **nested** at source-relative paths. Never dumps packages alone at target root. Source packages delete orphans (no `🚫`); targets may disconnect. |
 | `generateLink` / `enabled` | Pipeline behavior |
-| `config.token` | **Always null in DB** — tokens live only on the workstation |
+| `config.token` | **Always null in DB** — tokens persist only in the workstation's OS keychain |
 
-Public OAuth app ids may be stored in the portal definition. Google **client secret** and all refresh/access tokens stay on desktop.
+Public OAuth app ids may be stored in the portal definition. Google **client secret** and all refresh/access tokens persist in the desktop workstation's OS keychain.
 
 ### Where to edit
 

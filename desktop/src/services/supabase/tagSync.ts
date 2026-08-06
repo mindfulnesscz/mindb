@@ -180,34 +180,8 @@ export async function syncTagsFromVocabulary(
         if (existingLeaf.sort_order !== i) patch.sort_order = i;
 
         if (Object.keys(patch).length) {
-          const oldShortcode = existingLeaf.shortcode;
           if (await patchTag(existingLeaf.id, patch)) {
             updated++;
-            if (
-              patch.shortcode !== undefined &&
-              oldShortcode &&
-              patch.shortcode !== oldShortcode
-            ) {
-              if (dryRun) {
-                appendLog('dim', `  [DRY] would enqueue rename task for ${oldShortcode} → ${shortcode}`);
-              } else try {
-                await sbFetch(`${base}/rename_tasks`, {
-                  method:  'POST',
-                  headers: { ...headers, Prefer: 'return=minimal' },
-                  body: JSON.stringify({
-                    client_id: clientId,
-                    task_type: 'tag_rename',
-                    payload: {
-                      tag_id: existingLeaf.id,
-                      old_shortcode: oldShortcode,
-                      new_shortcode: shortcode,
-                    },
-                  }),
-                });
-              } catch (e) {
-                appendLog('dim', `  ⚠  rename_task enqueue failed: ${e}`);
-              }
-            }
             Object.assign(existingLeaf, patch, { key, shortcode, parent_id: parentId, dimension: slot });
             byKey.set(key, existingLeaf);
             byShortcode.set(shortcode, existingLeaf);
@@ -267,19 +241,6 @@ export async function syncTagsFromVocabulary(
       });
       if (res.ok) {
         deleted++;
-        if (sc) {
-          try {
-            await sbFetch(`${base}/rename_tasks`, {
-              method:  'POST',
-              headers: { ...headers, Prefer: 'return=minimal' },
-              body: JSON.stringify({
-                client_id: clientId,
-                task_type: 'tag_delete',
-                payload: { tag_id: row.id, shortcode: sc },
-              }),
-            });
-          } catch { /* non-fatal */ }
-        }
       } else {
         appendLog('error', `  ✕  Delete "${row.name}": ${await res.text()}`);
       }

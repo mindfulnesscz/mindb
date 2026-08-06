@@ -147,7 +147,7 @@ describe('countTasksOn', () => {
     const s = settings({
       doThumbnails: true, doCdnOriginals: true, doDistribute: false,
       doPublish: false, doFlatExport: false, doObsidian: false,
-      dryRun: true, keepHighestVersion: true, preserveStructure: true,
+      dryRun: true, allowLargeDeletions: true,
     });
     expect(countTasksOn(s)).toBe(2);
   });

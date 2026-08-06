@@ -92,7 +92,8 @@ export function resolveExportShape(
  *
  * `ClientIdentity` is shared with the portal (@sotto/database) rather than redeclared, so a field
  * added to a client cannot exist on one side only. Everything below it is machine-local and is never
- * written to the database: folder paths, per-machine destination toggles, OAuth tokens.
+ * written to the database: folder paths, per-machine destination toggles, OAuth credentials. The
+ * credentials are present in memory while the app runs and persist only in the OS keychain.
  */
 export interface Client extends ClientIdentity {
   sourceFolder:      string;

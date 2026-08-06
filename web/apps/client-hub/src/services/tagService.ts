@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase'
-import type { TagRow, TablesUpdate, Json } from '@sotto/database'
+import type { TagRow, TablesUpdate } from '@sotto/database'
 
 export interface Tag {
   id: string
@@ -98,16 +98,10 @@ export async function updateTag(id: string, input: Partial<Omit<Tag, 'id'>>): Pr
 
   const existing = await supabase
     .from('tags')
-    .select('shortcode,name,client_id,dimension')
+    .select('name')
     .eq('id', id)
     .single()
-  const prev = existing.data as {
-    shortcode?: string | null
-    name?: string
-    client_id?: string | null
-    dimension?: string
-  } | null
-  const prevShortcode = prev?.shortcode ?? null
+  const prev = existing.data as { name?: string } | null
   const prevName = (prev?.name ?? '').trim()
 
   const patch: TablesUpdate<'tags'> = {}
@@ -127,14 +121,6 @@ export async function updateTag(id: string, input: Partial<Omit<Tag, 'id'>>): Pr
 
   if (error || !data) throw new Error(error?.message ?? 'No data returned')
   const tag = toTag(data as TagRow & { shortcode?: string | null; key?: string | null })
-
-  if (input.shortcode !== undefined && input.shortcode !== prevShortcode && tag.clientId) {
-    await enqueueRenameTask({
-      clientId: tag.clientId,
-      taskType: 'tag_rename',
-      payload: { tag_id: id, old_shortcode: prevShortcode, new_shortcode: input.shortcode },
-    })
-  }
 
   // Display labels on assets are stored as strings (name / entities / …). When a
   // tag's full name changes on the hub, rewrite those immediately so the gallery
@@ -213,38 +199,6 @@ async function rewriteAssetLabelsForTagRename(
 export async function deleteTag(id: string): Promise<void> {
   if (!supabase) throw new Error('Supabase not configured')
 
-  const { data: row } = await supabase.from('tags').select('client_id, shortcode').eq('id', id).single()
   const { error } = await supabase.from('tags').delete().eq('id', id)
-  if (error) throw new Error(error.message)
-
-  const clientId = (row as { client_id?: string | null } | null)?.client_id
-  const shortcode = (row as { shortcode?: string | null } | null)?.shortcode
-  if (clientId && shortcode) {
-    await enqueueRenameTask({
-      clientId,
-      taskType: 'tag_delete',
-      payload: { tag_id: id, shortcode },
-    })
-  }
-}
-
-export async function enqueueRenameTask(input: {
-  clientId: string
-  taskType: 'tag_rename' | 'tag_delete' | 'asset_retag'
-  payload: Record<string, unknown>
-  assetId?: string
-}): Promise<void> {
-  if (!supabase) throw new Error('Supabase not configured')
-
-  const { data: session } = await supabase.auth.getSession()
-  const userId = session.session?.user?.id ?? null
-
-  const { error } = await supabase.from('rename_tasks').insert({
-    client_id: input.clientId,
-    asset_id: input.assetId ?? null,
-    task_type: input.taskType,
-    payload: input.payload as Json,
-    created_by: userId,
-  })
   if (error) throw new Error(error.message)
 }

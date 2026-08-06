@@ -3,9 +3,10 @@
  * The database owns client identity (name, accent,
  * cloud destination definitions); the desktop READS the list per environment
  * after sign-in, filtered by client_members (admins see everything). This
- * machine only stores what is machine-local: folder paths, R2 credentials
- * (until the Control API phase), OAuth tokens, logo, and the last active
- * client — keyed by `${environmentId}:${clientUuid}` in client-local.json.
+ * machine only stores what is machine-local: folder paths, destination
+ * preferences, and the last active client — keyed by
+ * `${environmentId}:${clientUuid}` in client-local.json. OAuth credentials
+ * are stored separately in the OS keychain.
  */
 import { readTextFile, writeTextFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { appDataDir, join } from '@tauri-apps/api/path';
@@ -19,6 +20,13 @@ import type { Environment } from './environmentService';
 import { useEnvironmentStore } from '../store/environmentStore';
 import { getAuthClient, withTimeout } from './authService';
 import { fetchCloudDestinationDefs, saveCloudDestinationDefs } from './supabaseService';
+import {
+  deleteDestinationCredentials,
+  destinationHasInlineCredentials,
+  loadDestinationCredentials,
+  saveDestinationCredentials,
+  stripDestinationCredentials,
+} from './credentialService';
 
 /* ── Machine-local per-(environment, client) config ─────────────────────── */
 
@@ -31,7 +39,7 @@ export interface LocalClientConfig {
 }
 
 interface PersistedLocal {
-  version:     3;
+  version:     4;
   entries:     Record<string, LocalClientConfig>;
   activeByEnv: Record<string, string>;
 }
@@ -61,11 +69,23 @@ async function loadLocal(): Promise<PersistedLocal> {
   const existing = await readJsonIfExists<PersistedLocal>(await localPath());
   if (existing) {
     const entries: Record<string, LocalClientConfig> = {};
-    for (const [k, v] of Object.entries(existing.entries ?? {})) entries[k] = pickLocalFields(v as Partial<Client>);
-    localMemo = { version: 3, entries, activeByEnv: existing.activeByEnv ?? {} };
+    let needsRewrite = existing.version !== 4;
+    for (const [key, value] of Object.entries(existing.entries ?? {})) {
+      const picked = pickLocalFields(value as Partial<Client>);
+      if (picked.cloudDestinations.some(destinationHasInlineCredentials)) needsRewrite = true;
+      entries[key] = {
+        ...picked,
+        cloudDestinations: await Promise.all(
+          picked.cloudDestinations.map(destination => loadDestinationCredentials(key, destination)),
+        ),
+      };
+    }
+    localMemo = { version: 4, entries, activeByEnv: existing.activeByEnv ?? {} };
+    // Legacy files are scrubbed only after every inline credential reached the keychain.
+    if (needsRewrite) await saveLocal();
     return localMemo;
   }
-  localMemo = { version: 3, entries: {}, activeByEnv: {} };
+  localMemo = { version: 4, entries: {}, activeByEnv: {} };
   return localMemo;
 }
 
@@ -73,7 +93,14 @@ async function saveLocal(): Promise<void> {
   if (!localMemo) return;
   const dir = await appDataDir();
   try { await mkdir(dir, { recursive: true }); } catch { /* exists */ }
-  await writeTextFile(await localPath(), JSON.stringify(localMemo, null, 2));
+  const persisted: PersistedLocal = {
+    ...localMemo,
+    entries: Object.fromEntries(Object.entries(localMemo.entries).map(([key, entry]) => [key, {
+      ...entry,
+      cloudDestinations: entry.cloudDestinations.map(stripDestinationCredentials),
+    }])),
+  };
+  await writeTextFile(await localPath(), JSON.stringify(persisted, null, 2));
 }
 
 function pickLocalFields(c: Partial<Client>): LocalClientConfig {
@@ -84,6 +111,21 @@ function pickLocalFields(c: Partial<Client>): LocalClientConfig {
     cloudDestinations:  c.cloudDestinations  ?? [],
     lastCreationFolder: c.lastCreationFolder ?? '',
   };
+}
+
+async function setLocalEntry(
+  local: PersistedLocal,
+  entryKey: string,
+  next: LocalClientConfig,
+): Promise<void> {
+  const previous = local.entries[entryKey];
+  const nextIds = new Set(next.cloudDestinations.map(destination => destination.id));
+  await Promise.all(next.cloudDestinations.map(destination =>
+    saveDestinationCredentials(entryKey, destination)));
+  await Promise.all((previous?.cloudDestinations ?? [])
+    .filter(destination => destination.config.type !== 'local' && !nextIds.has(destination.id))
+    .map(destination => deleteDestinationCredentials(entryKey, destination.id)));
+  local.entries[entryKey] = next;
 }
 
 /* ── DB clients ──────────────────────────────────────────────────────────── */
@@ -182,7 +224,7 @@ export async function loadClientsForEnvironment(
 /** Persists the machine-local slice of a merged Client. */
 export async function saveLocalClient(envId: string, client: Client): Promise<void> {
   const local = await loadLocal();
-  local.entries[`${envId}:${client.id}`] = pickLocalFields(client);
+  await setLocalEntry(local, `${envId}:${client.id}`, pickLocalFields(client));
   await saveLocal();
 }
 
@@ -200,7 +242,8 @@ export async function saveClients(data: { clients: Client[]; activeClientId: str
   const envId = useEnvironmentStore.getState().activeEnvId;
   if (!envId) return;
   const local = await loadLocal();
-  for (const c of data.clients) local.entries[`${envId}:${c.id}`] = pickLocalFields(c);
+  await Promise.all(data.clients.map(client =>
+    setLocalEntry(local, `${envId}:${client.id}`, pickLocalFields(client))));
   if (data.activeClientId) local.activeByEnv[envId] = data.activeClientId;
   await saveLocal();
 }
@@ -278,12 +321,7 @@ function sanitizeForExport(client: Client): Client {
     ...client,
     supabaseAnonKey:    '',
     supabaseUrl:        '',
-    cloudDestinations: client.cloudDestinations.map(d => {
-      if (d.config.type === 'local') return d;
-      const config = { ...d.config, token: null };
-      if (config.type === 'gdrive') config.clientSecret = '';
-      return { ...d, config };
-    }),
+    cloudDestinations: client.cloudDestinations.map(stripDestinationCredentials),
   };
 }
 
@@ -351,7 +389,7 @@ export async function importClientBundle(
   const clean = sanitizeForExport(bundle.client as Client);
 
   const local = await loadLocal();
-  local.entries[`${envId}:${match.id}`] = pickLocalFields(clean);
+  await setLocalEntry(local, `${envId}:${match.id}`, pickLocalFields(clean));
   await saveLocal();
   return { clientId: match.id, vocabulary: bundle.vocabulary, containedSecrets };
 }

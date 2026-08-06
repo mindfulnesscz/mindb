@@ -4,7 +4,6 @@ export interface AppSettings {
   /* Paths */
   sourceFolder:      string;
   targetFolder:      string;
-  onedriveFlatFolder: string;
   vaultFolder:       string;
 
   /* Tasks */
@@ -16,9 +15,7 @@ export interface AppSettings {
   doCdnOriginals: boolean;
 
   /* Run options */
-  dryRun:            boolean;
-  keepHighestVersion: boolean;
-  preserveStructure:  boolean;
+  dryRun: boolean;
   /** Opt out of the blast-radius tripwire for one run — see services/guardrail.ts. */
   allowLargeDeletions: boolean;
 
@@ -37,7 +34,6 @@ export interface AppSettings {
 export const DEFAULT_SETTINGS: AppSettings = {
   sourceFolder:      '',
   targetFolder:      '',
-  onedriveFlatFolder: '',
   vaultFolder:       '',
 
   doThumbnails:   false,
@@ -47,9 +43,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   doObsidian:     false,
   doCdnOriginals: true,
 
-  dryRun:            false,
-  keepHighestVersion: true,
-  preserveStructure:  false,
+  dryRun:             false,
   allowLargeDeletions: false,
 
   packagePrefix: '[00] 📦',

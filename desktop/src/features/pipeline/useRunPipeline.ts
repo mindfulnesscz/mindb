@@ -21,7 +21,7 @@ import type { CloudDestination } from '../../domain/client';
 import { runPipeline, scanVersionMap, deleteCdnObjects, type RunContext } from '../../services/pipelineService';
 import type { CloudUrlEntry } from '../../services/pipelineService';
 import {
-  exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary, requestR2Grant, processRenameTasks,
+  exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary, requestR2Grant,
   fetchAssetLevels, fetchPreviewPageLimit, reconcileCdnObjects, syncStreamVideos,
 } from '../../services/supabaseService';
 import { loadVocabulary } from '../../services/vocabService';
@@ -256,12 +256,6 @@ async function syncRunToPortal(a: {
       });
     }
 
-    if (!a.isStopping()) {
-      await processRenameTasks(a.sbConfig, a.clientId, a.log, {
-        dryRun: a.effectiveSettings.dryRun,
-        shouldStop: a.isStopping,
-      });
-    }
     // Only push leaves when desktop has unpublished edits — otherwise portal renames (the label
     // source of truth) would be overwritten by a stale local cache.
     if (a.vocabDirty && !a.isStopping()) {

@@ -50,8 +50,8 @@ The packages answer one question: when both apps need the same rule, where does 
 | `@sotto/asset-library` | `Client`, filters, permissions, `ErrorBoundary` | May depend on React |
 
 A client's identity is projected **once**, in `@sotto/database`. Desktop's `Client` extends
-`ClientIdentity` with machine-local state (folder paths, per-machine destination toggles, OAuth
-tokens); the portal's `Client` *is* `ClientIdentity`. That follows the standing direction — the portal
+`ClientIdentity` with machine-local state (folder paths, per-machine destination toggles, in-memory
+OAuth credentials backed by the OS keychain); the portal's `Client` *is* `ClientIdentity`. That follows the standing direction — the portal
 as a slightly limited desktop, not a parallel implementation of the same row.
 
 ## Components and trust boundaries
@@ -62,15 +62,15 @@ as a slightly limited desktop, not a parallel implementation of the same row.
 | Desktop Rust backend | Native process | Short-lived R2 grant per run; OAuth tokens | Thumbnails, R2 signing, provider uploads |
 | Supabase | Postgres / Auth / PostgREST / Functions | anon + user JWT; edge functions hold service secrets | Metadata, profiles, roles, RLS, grants |
 | Cloudflare R2 | Object storage / CDN | Environment secrets on edge functions only | Public thumbnails, originals, logos |
-| Dropbox / OneDrive / Drive | Provider APIs | Machine-local OAuth tokens | Optional delivery copies |
+| Dropbox / OneDrive / Drive | Provider APIs | OAuth tokens from the OS keychain | Optional delivery copies |
 | Web portal | Browser | Anon key + user session | Galleries, downloads, admin (clients, users, tags) |
 
 The desktop signs in as staff (**editor**, **admin** or **super_admin**) and every pipeline write goes
 through that session under RLS. Permanent Supabase service-role and parent R2 keys never live on the
 desktop — R2 access is minted per run by `r2-grant`. The portal must only ever receive the anon key.
 
-Residual risk: cloud **OAuth tokens** are machine-local plaintext until protected storage lands. See
-[Auth & secrets roadmap](/desktop/authentication-plan).
+Cloud **OAuth tokens** and the optional Google client secret persist in the OS keychain. They are
+still present in application memory while a destination is in use; see [Auth & secrets roadmap](/desktop/authentication-plan).
 
 > **Environments are still user-supplied.** A Supabase URL and anon key are typed into the login screen
 > and persisted to `environments.json`, so anyone able to edit that file can reach staging or dev. Fine
@@ -91,8 +91,9 @@ runPipeline      one scan, then stages in fixed order:
 exportAssets…    identify → plan → write parents, then children → disconnect
 ```
 
-Tags are administered on the web (the database is the source of truth); the desktop may process
-`rename_tasks` afterwards. Two guardrails sit in this flow:
+Tags are administered on the web (the database is the source of truth). Display-label edits update
+portal metadata immediately; shortcode edits affect future generated filenames after desktop sync
+and do not rename existing files. Two guardrails sit in this flow:
 
 - **Blast radius.** A run must not destroy more than it wrote. The client-wide disconnect and the CDN
   delete both consult `assessDestruction`, which refuses past `max(10, rows written)` and says why.

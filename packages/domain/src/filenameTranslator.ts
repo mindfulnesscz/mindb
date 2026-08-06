@@ -15,6 +15,21 @@ export interface ParsedFilename {
 
 export type VocabMap = Map<string, VocabTag>;
 
+/** Make user-editable text safe to use as one cross-platform path segment. */
+export function sanitizeSegment(value: string): string {
+  const sanitized = value
+    .replace(/[\\/<>:"|?*]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^\.+(?=\s|$)\s*/, '')
+    .replace(/[. ]+$/g, '');
+  if (!sanitized || sanitized === '.' || sanitized === '..') return '_';
+  if (/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(sanitized)) {
+    return `_${sanitized}`;
+  }
+  return sanitized;
+}
+
 export function buildVocabMap(vocab: VocabularyData): VocabMap {
   return new Map(vocab.tags.map(t => [t.shortcode, t]));
 }
@@ -64,14 +79,16 @@ export function buildNoteName(p: ParsedFilename): string {
    Falls back to the original stem+ext when parsing fails entirely. */
 export function translateExportName(stem: string, ext: string, vocab: VocabMap): string {
   const p = parseFilename(stem, vocab);
-  if (p.error && !p.tags.length && !p.unknownTags.length) return stem + ext;
+  if (p.error && !p.tags.length && !p.unknownTags.length) {
+    return sanitizeSegment(stem) + ext;
+  }
 
-  const parts = p.tags.map(t => t.label);
-  parts.push(...p.unknownTags.map(u => `[${u}]`));
-  let name = parts.length ? parts.join(' ') : stem;
-  if (p.description) name += ` — ${p.description}`;
+  const parts = p.tags.map(t => sanitizeSegment(t.label));
+  parts.push(...p.unknownTags.map(u => sanitizeSegment(`[${u}]`)));
+  let name = parts.length ? parts.join(' ') : sanitizeSegment(stem);
+  if (p.description) name += ` — ${sanitizeSegment(p.description)}`;
   if (p.version)     name += ` ${p.version}`;
-  name = name.replace(/\s+/g, ' ').trim();
+  name = sanitizeSegment(name);
   if (p.yymm) name = `${p.yymm} ${name}`;
   return name + ext;
 }

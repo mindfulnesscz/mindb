@@ -32,6 +32,7 @@ const { restStub } = await import('../../test/restStub');
 const { exportAssetsToSupabase } = await import('./assetExport');
 const { groupAssets } = await import('@sotto/domain');
 import type { VocabularyData, VocabTag } from '@sotto/domain';
+import type { CloudUrlEntry } from '../pipeline/types';
 
 const SRC = '/src';
 const CLIENT = 'client-1';
@@ -57,6 +58,7 @@ async function sync(paths: string[], opts: {
   cdnUrls?: Map<string, string>;
   pageCounts?: Map<string, { total: number; rendered: number }>;
   originalUrls?: Map<string, string>;
+  cloudUrls?: Map<string, CloudUrlEntry[]>;
   dryRun?: boolean;
   sourceFresh?: boolean;
   allowLargeDeletions?: boolean;
@@ -66,7 +68,7 @@ async function sync(paths: string[], opts: {
   const result = await exportAssetsToSupabase(
     singles, CLIENT, VOCAB, config,
     (type, msg) => { logs.push({ type, msg }); },
-    opts.cdnUrls, undefined, galleries, opts.originalUrls, opts.allowLargeDeletions,
+    opts.cdnUrls, opts.cloudUrls, galleries, opts.originalUrls, opts.allowLargeDeletions,
     opts.pageCounts, opts.dryRun,
     undefined, opts.sourceFresh,
   );
@@ -115,6 +117,24 @@ describe('assetExport — a fresh package folder', () => {
       status: 'published', perm: 'client',
       parent_id: null, variant_of: null,
     });
+  });
+
+  it('keeps cloud links separate when assets in different packages share a stem', async () => {
+    const first = `${SRC}/Alpha __a1000011/OUT/(PRD)(SlD) Deck.pdf`;
+    const second = `${SRC}/Beta __b1000011/OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.put(first, 'alpha');
+    vfs.put(second, 'beta');
+    const cloudUrls = new Map<string, CloudUrlEntry[]>([
+      ['a1000011:c1', [{ provider: 'dropbox', name: 'Alpha', url: 'https://dropbox/alpha' }]],
+      ['b1000011:c1', [{ provider: 'dropbox', name: 'Beta', url: 'https://dropbox/beta' }]],
+    ]);
+
+    await sync([first, second], { cloudUrls });
+
+    expect(restStub.inserted().find(row => row.stable_id === 'a1000011')?.download_urls)
+      .toEqual(cloudUrls.get('a1000011:c1'));
+    expect(restStub.inserted().find(row => row.stable_id === 'b1000011')?.download_urls)
+      .toEqual(cloudUrls.get('b1000011:c1'));
   });
 
   it('persists the manifest so the next run resolves the same child_id', async () => {

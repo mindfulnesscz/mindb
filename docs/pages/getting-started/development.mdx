@@ -9,7 +9,7 @@ For who owns which fields, see [Platform division](/getting-started/platform-div
 
 | Tool | Why it is needed |
 |---|---|
-| Node.js 22 and npm | Root launcher, desktop/web builds, documentation |
+| Node.js 24 and npm | Root launcher, desktop/web builds, documentation |
 | Rust stable (`rustc`, `cargo`) | Tauri native application and Rust checks |
 | Tauri 2 platform prerequisites | Native window/WebView and application bundles |
 | Git | Source control and Nextra edit metadata |
@@ -69,7 +69,7 @@ npx supabase migration up      # applies pending migrations only
 Reset only when you actually want a clean slate. The same rule is at the top of `CLAUDE.md`, because
 it applies to anyone — human or agent — working in this repository.
 
-Only the anon/publishable key belongs in browser/desktop config. Do **not** put the service-role key or permanent R2 keys in the desktop. Folders and OAuth tokens stay machine-local.
+Only the anon/publishable key belongs in browser/desktop config. Do **not** put the service-role key or permanent R2 keys in the desktop. Folders stay in machine-local config; OAuth credentials persist in the OS keychain.
 
 Local dev has its **own pair of R2 buckets** — `dc-hub-dev` (public) and `dc-hub-gated-dev` (private, created 2026-08-03) — which is what honours the rule below rather than working around it. The gated one exists because a public bucket cannot serve the gated tier: public access makes every object a bearer link, the exact thing that tier prevents.
 
