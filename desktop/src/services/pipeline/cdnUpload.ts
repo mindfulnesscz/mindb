@@ -86,10 +86,18 @@ async function pruneStaleObject(
       `  ↷  kept stale ${kind} (was ${stale.level}) — live row references unavailable: ${stale.key}`);
     return false;
   }
-  const otherOwners = [...(references.get(stale.key) ?? [])].filter(candidate => candidate !== owner);
-  if (otherOwners.length) {
-    ctx.appendLog('dim',
-      `  ↷  kept shared stale ${kind} (was ${stale.level}; referenced by ${otherOwners.join(', ')}): ${stale.key}`);
+  // Retain the object while ANY live row still points at it — including this asset's own row. The
+  // old-tier object only becomes safe to remove once the DB URL has actually been repointed to the
+  // current level (by the Supabase export or the reconcile); until then it is the object the portal
+  // is still serving. Deleting it here on the assumption the repoint "is about to happen" strands a
+  // live-referenced object whenever that repoint or the reconcile fails (regression, 2026-08-06). A
+  // genuine orphan — repoint already landed on a prior run — has no owners left and is still pruned.
+  const owners = references.get(stale.key);
+  if (owners && owners.size) {
+    const shared = [...owners].filter(candidate => candidate !== owner);
+    ctx.appendLog('dim', shared.length
+      ? `  ↷  kept shared stale ${kind} (was ${stale.level}; referenced by ${shared.join(', ')}): ${stale.key}`
+      : `  ↷  kept stale ${kind} (was ${stale.level}; own live row still points here — repoint not yet landed): ${stale.key}`);
     return false;
   }
 

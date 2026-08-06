@@ -10,8 +10,8 @@ node scripts/smoke-functions.mjs --fresh   # recreate the runtime first
 `supabase/functions/*` are Deno modules and sit outside every tsconfig, so nothing else in the repo
 type-checks or runs them. A broken import — in a function or in `_shared/` — is invisible until
 production, and that has already cost an incident: a page-preview sweep in `cdn-reconcile` listed R2
-with credentials scoped `object-read-write`, which does not permit `ListBucket`. Every asset was marked
-failed, `cdn_move_queue` stopped draining, and because the same pass sets Cloudflare Stream's
+with a temporary grant that returned 403 for ListObjects. Every asset was marked failed,
+`cdn_move_queue` stopped draining, and because the same pass sets Cloudflare Stream's
 `requireSignedURLs`, video playback and animated thumbnails stopped working.
 
 The probe asserts each function is **served and reaches a decision** — an auth rejection, a validation

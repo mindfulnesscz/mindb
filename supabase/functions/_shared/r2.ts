@@ -21,8 +21,11 @@ export interface TempCreds {
   sessionToken: string;
 }
 
+export type TempCredentialPermission = 'object-read-only' | 'object-read-write';
+
 export async function tempCredentials(
   accountId: string, apiToken: string, parentKey: string, bucket: string,
+  permission: TempCredentialPermission = 'object-read-write',
 ): Promise<TempCreds> {
   const res = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${accountId}/r2/temp-access-credentials`,
@@ -30,7 +33,7 @@ export async function tempCredentials(
       method: 'POST',
       headers: { Authorization: `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        bucket, parentAccessKeyId: parentKey, permission: 'object-read-write', ttlSeconds: 3600,
+        bucket, parentAccessKeyId: parentKey, permission, ttlSeconds: 3600,
       }),
     },
   );
@@ -100,13 +103,84 @@ export async function s3(
 
     try {
       const url = `https://${host}${canonicalUri}${canonicalQuery ? `?${canonicalQuery}` : ''}`;
-      return await fetch(url, { method, headers, body: body as BodyInit | undefined });
+      const response = await fetch(url, { method, headers, body: body as BodyInit | undefined });
+      if ((response.status === 429 || response.status >= 500) && attempt < 3) {
+        // Consume the body before retrying so the connection can be reused. Retry-After is advisory
+        // and bounded: an edge request must not disappear into an unbounded provider backoff.
+        await response.arrayBuffer().catch(() => undefined);
+        const retryAfterHeader = response.headers.get('retry-after');
+        const retryAfter = retryAfterHeader == null ? Number.NaN : Number(retryAfterHeader);
+        const delay = Number.isFinite(retryAfter)
+          ? Math.min(10_000, Math.max(500, retryAfter * 1000))
+          : attempt * 1000;
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      return response;
     } catch (e) {
       lastErr = e;
       if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 1000));
     }
   }
   throw lastErr;
+}
+
+function decodeXml(value: string): string {
+  return value
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, n: string) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n: string) => String.fromCodePoint(Number.parseInt(n, 16)))
+    // Ampersand is last so a literal key containing the text "&lt;" is decoded once, not twice.
+    .replace(/&amp;/g, '&');
+}
+
+export interface ListedR2Object {
+  key: string;
+  size: number;
+  lastModified: string | null;
+}
+
+/** Complete ListObjectsV2 inventory, including the metadata needed by a GC review. */
+export async function listObjects(
+  accountId: string, creds: TempCreds, bucket: string, prefix = '',
+): Promise<ListedR2Object[]> {
+  const out: ListedR2Object[] = [];
+  let token: string | undefined;
+  do {
+    const query: Record<string, string> = {
+      'list-type': '2', prefix, 'max-keys': '1000', ...(token ? { 'continuation-token': token } : {}),
+    };
+    const res = await s3(accountId, creds, bucket, 'GET', '', undefined, {}, query);
+    if (!res.ok) throw new Error(`list ${bucket}/${prefix} → ${res.status}`);
+    const xml = await res.text();
+    const page: ListedR2Object[] = [];
+    for (const match of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
+      const item = match[1];
+      const key = item.match(/<Key>([\s\S]*?)<\/Key>/)?.[1];
+      const size = Number(item.match(/<Size>(\d+)<\/Size>/)?.[1]);
+      if (key == null || !Number.isSafeInteger(size) || size < 0) {
+        throw new Error(`list ${bucket}/${prefix} returned an unsafe object record`);
+      }
+      const lastModified = item.match(/<LastModified>([^<]+)<\/LastModified>/)?.[1] ?? null;
+      page.push({ key: decodeXml(key), size, lastModified });
+    }
+    const keyCount = Number(xml.match(/<KeyCount>(\d+)<\/KeyCount>/)?.[1] ?? page.length);
+    if (keyCount !== page.length) {
+      throw new Error(`list ${bucket}/${prefix} returned KeyCount=${keyCount} but parsed ${page.length}`);
+    }
+    out.push(...page);
+    token = /<IsTruncated>true<\/IsTruncated>/.test(xml)
+      ? xml.match(/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/)?.[1]
+      : undefined;
+    if (/<IsTruncated>true<\/IsTruncated>/.test(xml) && !token) {
+      throw new Error(`list ${bucket}/${prefix} was truncated without a continuation token`);
+    }
+    if (token) token = decodeXml(token);
+  } while (token);
+  return out;
 }
 
 /* A presigned GET: the signature travels in the query string instead of a header, so the URL is
@@ -174,23 +248,7 @@ export async function presignGet(
 export async function listKeys(
   accountId: string, creds: TempCreds, bucket: string, prefix: string,
 ): Promise<string[]> {
-  const out: string[] = [];
-  let token: string | undefined;
-  do {
-    const query: Record<string, string> = {
-      'list-type': '2', prefix, 'max-keys': '1000', ...(token ? { 'continuation-token': token } : {}),
-    };
-    const res = await s3(accountId, creds, bucket, 'GET', '', undefined, {}, query);
-    if (!res.ok) throw new Error(`list ${bucket}/${prefix} → ${res.status}`);
-    const xml = await res.text();
-    for (const m of xml.matchAll(/<Key>([^<]+)<\/Key>/g)) {
-      out.push(m[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>'));
-    }
-    token = /<IsTruncated>true<\/IsTruncated>/.test(xml)
-      ? xml.match(/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/)?.[1]
-      : undefined;
-  } while (token);
-  return out;
+  return (await listObjects(accountId, creds, bucket, prefix)).map(object => object.key);
 }
 
 /** Copy one object between buckets, carrying the metadata the pipeline recognises. */

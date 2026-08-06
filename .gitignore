@@ -41,5 +41,6 @@ packages/*/src/**/*.js.map
 coverage/
 test-results/
 playwright-report/
+reports/cdn-gc/
 .wrangler
 .dev.vars

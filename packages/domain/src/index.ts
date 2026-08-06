@@ -28,5 +28,6 @@ export * from './vocabulary';
 export * from './filenameTranslator';
 export * from './assetGrouping';
 export * from './assetStorage';
+export * from './cdnGarbageCollection';
 export * from './video';
 export * from './streamUrls';

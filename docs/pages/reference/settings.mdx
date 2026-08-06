@@ -26,3 +26,9 @@ Destination fields are detailed in [Provider comparison](/cloud-storage/overview
 Desktop **Settings → Environment** holds URL + anon key per environment (Production / Staging / Local). There is no permanent R2 credential UI on the desktop.
 
 CDN uses environment edge secrets (`R2_BUCKET`, `R2_PUBLIC_DOMAIN`, Cloudflare parent credentials) and per-run `r2-grant`. See [R2 CDN publishing](/desktop/cdn) and [Team staging setup](/getting-started/team-dev-setup).
+
+Super admins also see **Settings → CDN garbage collection** next to Diagnostics. **Analyze** is
+read-only and shows the complete two-bucket reference/orphan report. **Execute deletion** requires a
+fresh matching plan and exact typed confirmations, then returns a post-delete verification report.
+The desktop sends the current user session to `cdn-gc`; permanent R2 credentials remain in the Edge
+Function. See [CDN garbage collection](/operations/cdn-garbage-collection).

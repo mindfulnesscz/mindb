@@ -7,7 +7,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./assetStorage": "./src/assetStorage.ts"
+    "./assetStorage": "./src/assetStorage.ts",
+    "./cdnGarbageCollection": "./src/cdnGarbageCollection.ts"
   },
   "devDependencies": {
     "typescript": "5.9.3"

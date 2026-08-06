@@ -201,11 +201,11 @@ Deno.serve(async (req) => {
        pages readable under the old `client/` prefix.
 
        ADDRESSED FROM `preview_page_count`, NOT BY LISTING. An earlier version listed each level
-       prefix, which cannot work here: `tempCredentials` requests `object-read-write`, which grants
-       Get/Put/Delete on objects but NOT ListBucket. Every list returned 403, every asset was marked
-       failed, and nothing was ever dequeued — so `cdn_move_queue` stopped draining and videos queued
-       behind the jam never had `requireSignedURLs` reconciled. A list here would need bucket-wide
-       read credentials in an edge function, which is a worse trade than the residue below.
+       prefix with a temporary grant that returned 403 for ListObjects. Every asset was marked failed
+       and nothing was ever dequeued — so `cdn_move_queue` stopped draining and videos queued behind
+       the jam never had `requireSignedURLs` reconciled. Cloudflare's current object-read-write
+       temporary credentials do include ListObjects, but per-asset listings are still slower and
+       broader than using the row's bounded page count.
 
        RESIDUE, deliberately accepted: if the page COUNT also shrank (an edited document, or a lowered
        client limit) the objects past the new count at an old level are not addressable from the row,

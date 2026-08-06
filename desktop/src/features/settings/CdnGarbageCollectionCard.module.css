@@ -1,0 +1,229 @@
+.expanded {
+  grid-column: 1 / -1;
+}
+
+.intro,
+.status,
+.warning,
+.empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  align-items: center;
+}
+
+.analyze,
+.danger,
+.download {
+  padding: var(--sp-3) var(--sp-5);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.analyze {
+  border: 1px solid var(--text);
+  background: var(--text);
+  color: var(--surface);
+}
+
+.danger {
+  border: 1px solid var(--signal-error);
+  background: var(--signal-error);
+  color: var(--clear-white);
+}
+
+.download {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.analyze:disabled,
+.danger:disabled,
+.download:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--sp-2);
+}
+
+.metric {
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.metricDanger {
+  border-color: color-mix(in srgb, var(--signal-error) 60%, var(--border));
+}
+
+.metricLabel,
+.groupTitle {
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.metricValue {
+  margin-top: var(--sp-1);
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+}
+
+.metricBytes,
+.meta,
+.bucketName,
+.sample {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+.safety,
+.confirmation,
+.result,
+.bucket {
+  padding: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.blocked,
+.confirmation {
+  border-color: var(--signal-error);
+  background: color-mix(in srgb, var(--signal-error) 6%, var(--surface-raised));
+}
+
+.error {
+  margin: 0;
+  color: var(--signal-error);
+  font-size: var(--text-xs);
+}
+
+.notice {
+  margin: 0;
+  color: var(--signal-success);
+  font-size: var(--text-xs);
+}
+
+.confirmFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3);
+  margin: var(--sp-3) 0;
+}
+
+.label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.input {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  outline: none;
+}
+
+.input:focus { border-color: var(--gray-400); }
+
+.buckets {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.bucketHeader {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+
+.bucketTitle {
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  text-transform: capitalize;
+}
+
+.bucketTotals {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.group {
+  margin-top: var(--sp-4);
+}
+
+.tableWrap {
+  overflow-x: auto;
+  margin-top: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--text);
+  font-size: var(--text-xs);
+}
+
+.table th,
+.table td {
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.table th {
+  border-top: 0;
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+}
+
+.number {
+  text-align: right !important;
+  white-space: nowrap;
+}
+
+.sample {
+  max-width: 430px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .confirmFields { grid-template-columns: 1fr; }
+}

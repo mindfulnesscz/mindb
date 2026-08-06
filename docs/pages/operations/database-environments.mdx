@@ -43,14 +43,15 @@ npm run db:types    # regenerate database.types.ts from the local schema
 |---|---|
 | Email | `admin@acme.test` |
 | Password | `sotto-local` |
-| Role | `admin` — full portal plus the admin area |
+| Role | `super_admin` — full portal, desktop environment management, Diagnostics, and CDN GC |
 
 It's recreated by every `db:reset`, so it always exists on a fresh local stack. (Seeding a user by inserting into `auth.users` is a local-only pattern — never replicate it on staging or production.)
 
-**Two sign-in flows, one inbox rule:** the portal's magic-link flow sends real emails — locally those
+**Two sign-in flows, one inbox rule:** the portal and desktop use magic links — locally those
 are **not delivered anywhere**; they land in **Mailpit at `http://localhost:54324`**. Keep the portal
 dev server running, open the latest message, follow its `/auth/confirm` action, then select
-**Continue signing in**. Password sign-in (where offered) works directly with the credentials above.
+**Continue signing in**. The web Admin form does not accept the seeded password; enter
+`admin@acme.test` there and retrieve its link from Mailpit.
 
 **Creating additional test users** (e.g. to see the member experience):
 

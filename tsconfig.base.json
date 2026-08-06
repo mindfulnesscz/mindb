@@ -7,6 +7,9 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
+    // Shared domain modules also run directly in Deno Edge Functions, whose resolver requires the
+    // real `.ts` suffix. Every extending project is a no-emit type gate, so TS permits these imports.
+    "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
     "strict": true,
     "noUnusedLocals": true,

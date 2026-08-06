@@ -17,12 +17,13 @@ import { ClientDrawer } from './ClientDrawer'
 import { UsersView } from './UsersView'
 import { DCMark } from './DCMark'
 import { ErrorsView } from './errors/ErrorsView'
+import { CdnGarbageCollectionView } from './CdnGarbageCollectionView'
 
 function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
   const { profile, signOut } = useAuth()
   const navigate = useNavigate()
   const { clients, loading, error, usingMock, reload } = useClients()
-  const [tab, setTab] = useState<'clients' | 'users' | 'errors'>('clients')
+  const [tab, setTab] = useState<'clients' | 'users' | 'errors' | 'cdn-gc'>('clients')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [editingClient, setEditingClient] = useState<Client | null>(null)
   const role = asRole(profile?.role ?? 'public')
@@ -53,10 +54,13 @@ function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
           {isAdmin && (
             <button className={tabCls('users')} onClick={() => setTab('users')}>Users</button>
           )}
-          {/* Maintainer surface: errors quote client asset names and paths, so it is super-admin only
-              here AND in RLS. The tab is hidden rather than disabled — an admin has no use for it. */}
+          {/* Maintainer surfaces can expose cross-client paths or mutate global storage, so they are
+              super-admin only here and at their server-side authorization boundaries. */}
           {role === 'super_admin' && (
-            <button className={tabCls('errors')} onClick={() => setTab('errors')}>Errors</button>
+            <>
+              <button className={tabCls('errors')} onClick={() => setTab('errors')}>Diagnostics</button>
+              <button className={tabCls('cdn-gc')} onClick={() => setTab('cdn-gc')}>CDN GC</button>
+            </>
           )}
         </div>
         <div className="flex-1" />
@@ -130,6 +134,10 @@ function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
           <div className="p-6">
             <ErrorsView isSuperAdmin={role === 'super_admin'} />
           </div>
+        )}
+
+        {tab === 'cdn-gc' && (
+          <CdnGarbageCollectionView isSuperAdmin={role === 'super_admin'} />
         )}
 
         {tab === 'users' && isAdmin && (

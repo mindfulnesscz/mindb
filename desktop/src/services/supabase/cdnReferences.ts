@@ -27,9 +27,11 @@ export interface CdnKeyReferenceIndex {
 /**
  * Every live row that names an R2 key, indexed by that key.
  *
- * Owners matter, rather than just membership in a Set: an asset's own old URL is expected while
- * the upload is about to repoint it, but the same key named by a different row (notably a gallery
- * parent sharing its first child's media) must be retained.
+ * Owners are tracked (not just membership) so a shared key can be reported by who holds it. A key
+ * is retained while ANY row references it, INCLUDING the asset's own row: its old-tier object is
+ * only safe to prune once the row has actually been repointed to the new tier, so until then the
+ * own-row reference is a reason to keep, not to delete. A key named by a different row (notably a
+ * gallery parent sharing its first child's media) is likewise retained.
  */
 export function inspectCdnKeyReferences(
   rows: Iterable<CdnReferenceRow>,
