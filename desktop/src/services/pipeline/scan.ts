@@ -13,7 +13,7 @@
 import { join } from '@tauri-apps/api/path';
 import type { AppSettings } from '../../store/settingsStore';
 import {
-  type VocabularyData, buildVocabMap, parseFilename, extractStableId,
+  type VocabularyData, buildVocabMap, parseFilename, extractStableId, isPreviewArtifact,
 } from '@sotto/domain';
 import { shouldSkip, isPackageFolder, isOutFolder, isPublishableFile } from './naming';
 import { listDir, listDirResult } from './fs';
@@ -47,7 +47,7 @@ export async function scanAllAssets(
     if (read.error) onReadError?.(dir, read.error);
     const entries = read.entries;
     await Promise.all(entries.map(async e => {
-      if (e.name.startsWith('.') || shouldSkip(e.name, s) || e.name.includes('-thumb')) return;
+      if (e.name.startsWith('.') || shouldSkip(e.name, s) || isPreviewArtifact(e.name)) return;
       if (e.isDirectory && e.name.toLowerCase() === 'versions') return; // versions/ handled separately in VH sync
       const childPath = await join(dir, e.name);
       if (e.isFile && isPublishableFile(e.name)) {
@@ -101,7 +101,7 @@ export async function scanVersionMap(
   }
 
   function addEntry(file: string, name: string, isHistory: boolean) {
-    if (!isPublishableFile(name) || name.includes('-thumb')) return;
+    if (!isPublishableFile(name) || isPreviewArtifact(name)) return;
     const stableId = stableIdFor(file);
     if (!stableId) return; // no folder identity — nothing in the DB to attach history to
     const dot       = name.lastIndexOf('.');
@@ -149,7 +149,7 @@ export async function scanVersionMap(
   async function collectFromDir(dir: string, isHistory: boolean) {
     const entries = await listDir(dir);
     await Promise.all(entries.map(async e => {
-      if (e.name.startsWith('.') || shouldSkip(e.name, settings) || e.name.includes('-thumb')) return;
+      if (e.name.startsWith('.') || shouldSkip(e.name, settings) || isPreviewArtifact(e.name)) return;
       const childPath = await join(dir, e.name);
       if (e.isFile) {
         addEntry(childPath, e.name, isHistory);

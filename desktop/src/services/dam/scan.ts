@@ -79,7 +79,7 @@ export async function collectOutDirInfos(
       return; // don't descend into siblings
     }
     const hasFiles = entries.some(e =>
-      e.isFile && isPublishable(e.name) && !e.name.includes('-thumb') && !shouldSkip(e.name, s)
+      e.isFile && isPublishable(e.name) && !isPreviewArtifact(e.name) && !shouldSkip(e.name, s)
     );
     if (hasFiles) {
       const scope    = scopeFor(dir, anchors);
@@ -94,10 +94,10 @@ export async function collectOutDirInfos(
       });
     }
     for (const e of entries) {
-      /* isPreviewArtifact excludes the `<stem>-thumb/` previews folder. Without it the walk
-         descends into one, finds `001.webp` (publishable, and deliberately without `-thumb` in its
-         name), and registers the folder as an ORPHAN asset folder — giving every previewed document
-         a spurious vault note. */
+      /* isPreviewArtifact excludes the `thumbnails/` artifacts folder. Without it the walk
+         descends into one, finds `001.webp` (publishable, and deliberately without any marker in
+         its name), and registers the folder as an ORPHAN asset folder — giving every previewed
+         document a spurious vault note. */
       if (e.isDirectory && !shouldSkip(e.name, s) && !isPackageFolder(e.name, s)
           && !isPreviewArtifact(e.name)) {
         await walk(await join(dir, e.name));

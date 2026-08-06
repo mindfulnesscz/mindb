@@ -7,7 +7,8 @@
  *   scan          source tree → the single asset list every later stage reads
  *   collect       fill 📦 anchors from surrounding OUT folders (destructive: mirror purge)
  *   publishLocal  mirror OUT into the client target, then reconcile (🚫 vs hard delete)
- *   thumbnails    generate the -thumb.webp beside each thumbnable asset
+ *   artifactMigration  move a pre-3.2.2 library's loose render artifacts into thumbnails/
+ *   thumbnails    generate each asset folder's thumbnails/ — sidecars and page previews
  *   cdnUpload     publish thumbnails + originals to R2 under identity-derived keys
  *   pagesUpload   publish per-page document previews (portal page viewer only)
  *   cdnCleanup    remove R2 objects identified as stale by the database sync
@@ -27,6 +28,7 @@ import type { RunContext } from './pipeline/types';
 import { scanAllAssets } from './pipeline/scan';
 import { runDistribute } from './pipeline/collect';
 import { runPublish } from './pipeline/publishLocal';
+import { runArtifactMigration } from './pipeline/artifactMigration';
 import { runThumbnails } from './pipeline/thumbnails';
 import { runCdnUpload, runPagesUpload, runOriginalUpload } from './pipeline/cdnUpload';
 import { runCloudExport } from './pipeline/cloudExport';
@@ -88,6 +90,12 @@ export async function runPipeline(ctx: RunContext): Promise<RunStats> {
       }
     }
 
+    /* Before the render stage, and gated on the same setting: every stage below reads artifacts at
+       their CURRENT location, so an unmigrated library would re-render everything and then upload
+       it. Cheap on a migrated one — one directory listing per asset folder and no moves. */
+    if (settings.doThumbnails && !stopping('artifact layout migration')) {
+      await runArtifactMigration(ctx, stats);
+    }
     if (settings.doThumbnails && !stopping('thumbnail generation')) await runThumbnails(ctx, stats);
     if (settings.doThumbnails && !stopping('CDN thumbnail upload')) {
       if (settings.dryRun && !ctx.r2) appendLog('dim', '  [DRY] would upload thumbnails to CDN');

@@ -9,7 +9,7 @@ import { getConfig } from '../../lib/supabase'
 type SignInStep = 'email' | 'checking' | 'error' | 'sending' | 'sent'
 
 export function AdminSignIn() {
-  const { checkEmail, sendMagicLink, signInWithProvider } = useAuth()
+  const { checkEmail, sendMagicLink, signInWithProvider, authError, clearAuthError } = useAuth()
   const [step, setStep] = useState<SignInStep>('email')
   const [email, setEmail] = useState('')
   const [error, setError] = useState('')
@@ -18,28 +18,24 @@ export function AdminSignIn() {
   const localDevelopment = /localhost|127\.0\.0\.1/i.test(getConfig().url)
 
   async function handleOAuth(provider: OAuthProvider) {
-    setError(''); setOauthBusy(provider)
+    setError(''); clearAuthError(); setOauthBusy(provider)
     const err = await signInWithProvider(provider, window.location.origin)
     if (err) { setError(err); setOauthBusy(null) }  // success redirects away
   }
 
   useEffect(() => { inputRef.current?.focus() }, [])
 
-  // Detect auth errors Supabase puts in the URL hash (e.g. expired link)
-  useEffect(() => {
-    const hash = window.location.hash
-    if (!hash.includes('error=')) return
-    const params = new URLSearchParams(hash.slice(1))
-    const desc = params.get('error_description')
-    if (desc) setError(desc.replace(/\+/g, ' ') + ' — please try again.')
-    window.history.replaceState(null, '', window.location.pathname)
-  }, [])
+  /* No URL parsing here. A failed auth return is resolved at app level (`lib/authReturn.ts`) before
+     any session is trusted, and arrives as `authError` — which is what makes it visible at all: this
+     component does not render when a session was restored, so the hash it used to read was dropped
+     on the floor in exactly the case that mattered. */
+  const returnError = authError ? `${authError} — please try again.` : ''
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     const trimmed = email.trim().toLowerCase()
     if (!trimmed) return
-    setError(''); setStep('checking')
+    setError(''); clearAuthError(); setStep('checking')
 
     const type = await checkEmail(trimmed)
     if (type !== 'staff') {
@@ -115,7 +111,9 @@ export function AdminSignIn() {
                 disabled={busy}
                 className="w-full text-sm font-sans border border-cosmos-black rounded-sm px-4 py-3 bg-bg placeholder:text-text-subtle focus:outline-none transition-colors"
               />
-              {error && <p className="text-[11px] font-sans text-signal-error">{error}</p>}
+              {(error || returnError) && (
+                <p className="text-[11px] font-sans text-signal-error">{error || returnError}</p>
+              )}
               <button
                 type="submit"
                 disabled={busy || !email.trim()}

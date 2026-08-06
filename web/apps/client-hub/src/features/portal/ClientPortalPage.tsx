@@ -210,28 +210,18 @@ function PortalHeader({ client }: { client: PortalClient }) {
 
 export default function ClientPortalPage() {
   const { slug } = useParams<{ slug: string }>()
-  const { session, profile } = useAuth()
+  const { session, profile, authError, clearAuthError } = useAuth()
   const { role, setActiveClient } = useRole()
 
   const [client,    setClient]   = useState<PortalClient | null>(null)
   const [missing,   setMissing]  = useState(false)
   const [showModal, setShowModal] = useState(false)
-  const [linkError, setLinkError] = useState<string | null>(null)
 
-  // Detect auth errors Supabase puts in the URL hash (e.g. expired link)
-  useEffect(() => {
-    const hash = window.location.hash
-    if (!hash.includes('error=')) return
-    const params = new URLSearchParams(hash.slice(1))
-    const desc = params.get('error_description')
-    if (desc) setLinkError(desc.replace(/\+/g, ' '))
-    /* Strips the hash and KEEPS the query string. Dropping the search was harmless while the portal
-       had no addressable state; now that filters live there, an expired magic link would silently
-       wipe the view the recipient was being sent back to — the SignInModal's
-       `redirectTo={window.location.href}` carries the filtered URL, so this is the other half of
-       that working. */
-    window.history.replaceState(null, '', window.location.pathname + window.location.search)
-  }, [])
+  /* The failed-link message comes from `AuthContext` now, not from this component reading the hash.
+     That handler only ever fired when the visitor happened to already be signed out — a failed
+     return over a restored session rendered the gallery instead, and the error was never read. The
+     URL cleanup moved with it: `cleanAuthUrl` keeps the query and strips only an auth hash, which is
+     what makes the filtered `redirectTo` survive an expired link. */
 
   // Fetch client by slug — works unauthenticated via security definer RPC
   useEffect(() => {
@@ -301,16 +291,16 @@ export default function ClientPortalPage() {
               </p>
             )}
             <button
-              onClick={() => { setShowModal(true); setLinkError(null) }}
+              onClick={() => { setShowModal(true); clearAuthError() }}
               className="px-8 py-3 text-sm font-sans font-semibold bg-cosmos-black text-clear-white rounded-sm hover:bg-ink-800 transition-colors"
               style={{ boxShadow: '4px 4px 0 #161616' }}
             >
               Sign in / Request access
             </button>
 
-            {linkError && (
+            {authError && (
               <p className="mt-6 text-sm font-sans text-signal-error">
-                {linkError} — please request a new link.
+                {authError} — please request a new link.
               </p>
             )}
           </div>

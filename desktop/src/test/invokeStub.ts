@@ -9,6 +9,28 @@
 
 import { vfs } from './vfs';
 
+/**
+ * The bits of a filesystem the render fakes need, so the stub can drive the in-memory `vfs` or a
+ * real temp directory (`./realFs`). Rendering has to write through the SAME filesystem the pipeline
+ * reads, or the CDN stage that follows finds no thumbnail and silently reports "no thumb".
+ */
+export interface StubFsBackend {
+  put(path: string, contents: string): void | Promise<void>;
+  hasFile(path: string): boolean | Promise<boolean>;
+  stat(path: string): Promise<{ size: number; mtime: Date | null }>;
+  sameContent(a: string, b: string): boolean | Promise<boolean>;
+}
+
+const vfsBackend: StubFsBackend = {
+  put: (path, contents) => vfs.put(path, contents),
+  hasFile: path => vfs.hasFile(path),
+  stat: async path => {
+    const info = await vfs.fsApi().stat(path);
+    return { size: info.size, mtime: info.mtime };
+  },
+  sameContent: (a, b) => vfs.sameContent(a, b),
+};
+
 export interface UploadArgs {
   filePath: string;
   objectKey: string;
@@ -43,6 +65,13 @@ class InvokeStub {
     string,
     { mtimeMs: number; size: number; width: number; quality: number }
   >();
+  /** Where the render fakes write. Defaults to the in-memory tree; `reset()` restores it. */
+  private backend: StubFsBackend = vfsBackend;
+
+  /** Point the render fakes at another filesystem — see `realFs` for the out-of-appdata smoke test. */
+  useFsBackend(backend: StubFsBackend): void {
+    this.backend = backend;
+  }
 
   reset(): void {
     this.calls = [];
@@ -53,6 +82,7 @@ class InvokeStub {
     this.documentPages = 1;
     this.replies = new Map();
     this.thumbnailFingerprints = new Map();
+    this.backend = vfsBackend;
   }
 
   /** Args of every call to `cmd`, in order. */
@@ -73,13 +103,13 @@ class InvokeStub {
     this.calls.push({ cmd, args });
     switch (cmd) {
       case 'files_equal':
-        return vfs.sameContent(
+        return this.backend.sameContent(
           args.sourcePath as string,
           args.destinationPath as string,
         );
       case 'generate_thumbnail': {
         if (this.thumbnailFails) throw new Error('thumbnail generation failed');
-        const info = await vfs.fsApi().stat(args.src as string);
+        const info = await this.backend.stat(args.src as string);
         const fingerprint = {
           mtimeMs: info.mtime?.getTime() ?? -1,
           size: info.size,
@@ -87,7 +117,7 @@ class InvokeStub {
           quality: args.quality as number,
         };
         const previous = this.thumbnailFingerprints.get(args.dest as string);
-        if (vfs.hasFile(args.dest as string)
+        if (await this.backend.hasFile(args.dest as string)
             && previous
             && previous.mtimeMs === fingerprint.mtimeMs
             && previous.size === fingerprint.size
@@ -95,7 +125,7 @@ class InvokeStub {
             && previous.quality === fingerprint.quality) {
           return false;
         }
-        vfs.put(args.dest as string, 'webp-bytes');
+        await this.backend.put(args.dest as string, 'webp-bytes');
         this.thumbnailFingerprints.set(args.dest as string, fingerprint);
         return true;
       }
@@ -105,15 +135,16 @@ class InvokeStub {
          about the thumbnail behave as they did before this command existed. */
       case 'generate_document_previews': {
         if (this.thumbnailFails) throw new Error('thumbnail generation failed');
-        vfs.put(args.thumb as string, 'webp-bytes');
+        await this.backend.put(args.thumb as string, 'webp-bytes');
         const rendered = Math.min(this.documentPages, (args.limit as number) ?? 0);
         const pagesDir = args.pagesDir as string;
         for (let p = 1; p <= rendered; p++) {
-          vfs.put(`${pagesDir}/${String(p).padStart(3, '0')}.webp`, 'webp-bytes');
+          await this.backend.put(`${pagesDir}/${String(p).padStart(3, '0')}.webp`, 'webp-bytes');
         }
-        /* pages.json last, as Rust does — it is what marks the set complete, and the upload stage
-           reads it rather than listing the directory, so a fake without it publishes nothing. */
-        vfs.put(`${pagesDir}/pages.json`, JSON.stringify({
+        /* `.pages.json` last, as Rust does — it is what marks the set complete, and the upload
+           stage reads it rather than listing the directory, so a fake without it publishes
+           nothing. Hidden, because it is a render cache and not something a client should see. */
+        await this.backend.put(`${pagesDir}/.pages.json`, JSON.stringify({
           version: 1, srcMtimeMs: 0, srcSize: 0,
           total: this.documentPages, rendered,
           limit: args.limit, width: args.width, quality: args.quality,

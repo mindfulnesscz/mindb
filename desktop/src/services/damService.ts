@@ -20,6 +20,7 @@ import type { RunStats } from '../store/pipelineStore';
 import type { RunContext } from './pipeline/types';
 import {
   assetIdentityKey, buildVocabMap, parseFilename, buildNoteName, translateExportName,
+  isPreviewArtifact, thumbPathFor,
 } from '@sotto/domain';
 import { pathParts, safeName, isPublishable } from './dam/paths';
 import { listDir, fileExists, isUnchanged, shouldSkip } from './dam/fs';
@@ -152,7 +153,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
 
     // ── Asset files ───────────────────────────────────────────────────────
     const assetFiles = entries.filter(
-      e => e.isFile && isPublishable(e.name) && !e.name.includes('-thumb')
+      e => e.isFile && isPublishable(e.name) && !isPreviewArtifact(e.name)
         && !e.name.startsWith('.') && !shouldSkip(e.name, settings)
     );
 
@@ -192,9 +193,9 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
       liveNotePaths.add(notePath);
       noteSourceMap.set(notePath, [clusterKey, sortKey]);
 
-      // Copy pre-existing -thumb.webp → ATTACHMENTS
+      // Copy the pipeline's thumbnail out of the asset folder's thumbnails/ → ATTACHMENTS
       let thumbName: string | null = null;
-      const preExistingThumb = await join(outPath, `${stem}-thumb.webp`);
+      const preExistingThumb = thumbPathFor(outPath, stem);
       if (await fileExists(preExistingThumb)) {
         const thumbDestName = `${safe}-thumb.webp`;
         const thumbDest     = await join(attRoot, thumbDestName);

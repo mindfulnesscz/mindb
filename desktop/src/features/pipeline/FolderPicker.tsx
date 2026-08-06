@@ -10,7 +10,10 @@ interface Props {
 
 export function FolderPicker({ label, value, onChange }: Props) {
   async function pick() {
-    const selected = await open({ directory: true, multiple: false });
+    // `recursive` is what Tauri passes to fs_scope().allow_directory(). Without it the grant is
+    // only `<dir>` and `<dir>/*`, so anything deeper than one level is refused by path_policy —
+    // which is every real asset, since sources nest project/shoot/OUT folders.
+    const selected = await open({ directory: true, multiple: false, recursive: true });
     if (selected && typeof selected === 'string') onChange(selected);
   }
 

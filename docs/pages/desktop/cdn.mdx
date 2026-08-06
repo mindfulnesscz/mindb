@@ -101,8 +101,9 @@ without this stage the portal's page viewer has nothing to read.
 
 Two things it does that the thumbnail stage does not:
 
-**It reads `pages.json` from disk** rather than trusting the render step, so the upload is correct on
-a run where thumbnails were skipped but previews already exist.
+**It reads `.pages.json` from disk** — from the document's folder inside `thumbnails/` — rather than
+trusting the render step, so the upload is correct on a run where thumbnails were skipped but
+previews already exist.
 
 **It prunes across all four levels.** Any page object for the asset that this run did not just write is
 deleted — pages a shrunken document no longer has, and pages left at a *wider* level after the asset

@@ -10,13 +10,44 @@ absolute out-of-scope paths, `..` traversal, and symlink escapes.
 Approved roots are:
 
 - Sotto's app-data directory;
-- folders selected with a Tauri folder picker during this session;
-- machine-local source, destination, vault, and creation folders restored from Sotto's persisted
-  client configuration at startup.
+- folders selected with a Tauri folder picker during this session. The pickers pass
+  `recursive: true`, which is what makes the grant cover the whole subtree — without it Tauri grants
+  only the folder and its immediate children, and every asset sits deeper than that;
+- machine-local source, destination, vault, and creation folders read from Sotto's persisted client
+  configuration. These are read at startup **and re-read once on a scope miss**, because on a fresh
+  install the configuration is written after launch — at boot there is nothing yet to grant.
 
 Use the **Browse** control when assigning a new local folder. The selection grants access for the
-current session and its persisted client entry restores that grant after restart. The filesystem
-capability contains no repository-wide or machine-wide `**` rule.
+current session, and its persisted client entry restores that grant after restart.
+
+Re-reading on a miss does not widen the boundary: the roots still come from Rust reading app-local
+configuration, never from an IPC argument, so a caller cannot grant itself a directory by naming one.
+
+### Two scopes, and why they are not the same one
+
+The **JavaScript** filesystem commands (`@tauri-apps/plugin-fs`) are governed by the capability in
+`desktop/src-tauri/capabilities/default.json`, which is a different mechanism from the runtime scope
+above. `tauri-plugin-fs` builds its runtime scope from `FsScope::default()` — empty — and fills it
+only from `allow_directory`/`allow_file` calls, so capability globs never appear in what
+`path_policy` checks. A change to one does not affect the other.
+
+That capability declares its paths **once**, through `fs:scope`, because the plugin unions the global
+scope with each command's own scope. The roots are:
+
+| Root | Why |
+| --- | --- |
+| `$HOME/**` | Client sources live under `~/Library/CloudStorage/…`; app data is under `$HOME` on every platform |
+| `/Volumes/**` | An external drive or mounted network share, which a photo or video job routinely runs from |
+| `$APPDATA/**` | Explicit, so the app's own data does not depend on the `$HOME` rule holding on every platform |
+
+This replaced a machine-wide `**` (a 3.2.1 stopgap) in 3.2.2. It excludes `/etc`, `/usr`, `/private`
+and the system `Library`. On Windows a drive other than the one holding `$HOME` is **not** covered —
+add it explicitly if that ever becomes a real working location.
+
+`requireLiteralLeadingDot: false` lives in `tauri.conf.json` under `plugins.fs`, **not** in the
+capability: the plugin reads it only from there, and it defaults to `true` on unix. Without it these
+globs would not match `.dchub.json`, the asset identity manifest. `src/app/fsCapability.test.ts`
+fails if either the roots widen or that flag goes missing.
 
 The boundary applies to native thumbnail and document-preview inputs and outputs, R2 and Dropbox
 upload sources, byte comparisons, and reveal roots. Provider credentials and request headers do not

@@ -110,3 +110,97 @@ describe('tag-sync deletion safety', () => {
     expect(result).toMatchObject({ created: 1, updated: 0, deleted: 1, deletionRefused: false });
   });
 });
+
+/* A tag must never be written as its own parent.
+ *
+ * Reported from a real import: an exported taxonomy carried
+ *   { "key": "format.document", "parent_key": "format.document" }
+ * for three nodes, and the portal validator refused the file with "cannot parent itself" plus a
+ * cascade of "cycle detected" for their children. The export was faithful — the ROWS were
+ * self-referencing.
+ *
+ * Pass 1 resolves a parent group by NAME (`dimension::name`); pass 2 finds the row to update by key
+ * or shortcode. Nothing connected the two, so when both landed on the SAME row — a keyed,
+ * shortcode-less group whose name is also the leaf's parentGroup — the sync patched that row to be
+ * its own parent. Self-parenting carries no information and is unrepresentable in the import format,
+ * so it is now refused at the point of writing rather than discovered on the way back in.
+ */
+describe('tag-sync parent resolution', () => {
+  /* A FACTORY, not a shared object. The sync does `Object.assign(existingLeaf, patch)` on the rows
+     it was handed, so a shared fixture is mutated by the first test and a later one then asserts
+     against an already-rewritten row — passing for the wrong reason. */
+  const groupRow = () => ({
+    id: 'group-document',
+    name: 'Document',
+    key: 'format.document',
+    dimension: 'format',
+    parent_id: null,
+    shortcode: '',          // no shortcode + no parent ⇒ a portal-managed GROUP
+    sort_order: 0,
+  });
+  const GROUP_ID = 'group-document';
+
+  /** A leaf whose key is the group's key, and whose parentGroup is that same group's name. */
+  const collidingLeaf: VocabularyData = {
+    _schema_version: '4.0.0',
+    _comment: '',
+    tags: [{
+      slot: 'format',
+      key: 'format.document',
+      label: 'Document',
+      shortcode: 'Doc',
+      parentGroup: 'Document',
+      icon: '',
+    }],
+  } as unknown as VocabularyData;
+
+  const patchedBodies = () => sbFetch.mock.calls
+    .filter(([, init]) => (init as { method?: string })?.method === 'PATCH')
+    .map(([, init]) => JSON.parse((init as { body: string }).body));
+
+  it('never writes a tag as its own parent', async () => {
+    fetchAllForClient.mockResolvedValue([groupRow()]);
+
+    await syncTagsFromVocabulary(
+      collidingLeaf, 'client-1', config, () => {}, { sourceFresh: true },
+    );
+
+    for (const body of patchedBodies()) {
+      expect(body.parent_id).not.toBe(GROUP_ID);
+    }
+  });
+
+  it('records the tag as ungrouped, and says so, rather than silently dropping the grouping', async () => {
+    fetchAllForClient.mockResolvedValue([groupRow()]);
+    const logs: string[] = [];
+
+    await syncTagsFromVocabulary(
+      collidingLeaf, 'client-1', config, (_t, m) => logs.push(m), { sourceFresh: true },
+    );
+
+    const withParent = patchedBodies().filter(b => 'parent_id' in b);
+    for (const body of withParent) expect(body.parent_id).toBeNull();
+    expect(logs.join('\n')).toContain('cannot be its own parent');
+  });
+
+  it('still groups a leaf under a DIFFERENT row normally', async () => {
+    // The guard must be narrow: ordinary grouping is the common case and must be untouched.
+    fetchAllForClient.mockResolvedValue([
+      groupRow(),
+      { id: 'leaf-1', name: 'Deck', key: 'format.deck', dimension: 'format',
+        parent_id: null, shortcode: 'Dck', sort_order: 0 },
+    ]);
+
+    await syncTagsFromVocabulary(
+      { _schema_version: '4.0.0', _comment: '', tags: [{
+        slot: 'format', key: 'format.deck', label: 'Deck', shortcode: 'Dck',
+        parentGroup: 'Document', icon: '',
+      }] } as unknown as VocabularyData,
+      'client-1', config, () => {}, { sourceFresh: true },
+    );
+
+    const parented = patchedBodies().filter(b => 'parent_id' in b);
+    expect(parented).toHaveLength(1);
+    expect(parented[0].parent_id).toBe(GROUP_ID);
+  });
+});
