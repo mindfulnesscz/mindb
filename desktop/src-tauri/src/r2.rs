@@ -238,6 +238,7 @@ async fn r2_object_meta_sha256(
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn upload_to_r2(
+    app:           tauri::AppHandle,
     file_path:     String,
     object_key:    String,
     endpoint:      String,
@@ -251,8 +252,11 @@ pub async fn upload_to_r2(
     session_token: Option<String>,
 ) -> Result<R2UploadResult, String> {
     let endpoint = endpoint.trim_end_matches('/');
+    let file_path = crate::path_policy::require_allowed_file(&app, &file_path, "R2 upload source")?;
 
-    let body      = tokio::fs::read(&file_path).await.map_err(|e| format!("Cannot read {file_path}: {e}"))?;
+    let body = tokio::fs::read(&file_path)
+        .await
+        .map_err(|e| format!("Cannot read {}: {e}", file_path.display()))?;
     let body_hash = sha256_hex(&body);
     // Content-hash query so gallery URLs change when bytes change (version-stable keys
     // otherwise keep the same path and browsers serve a cached older image).

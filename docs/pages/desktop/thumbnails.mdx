@@ -173,6 +173,10 @@ branching on file-vs-directory, so the folder is invisible to OUT collection and
 rules. Page files are named zero-padded so lexical order is page order in shells, R2 listings and the
 portal alike.
 
+The native command and the one-shot render worker both enforce this layout. A page render may only
+replace the exact `<source-stem>-thumb/` sibling and write the exact `<source-stem>-thumb.webp`
+thumbnail. A caller-supplied directory elsewhere is refused before `remove_dir_all` runs.
+
 Eligible types are PDF, PowerPoint and Word. **Spreadsheets are capped at one page** — a wide sheet
 printed to PDF paginates into dozens of near-empty slices, so the full allowance would spend real time
 producing useless images and then show them to a client.

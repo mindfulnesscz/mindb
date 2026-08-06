@@ -161,6 +161,11 @@ export function LoginView() {
               We sent a sign-in link to <strong>{email.trim()}</strong>.
               Open it in your browser and select Continue — this window will unlock automatically.
             </p>
+            {server && /localhost|127\.0\.0\.1/i.test(server.url) && (
+              <p className={css.sub}>
+                Local development mail is in Mailpit at http://localhost:54324.
+              </p>
+            )}
             <div className={css.waiting}>
               <div className={css.spinner} />
               Waiting for you to click the link…

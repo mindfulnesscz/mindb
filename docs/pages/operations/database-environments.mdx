@@ -43,14 +43,15 @@ npm run db:types    # regenerate database.types.ts from the local schema
 |---|---|
 | Email | `admin@acme.test` |
 | Password | `sotto-local` |
-| Role | `admin` — full portal plus the admin area |
+| Role | `super_admin` — full portal, desktop environment management, Diagnostics, and CDN GC |
 
 It's recreated by every `db:reset`, so it always exists on a fresh local stack. (Seeding a user by inserting into `auth.users` is a local-only pattern — never replicate it on staging or production.)
 
-**Two sign-in flows, one inbox rule:** the portal's magic-link flow sends real emails — locally those
+**Two sign-in flows, one inbox rule:** the portal and desktop use magic links — locally those
 are **not delivered anywhere**; they land in **Mailpit at `http://localhost:54324`**. Keep the portal
 dev server running, open the latest message, follow its `/auth/confirm` action, then select
-**Continue signing in**. Password sign-in (where offered) works directly with the credentials above.
+**Continue signing in**. The web Admin form does not accept the seeded password; enter
+`admin@acme.test` there and retrieve its link from Mailpit.
 
 **Creating additional test users** (e.g. to see the member experience):
 
@@ -87,7 +88,7 @@ Note that `db:reset` wipes users along with everything else — manually created
 
 - **OAuth sign-in providers** (Microsoft / Google / GitHub) — configured **per environment, never shared**. Local reads `supabase/.env.local` (copy `.env.local.example`) via `env(...)` substitution in `config.toml`, and the file must be sourced into the shell before `db:start`; staging and production each hold their own credentials in that project's dashboard, with nothing in the repo. Full table and the setup click-paths: [Authentication → Where provider credentials live](/auth). Email magic link needs no provider credentials; its local template comes from `supabase/templates/magic_link.html`, while hosted projects require the same template in **Authentication → Email Templates → Magic Link**.
 
-- **Desktop app** — environments are first-class: *Configure server* / Settings → Environment holds each environment's URL and anon key. The desktop holds no service-role or permanent R2 keys; sync and grants run as the signed-in user under RLS. After sign-in it fetches that environment's **client list from the database** (editors: `client_members`; admins: all). Only **folder paths and OAuth tokens** attach per `(environment, client)` in `client-local.json`. Switching environment re-authenticates against the other backend.
+- **Desktop app** — environments are first-class: *Configure server* / Settings → Environment holds each environment's URL and anon key. The desktop holds no service-role or permanent R2 keys; sync and grants run as the signed-in user under RLS. After sign-in it fetches that environment's **client list from the database** (editors: `client_members`; admins: all). Folder paths and destination preferences attach per `(environment, client)` in `client-local.json`; provider OAuth credentials use the OS keychain under the same scope. Switching environment re-authenticates against the other backend.
 
 ### Troubleshooting
 

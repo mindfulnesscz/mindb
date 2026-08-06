@@ -11,15 +11,22 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const files = new Map<string, string>();   // path → text content (manifests)
 const bytes = new Map<string, Uint8Array>(); // path → asset bytes
+let writeFails = false;
 
 vi.mock('@tauri-apps/plugin-fs', () => ({
   exists:       async (p: string) => files.has(p),
   readTextFile: async (p: string) => files.get(p) ?? '',
-  writeTextFile: async (p: string, c: string) => { files.set(p, c); },
+  writeTextFile: async (p: string, c: string) => {
+    if (writeFails) throw new Error('manifest is read-only');
+    files.set(p, c);
+  },
   readFile:     async (p: string) => bytes.get(p) ?? new Uint8Array([1, 2, 3]),
 }));
 
 const { resolveCdnIdentity } = await import('./supabaseService');
+const { planExport } = await import('./supabase/exportPlan');
+const { identifyAssets } = await import('./supabase/exportIdentify');
+const { groupAssets } = await import('@sotto/domain');
 
 const PKG      = '/src/Assets/Launch Deck __a1b2c3d4';
 const MANIFEST = `${PKG}/.dchub.json`;
@@ -38,6 +45,7 @@ const manifestChildren = () => JSON.parse(files.get(MANIFEST)!).children as Reco
 beforeEach(() => {
   files.clear();
   bytes.clear();
+  writeFails = false;
 });
 
 describe('scaffold placeholder adoption', () => {
@@ -89,5 +97,47 @@ describe('scaffold placeholder adoption', () => {
 
     expect(ids.get(other)!.childId).toBe('c2');
     expect(manifestChildren()['(Brnd)(SlD) Launch Deck v1-0-0'].child_id).toBe('c1');
+  });
+
+  it('assigns the same child ids in CDN and export planning regardless of scan order', async () => {
+    const alpha = `${PKG}/OUT/(Brnd) Alpha.png`;
+    const zeta = `${PKG}/OUT/(Brnd) Zeta.pdf`;
+    bytes.set(alpha, new Uint8Array([1]));
+    bytes.set(zeta, new Uint8Array([2]));
+
+    const cdn = await resolveCdnIdentity([zeta, alpha], 'OUT');
+    const cdnIds = new Map([
+      ['(Brnd) Alpha', cdn.get(alpha)!.childId],
+      ['(Brnd) Zeta', cdn.get(zeta)!.childId],
+    ]);
+
+    // Independent fresh state: agreement must come from shared deterministic resolution, not from
+    // one planner reading a manifest the other happened to write first.
+    files.clear();
+    bytes.set(alpha, new Uint8Array([1]));
+    bytes.set(zeta, new Uint8Array([2]));
+    const grouped = groupAssets([zeta, alpha], 'OUT');
+    const plan = await planExport({
+      identified: identifyAssets(grouped.singles, grouped.galleries),
+      clientId: 'client-1',
+      vocab: { _schema_version: '4.0.0', _comment: 'test', tags: [] },
+      existingByStableId: new Map(),
+      appendLog: () => {},
+      dryRun: true,
+    });
+    const exportIds = new Map([...plan.parentWrites, ...plan.childWrites].map(write => [
+      write.record.shortcode as string,
+      write.record.child_id as string,
+    ]));
+
+    expect(exportIds).toEqual(cdnIds);
+  });
+
+  it('fails closed when a changed identity manifest cannot be persisted', async () => {
+    const asset = `${PKG}/OUT/(Brnd) New.png`;
+    bytes.set(asset, new Uint8Array([4]));
+    writeFails = true;
+
+    await expect(resolveCdnIdentity([asset], 'OUT')).rejects.toThrow('manifest is read-only');
   });
 });

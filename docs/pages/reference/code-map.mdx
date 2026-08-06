@@ -29,6 +29,7 @@ remain authoritative.
 | Why is a row `disconnected` rather than deleted? | `services/supabase/exportDisconnect.ts` |
 | How is a new package and draft scaffolded? | `desktop/src/features/vocabulary/createAssetFolder.ts` |
 | How do requests authenticate? | `services/supabase/rest.ts` (`makeHeaders`, `sbFetch` 401 retry) |
+| Where is desktop CDN GC controlled? | `features/settings/CdnGarbageCollectionCard.tsx`, `services/supabase/cdnGarbageCollection.ts` |
 
 ## Cloud storage
 
@@ -53,12 +54,15 @@ One module per provider under `desktop/src/services/cloud/`.
 | How is a taxonomy import validated? | `web/apps/client-hub/src/services/taxonomy/validate.ts` |
 | What makes a tag a group or a leaf? | `web/apps/client-hub/src/features/admin/tags/tagTree.ts` |
 | Where do errors surface? | `features/admin/errors/ErrorsView.tsx`, `services/errorService.ts` |
+| Where is bucket-wide CDN GC controlled? | `features/admin/CdnGarbageCollectionView.tsx`, `services/cdnGarbageCollection.ts`, `supabase/functions/cdn-gc` |
 
 ## Shared and repo-wide
 
 | Question | Primary implementation |
 |---|---|
 | Where do the rules both apps need live? | `packages/domain/src` |
+| Where is CDN GC classification shared? | `packages/domain/src/cdnGarbageCollection.ts` |
+| What does a backend say when it refuses a session token? | `packages/domain/src/callerAuth.ts` — the shared codes and messages; adapters in `supabase/functions/_shared/caller-auth-policy.ts`, `workers/cdn-gate/src/index.ts`, `web/…/lib/edgeFunction.ts`. See [revoked sessions](/auth#revoked-sessions-a-tab-that-looks-signed-in-but-is-not) |
 | How is a client row turned into a domain object? | `packages/database/src/clients.ts` (`toClientIdentity`) |
 | How is one version propagated? | `scripts/version.mjs` |
 | How is one toolchain enforced? | `scripts/toolchain.mjs` |

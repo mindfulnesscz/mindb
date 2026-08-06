@@ -6,6 +6,7 @@ Accessible at `/` for users with `editor` or `admin` role. Client identity, user
 
 | Role | What they see |
 |---|---|
+| `super_admin` | Admin capabilities plus cross-client Diagnostics and CDN GC maintainer tabs |
 | `admin` | Clients tab + Users tab; can create/edit clients, logos, tags, dimension labels |
 | `editor` | Clients tab (read-oriented); redirected to sole client portal when they have exactly one |
 | `member` / `public` | "Staff access only" screen |
@@ -43,6 +44,13 @@ Table of all profiles:
 - **Role** — public / member / editor / admin (cannot change your own role)
 
 Saves via `update_user_access` (not only `update_user_role`).
+
+## Maintainer tabs (super admin only)
+
+**Diagnostics** groups reported errors and notification settings. **CDN GC** provides a read-only
+two-bucket analysis followed by a separately confirmed deletion and verification pass. CDN GC
+credentials stay in the Edge Function; the browser receives reports only. See the complete
+[CDN garbage-collection runbook](/operations/cdn-garbage-collection).
 
 ## Settings
 

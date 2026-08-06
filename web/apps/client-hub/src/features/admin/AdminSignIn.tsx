@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useAuth, type OAuthProvider } from '../../context/AuthContext'
 import { OAUTH_PROVIDERS } from '../auth/SignInModal'
 import { DCMark } from './DCMark'
+import { getConfig } from '../../lib/supabase'
 
 type SignInStep = 'email' | 'checking' | 'error' | 'sending' | 'sent'
 
@@ -14,6 +15,7 @@ export function AdminSignIn() {
   const [error, setError] = useState('')
   const [oauthBusy, setOauthBusy] = useState<OAuthProvider | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const localDevelopment = /localhost|127\.0\.0\.1/i.test(getConfig().url)
 
   async function handleOAuth(provider: OAuthProvider) {
     setError(''); setOauthBusy(provider)
@@ -122,6 +124,12 @@ export function AdminSignIn() {
               >
                 {busy ? 'Checking…' : 'Continue with email'}
               </button>
+              {localDevelopment && (
+                <p className="text-[11px] font-sans text-text-muted leading-relaxed">
+                  Local development: use <span className="font-mono text-cosmos-black">admin@acme.test</span>,
+                  then open <a className="underline" href="http://localhost:54324" target="_blank" rel="noreferrer">Mailpit</a> for the sign-in link.
+                </p>
+              )}
             </form>
           </div>
         )}

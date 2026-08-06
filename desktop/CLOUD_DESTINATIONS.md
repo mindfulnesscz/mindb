@@ -7,12 +7,17 @@ How the pipeline publishes exported assets to Local, Dropbox, OneDrive, and Goog
 | Piece | Edit where | Notes |
 | --- | --- | --- |
 | Destination structure (name, type, remote path, `role`, `minRole`, generate link, portal visibility, Reveal flag) | **Web portal** → Admin → client → **Export destinations** | Stored in `clients.cloud_destinations`; tokens always stripped |
-| OAuth connect / refresh / Google client secret / local folder path on this machine | **Desktop** → Settings → Cloud destinations | Pull with **Sync**, then Connect |
+| OAuth connect / refresh / Google client secret / local folder path on this machine | **Desktop** → Settings → Cloud destinations | Credentials use the OS keychain; pull definitions with **Sync**, then Connect |
 | Which destinations run on this pipeline pass | Desktop Pipeline checkboxes | Local preference — not pushed back to the portal |
 
 Full product workflow (tags + destinations): [docs Tags & export destinations](../docs/pages/getting-started/tags-and-destinations.mdx).
 
 Older docs that said “Add destination” in desktop Settings are obsolete for structure — add destinations in the portal first.
+
+`client-local.json` contains paths and destination preferences, never OAuth tokens or the Google
+client secret. On first load of a legacy file, desktop copies credentials to macOS Keychain,
+Windows Credential Manager, or a Linux Secret Service keyring, then scrubs the file only after all
+keychain writes succeed. See [OAuth and token lifecycle](../docs/pages/cloud-storage/oauth-tokens.mdx).
 
 ---
 
@@ -94,7 +99,7 @@ Known gotchas:
    ```
    http://localhost:7623/callback
    ```
-5. Copy the **Client ID** (portal + desktop) and **Client Secret** (**desktop only** — never store in portal).
+5. Copy the **Client ID** (portal + desktop) and **Client Secret** (**desktop OS keychain only** — never store in portal).
 
 **2. Multiple people connecting? Use a Shared Drive, not personal My Drive.**
 
@@ -156,7 +161,7 @@ The status badge shows **"Expires soon"** once a token is within 1 hour of expir
 | Field | Local | Dropbox | OneDrive | Google Drive | Where set |
 | --- | --- | --- | --- | --- | --- |
 | Client ID / App key | — | ✅ | ✅ | ✅ | Portal (public) + desktop override |
-| Client Secret | — | — | — | ✅ | **Desktop only** |
+| Client Secret | — | — | — | ✅ | **Desktop OS keychain only** |
 | Tenant ID | — | — | ✅ (default `common`) | — | Portal / desktop |
 | Shared Drive ID | — | — | — | ✅ | Portal |
 | Remote / local path | ✅ | ✅ | ✅ | ✅ | Portal structure; local path overridable on machine |

@@ -10,7 +10,10 @@
 ## Primary vs source links
 
 - **Download** always prefers the CDN original (`download_url`). Fast, no provider auth in the browser.
-- **Source links** are the Dropbox / OneDrive / Google Drive share URLs collected into `download_urls` during cloud export. Entries preferably include `destId` (destination UUID) plus `name`, `provider`, and `url`.
+- **Source links** are the Dropbox / OneDrive / Google Drive share URLs collected into
+  `download_urls` during cloud export. The run carries them under `(stable_id, child_id)`, so assets
+  with the same filename cannot overwrite one another. Entries preferably include `destId`
+  (destination UUID) plus `name`, `provider`, and `url`.
 
 Only destinations with pipeline `role: "client"` write into `download_urls`. Internal-team destinations are omitted on purpose.
 
@@ -26,6 +29,6 @@ Entries without a matching destination definition are shown to **staff only**. C
 
 ## Reveal in Finder
 
-Separate from download URLs. When a destination has `allowRevealLocal` and the user’s role meets `minRole`, asset detail can call the desktop localhost bridge (`:7624`) with `clientId` + `stableId`. The desktop resolves the package under `sourceFolder` via `.dchub.json` and reveals it in the OS file manager. Requires the desktop app running with that client selected.
+Separate from download URLs. When a destination has `allowRevealLocal` and the user’s role meets `minRole`, asset detail can send a JSON `POST` to the desktop localhost bridge (`:7624`) with `clientId` + `stableId`. The desktop accepts the production, staging, and local portal origins, resolves the package under its approved `sourceFolder` via an exact parsed `.dchub.json` `stable_id`, and reveals it in the OS file manager. Requires the desktop app running with that client selected.
 
 Database fields control discoverability. For **third-party** share links (Dropbox, Drive, OneDrive) they control nothing else: revoke the provider permission when a link must stop working. R2 objects are no longer in that category — `guest`/`client`/`internal` assets are served through the `cdn-gate` Worker and refuse an unauthorized request ([access levels](/cloud-storage/access-levels)) — but anything ever served on the **public** tier stays fetchable at that URL forever.

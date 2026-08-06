@@ -32,7 +32,7 @@ vi.mock('@tauri-apps/plugin-shell', () => ({ open: async () => {} }));
 
 const { vfs } = await import('../test/vfs');
 const { invokeStub } = await import('../test/invokeStub');
-const { runPipeline } = await import('./pipelineService');
+const { deleteCdnObjects, runPipeline } = await import('./pipelineService');
 const { makeSettings, makeCtx, SRC, R2 } = await import('../test/pipelineHarness');
 import type { AppSettings } from '../store/settingsStore';
 
@@ -215,6 +215,87 @@ describe('CDN — object key construction', () => {
     expect(del?.bucket).toBe('sotto-test');
   });
 
+  it('reclaims this asset\'s thumbnail and original from every non-current level', async () => {
+    const stableId = 'a5000008';
+    const src = `${SRC}/Asset __${stableId}/[03] OUT/(PRD)(SlD) Deck.pdf`;
+    vfs.tree(SRC, { [`Asset __${stableId}/[03] OUT/(PRD)(SlD) Deck.pdf`]: 'current' });
+
+    const staleKeys = [
+      `client-abc/thumbnails/${stableId}/c1.webp`,
+      `guest/client-abc/thumbnails/${stableId}/c1.webp`,
+      `client/client-abc/thumbnails/${stableId}/c1.webp`,
+      `client-abc/originals/${stableId}/c1.pdf`,
+      // Proves the bounded identity sweep also catches an extension changed at the old level.
+      `guest/client-abc/originals/${stableId}/c1.pptx`,
+      `client/client-abc/originals/${stableId}/c1.pdf`,
+    ];
+    for (const key of staleKeys) invokeStub.remoteKeys.add(key);
+
+    const run = await cdn({}, {
+      assetLevels: new Map([[`${stableId}:c1`, 'internal']]),
+    });
+
+    expect(invokeStub.deletedKeys()).toEqual([...staleKeys].sort());
+    for (const key of staleKeys) expect(invokeStub.remoteKeys.has(key), key).toBe(false);
+    expect(invokeStub.remoteKeys).toContain(
+      `internal/client-abc/thumbnails/${stableId}/c1.webp`,
+    );
+    expect(invokeStub.remoteKeys).toContain(
+      `internal/client-abc/originals/${stableId}/c1.pdf`,
+    );
+    expect((run.ctx.cdnUrls as Map<string, string>).get(src))
+      .toContain(`internal/client-abc/thumbnails/${stableId}/c1.webp`);
+    expect((run.ctx.originalUrls as Map<string, string>).get(src))
+      .toContain(`internal/client-abc/originals/${stableId}/c1.pdf`);
+
+    const publicDeletes = invokeStub.argsFor('delete_r2_object')
+      .filter(call => (call.objectKey as string).startsWith('client-abc/'));
+    expect(publicDeletes.every(call => call.bucket === R2.bucket)).toBe(true);
+  });
+
+  it('keeps a stale thumbnail or original that another live row still references', async () => {
+    const stableId = 'a5000009';
+    vfs.tree(SRC, { [`Asset __${stableId}/[03] OUT/(PRD)(SlD) Deck.pdf`]: 'current' });
+    const staleThumb = `client/client-abc/thumbnails/${stableId}/c1.webp`;
+    const staleOriginal = `client/client-abc/originals/${stableId}/c1.pdf`;
+    invokeStub.remoteKeys.add(staleThumb);
+    invokeStub.remoteKeys.add(staleOriginal);
+
+    const references = new Map<string, Set<string>>([
+      [staleThumb, new Set([`${stableId}:c1`, `${stableId}:gallery-parent`])],
+      [staleOriginal, new Set([`${stableId}:c1`, `${stableId}:gallery-parent`])],
+    ]);
+    const run = await cdn({}, {
+      assetLevels: new Map([[`${stableId}:c1`, 'internal']]),
+      cdnKeyReferences: references,
+    });
+
+    expect(invokeStub.deletedKeys()).not.toContain(staleThumb);
+    expect(invokeStub.deletedKeys()).not.toContain(staleOriginal);
+    expect(invokeStub.remoteKeys.has(staleThumb)).toBe(true);
+    expect(invokeStub.remoteKeys.has(staleOriginal)).toBe(true);
+    expect(run.logged('kept shared stale thumbnail')).toBe(true);
+    expect(run.logged('kept shared stale original')).toBe(true);
+  });
+
+  it('skips stale-key pruning when live row references are unknown', async () => {
+    const stableId = 'a5000010';
+    vfs.tree(SRC, { [`Asset __${stableId}/[03] OUT/(PRD)(SlD) Deck.pdf`]: 'current' });
+    const staleThumb = `client/client-abc/thumbnails/${stableId}/c1.webp`;
+    const staleOriginal = `client/client-abc/originals/${stableId}/c1.pdf`;
+    invokeStub.remoteKeys.add(staleThumb);
+    invokeStub.remoteKeys.add(staleOriginal);
+
+    const run = await cdn({}, {
+      assetLevels: new Map([[`${stableId}:c1`, 'internal']]),
+      cdnKeyReferences: undefined,
+    });
+
+    expect(invokeStub.deletedKeys()).not.toContain(staleThumb);
+    expect(invokeStub.deletedKeys()).not.toContain(staleOriginal);
+    expect(run.logged('live row references unavailable')).toBe(true);
+  });
+
   it('publishes no pages for an asset type that has none', async () => {
     vfs.tree(SRC, { 'Asset __a5000005/[03] OUT/(ACQ)(Gll) Photo.jpg': '' });
     await cdn({ doCdnOriginals: false });
@@ -239,8 +320,9 @@ describe('CDN — object key construction', () => {
     await cdn({ doThumbnails: false });
 
     expect(invokeStub.uploadedKeys()).toEqual([
-      'client/client-abc/originals/a1000007/c1.pdf',
-      'client/client-abc/originals/a1000007/c2.jpg',
+      // Fresh ids follow the shared lexical path order, independent of filesystem scan order.
+      'client/client-abc/originals/a1000007/c1.jpg',
+      'client/client-abc/originals/a1000007/c2.pdf',
     ]);
   });
 
@@ -256,6 +338,40 @@ describe('CDN — object key construction', () => {
     const keys = invokeStub.uploadedKeys();
     expect(keys).toHaveLength(2);
     expect(new Set(keys.map(k => k.split('/').pop()!.split('.')[0])).size).toBe(2);
+  });
+});
+
+describe('THUMBNAILS — source fingerprint cache', () => {
+  it('regenerates a raster whose content changed even when the restored source is older', async () => {
+    const source = `${SRC}/Asset __a1000099/[03] OUT/(PRD) Product.png`;
+    const first = 'first image bytes';
+    vfs.put(source, first);
+    await cdn({ doCdnOriginals: false });
+
+    // A backup restore can move the source clock backwards. Existence/newer-destination checks used
+    // to keep the old thumbnail forever; the recorded source fingerprint must invalidate it.
+    vfs.put(source, first.replace('first', 'other'), 500);
+    const second = await cdn({ doCdnOriginals: false });
+
+    expect(invokeStub.argsFor('generate_thumbnail')).toHaveLength(2);
+    expect(second.stats.thumbnails).toBe(1);
+  });
+});
+
+describe('CDN — disconnect cleanup routing', () => {
+  it('deletes public and gated identity keys from their respective buckets', async () => {
+    const keys = [
+      'client-abc/thumbnails/a1000001/c1.webp',
+      'client/client-abc/originals/a1000002/c2.pdf',
+    ];
+
+    await deleteCdnObjects(R2, keys, () => {}, 2);
+
+    const deletions = invokeStub.argsFor('delete_r2_object');
+    expect(deletions).toEqual([
+      expect.objectContaining({ objectKey: keys[0], bucket: R2.bucket }),
+      expect.objectContaining({ objectKey: keys[1], bucket: R2.gatedBucket }),
+    ]);
   });
 });
 
@@ -482,6 +598,26 @@ describe('CDN — URLs handed to the portal', () => {
 });
 
 describe('CDN — guard rails', () => {
+  it('dry-run performs no rendering, identity-manifest write, upload, or page-object delete', async () => {
+    vfs.tree(SRC, {
+      'Asset __a6000000/[03] OUT/(PRD)(SlD) Deck.pdf': 'pdf',
+      'Asset __a6000000/[03] OUT/(PRD)(SlD) Deck-thumb/001.webp': 'page',
+      'Asset __a6000000/[03] OUT/(PRD)(SlD) Deck-thumb/pages.json': JSON.stringify({ rendered: 1, total: 1 }),
+    });
+    invokeStub.remoteKeys.add('client/client-abc/pages/a6000000/c1/999.webp');
+    invokeStub.remoteKeys.add('client-abc/thumbnails/a6000000/c1.webp');
+    invokeStub.remoteKeys.add('client-abc/originals/a6000000/c1.pdf');
+
+    const run = await cdn({ dryRun: true });
+
+    expect(invokeStub.calls).toEqual([]);
+    expect(vfs.ops).toEqual([]);
+    expect(vfs.hasFile(`${SRC}/Asset __a6000000/.dchub.json`)).toBe(false);
+    expect(run.logged('[DRY]')).toBe(true);
+    expect(run.logged('prune stale thumbnail objects')).toBe(true);
+    expect(run.logged('prune stale original objects')).toBe(true);
+  });
+
   it('skips the whole stage when the R2 config is incomplete', async () => {
     vfs.tree(SRC, { 'Asset __a6000001/[03] OUT/(PRD)(SlD) Deck.pdf': '' });
     const run = await cdn({}, { r2: { ...R2, secretKey: '' } });

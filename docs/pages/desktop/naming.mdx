@@ -1,6 +1,10 @@
 # Naming and vocabulary
 
-Filenames are both user-facing names and a metadata transport. `filenameTranslator` builds lookup context from vocabulary, parses recognized tokens and versions, and produces export-safe names. `parseAssetForSupabase` derives shortcode, display name, entity/format/angle/tag arrays, and version information.
+Filenames are both user-facing names and a metadata transport. `filenameTranslator` builds lookup
+context from vocabulary, parses recognized tokens and versions, and produces export-safe names.
+Portal-editable labels are sanitized to one cross-platform path segment before they enter an export
+filename. `parseAssetForSupabase` derives shortcode, display name, entity/format/angle/tag arrays,
+and version information.
 
 This coupling is powerful: taxonomy can be inferred without a separate form. Its weakness is that a naming change rewrites an asset's displayed metadata — identity itself is safe, since it lives on the package folder, not the filename. Vocabulary order and token ambiguity can also change which metadata is inferred.
 

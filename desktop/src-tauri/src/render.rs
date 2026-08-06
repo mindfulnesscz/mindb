@@ -197,6 +197,34 @@ fn pdfium_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 /// Hidden argv flag that turns this executable into a one-shot render worker.
 pub const WORKER_FLAG: &str = "--sotto-render-worker";
 
+/// A deletable page-preview directory is never an arbitrary caller path. It is the exact
+/// `<source-stem>-thumb` sidecar documented by the pipeline, and its title thumbnail is the sibling
+/// `<source-stem>-thumb.webp` file. This check also runs inside the one-shot worker immediately
+/// before `remove_dir_all`, so the destructive boundary is local to the operation that needs it.
+pub fn validate_preview_area(src: &Path, thumb: &Path, pages_dir: &Path) -> Result<(), String> {
+    let parent = src
+        .parent()
+        .ok_or_else(|| format!("preview source has no parent: {}", src.display()))?;
+    let stem = src
+        .file_stem()
+        .ok_or_else(|| format!("preview source has no file stem: {}", src.display()))?;
+    let mut thumb_name = stem.to_os_string();
+    thumb_name.push("-thumb.webp");
+    let mut pages_name = stem.to_os_string();
+    pages_name.push("-thumb");
+    let expected_thumb = parent.join(thumb_name);
+    let expected_pages = parent.join(pages_name);
+
+    if thumb != expected_thumb || pages_dir != expected_pages {
+        return Err(format!(
+            "Refusing preview outputs outside the source's preview sidecars (expected {} and {})",
+            expected_thumb.display(),
+            expected_pages.display(),
+        ));
+    }
+    Ok(())
+}
+
 /// Render page 1 of a PDF to a WebP thumbnail, in a short-lived WORKER PROCESS.
 ///
 /// PDFium cannot be used concurrently. Not "is slower when threaded" — it FAILS: with the crate's
@@ -225,6 +253,10 @@ pub struct RenderJob {
     pub thumb: String,
     /// Where per-page previews go, or None for thumbnail-only work.
     pub pages_dir: Option<String>,
+    /// Original document whose sidecar preview directory may be replaced. For Office rendering,
+    /// `src` is a temporary PDF, so the worker needs this path to enforce the real output boundary.
+    #[serde(default)]
+    pub preview_source: Option<String>,
     pub width: u32,
     pub quality: u32,
     /// Maximum pages to render. Ignored when `pages_dir` is None.
@@ -290,6 +322,7 @@ pub fn pdf_to_thumb(
         src: src.to_string(),
         thumb: dest.to_string(),
         pages_dir: None,
+        preview_source: None,
         width,
         quality,
         limit: 0,
@@ -341,6 +374,17 @@ pub fn worker_main(args: &[String]) -> i32 {
 /// Page 1 is rendered ONCE and written to `thumb`; when `pages_dir` is set the same bitmap is reused
 /// as `001.webp` rather than rasterised again.
 fn render_pdf(job: &RenderJob) -> Result<RenderOutcome, String> {
+    if let Some(pages_dir) = job.pages_dir.as_deref() {
+        let preview_source = job
+            .preview_source
+            .as_deref()
+            .ok_or_else(|| "render worker: preview_source is required for page output".to_string())?;
+        validate_preview_area(
+            Path::new(preview_source),
+            Path::new(&job.thumb),
+            Path::new(pages_dir),
+        )?;
+    }
     let pdfium = pdfium_in(Path::new(&job.lib_dir))?;
     let doc = pdfium
         .load_pdf_from_file(&job.src, None)
@@ -528,6 +572,7 @@ pub fn office_previews(
         src: pdf.to_string_lossy().into_owned(),
         thumb: thumb.to_string(),
         pages_dir: pages_dir.map(str::to_string),
+        preview_source: pages_dir.map(|_| src.to_string()),
         width,
         quality,
         limit,
@@ -549,6 +594,7 @@ pub fn pdf_previews(
         src: src.to_string(),
         thumb: thumb.to_string(),
         pages_dir: pages_dir.map(str::to_string),
+        preview_source: pages_dir.map(|_| src.to_string()),
         width,
         quality,
         limit,
@@ -602,7 +648,7 @@ pub fn manifest_path(pages_dir: &Path) -> PathBuf {
 }
 
 /// mtime (ms since epoch) and size of a file — the cheap fingerprint.
-fn fingerprint(src: &Path) -> Result<(i64, u64), String> {
+pub(crate) fn fingerprint(src: &Path) -> Result<(i64, u64), String> {
     let meta = std::fs::metadata(src).map_err(|e| format!("stat {}: {e}", src.display()))?;
     let mtime_ms = meta
         .modified()
@@ -611,6 +657,75 @@ fn fingerprint(src: &Path) -> Result<(i64, u64), String> {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(-1);
     Ok((mtime_ms, meta.len()))
+}
+
+/* ── Single-thumbnail manifest ───────────────────────────────────────────── */
+
+/// Source fingerprint and output settings for a plain `<stem>-thumb.webp`.
+///
+/// Existence used to be the entire cache key, so replacing/restoring a source file never refreshed
+/// its thumbnail. This mirrors the document-preview manifest's size+mtime decision while keeping
+/// the generated sidecar beside the thumbnail (and therefore covered by every `-thumb` exclusion).
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ThumbnailManifest {
+    pub version: u32,
+    pub src_mtime_ms: i64,
+    pub src_size: u64,
+    pub width: u32,
+    pub quality: u32,
+}
+
+pub const THUMBNAIL_MANIFEST_VERSION: u32 = 1;
+
+pub fn thumbnail_manifest_path(dest: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.json", dest.display()))
+}
+
+pub fn thumbnail_current(
+    src: &Path,
+    dest: &Path,
+    width: u32,
+    quality: u32,
+) -> bool {
+    if !dest.is_file() { return false; }
+    let manifest: ThumbnailManifest = match std::fs::read(thumbnail_manifest_path(dest))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    {
+        Some(manifest) => manifest,
+        None => return false,
+    };
+    let (src_mtime_ms, src_size) = match fingerprint(src) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    manifest == ThumbnailManifest {
+        version: THUMBNAIL_MANIFEST_VERSION,
+        src_mtime_ms,
+        src_size,
+        width,
+        quality,
+    }
+}
+
+pub fn write_thumbnail_manifest(
+    src: &Path,
+    dest: &Path,
+    width: u32,
+    quality: u32,
+) -> Result<(), String> {
+    let (src_mtime_ms, src_size) = fingerprint(src)?;
+    let manifest = ThumbnailManifest {
+        version: THUMBNAIL_MANIFEST_VERSION,
+        src_mtime_ms,
+        src_size,
+        width,
+        quality,
+    };
+    let bytes = serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?;
+    std::fs::write(thumbnail_manifest_path(dest), bytes)
+        .map_err(|e| format!("write thumbnail manifest for {}: {e}", dest.display()))
 }
 
 /// Are the previews in `pages_dir` still valid for `src` under these settings?
@@ -767,6 +882,22 @@ mod tests {
         assert_eq!((out.width(), out.height()), (320, 180));
     }
 
+    #[test]
+    fn thumbnail_cache_tracks_source_fingerprint_and_render_settings() {
+        let work = TempDir::new("sotto-thumbnail-manifest").unwrap();
+        let src = work.path().join("asset.png");
+        let dest = work.path().join("asset-thumb.webp");
+        std::fs::write(&src, b"source bytes").unwrap();
+        std::fs::write(&dest, b"thumbnail bytes").unwrap();
+        write_thumbnail_manifest(&src, &dest, 320, 70).unwrap();
+
+        assert!(thumbnail_current(&src, &dest, 320, 70));
+        assert!(!thumbnail_current(&src, &dest, 640, 70));
+
+        std::fs::write(&src, b"restored source with changed bytes").unwrap();
+        assert!(!thumbnail_current(&src, &dest, 320, 70));
+    }
+
 
     /* Precedence is the load-bearing part of engine resolution: the BUNDLED LibreOffice is the
        version whose deck rendering was reviewed and accepted, so a different one installed on the
@@ -911,10 +1042,28 @@ mod tests {
             src: src.to_string_lossy().into_owned(),
             thumb: thumb.to_string_lossy().into_owned(),
             pages_dir: pages_dir.map(|p| p.to_string_lossy().into_owned()),
+            preview_source: pages_dir.map(|_| src.to_string_lossy().into_owned()),
             width: 320,
             quality: 70,
             limit,
         }
+    }
+
+    #[test]
+    fn preview_area_is_the_exact_source_sidecar() {
+        let src = Path::new("/approved/Deck.pdf");
+        assert!(validate_preview_area(
+            src,
+            Path::new("/approved/Deck-thumb.webp"),
+            Path::new("/approved/Deck-thumb"),
+        )
+        .is_ok());
+        assert!(validate_preview_area(
+            src,
+            Path::new("/approved/Deck-thumb.webp"),
+            Path::new("/outside/delete-me"),
+        )
+        .is_err());
     }
 
     /// The bundled PDFium, or None when `npm run deps:native` has not been run.
@@ -1039,8 +1188,8 @@ mod tests {
         let Some(lib_dir) = pdfium_lib_dir() else { return };
         let work = TempDir::new("sotto-pages-cap").unwrap();
         let src = work.path().join("in.pdf");
-        let thumb = work.path().join("t.webp");
-        let pages = work.path().join("p");
+        let thumb = work.path().join("in-thumb.webp");
+        let pages = work.path().join("in-thumb");
         std::fs::write(&src, minimal_pdf()).unwrap();
 
         // limit 0 renders nothing, yet `total` must still describe the document — that difference is
@@ -1059,8 +1208,8 @@ mod tests {
         let Some(lib_dir) = pdfium_lib_dir() else { return };
         let work = TempDir::new("sotto-pages-stale").unwrap();
         let src = work.path().join("in.pdf");
-        let thumb = work.path().join("t.webp");
-        let pages = work.path().join("p");
+        let thumb = work.path().join("in-thumb.webp");
+        let pages = work.path().join("in-thumb");
         std::fs::write(&src, minimal_pdf()).unwrap();
         std::fs::create_dir_all(&pages).unwrap();
         let orphan = pages.join("007.webp");

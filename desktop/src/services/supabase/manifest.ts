@@ -197,6 +197,26 @@ export function resolveGalleryParentChildId(
 
 export type ManifestStates = Map<string, { manifest: AssetManifest; used: Set<string>; dirty: boolean }>;
 
+/** One physical file whose manifest identity must be resolved. Both the CDN and Supabase planners
+ * feed this exact shape through `resolveIdentityFiles`, so fresh child ids cannot depend on which
+ * planner happened to enumerate the directory first. */
+export interface IdentityFile {
+  packageDir: string;
+  stableId: string;
+  absPath: string;
+}
+
+function normalizedPath(path: string): string {
+  return path.replace(/\\/g, '/');
+}
+
+/** Locale-independent lexical ordering for identity assignment. */
+export function compareIdentityPaths(a: string, b: string): number {
+  const left = normalizedPath(a);
+  const right = normalizedPath(b);
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 /** Reads (or initializes) the manifest state for a package dir, caching it in `manifests`
  * for the rest of the run. Shared by `exportAssetsToSupabase` and `resolveCdnIdentity` so
  * both agree on the exact same child_id assignments — whichever runs first persists them
@@ -211,6 +231,39 @@ export async function getManifestState(manifests: ManifestStates, packageDir: st
     manifests.set(packageDir, state);
   }
   return state;
+}
+
+/**
+ * Resolve physical files in one deterministic order, regardless of scan order.
+ *
+ * This is the shared entry point for CDN key planning and Supabase row planning. It deliberately
+ * delegates every match/allocation decision to `resolveChildId`; callers must not reproduce that
+ * logic or assign ids themselves.
+ */
+export async function resolveIdentityFiles(
+  manifests: ManifestStates,
+  files: IdentityFile[],
+): Promise<Map<string, { stableId: string; childId: string }>> {
+  const resolvedByPath = new Map<string, { stableId: string; childId: string }>();
+  const ordered = [...files].sort((a, b) =>
+    compareIdentityPaths(a.packageDir, b.packageDir) || compareIdentityPaths(a.absPath, b.absPath));
+
+  for (const file of ordered) {
+    if (resolvedByPath.has(file.absPath)) continue;
+    const state = await getManifestState(manifests, file.packageDir, file.stableId);
+    const filename = normalizedPath(file.absPath).split('/').pop()!;
+    const resolved = await resolveChildId(state.manifest, filename, file.absPath, state.used);
+    if (resolved.dirty) {
+      state.manifest.children[filename] = {
+        child_id: resolved.childId,
+        sha256: resolved.sha256,
+      };
+      state.dirty = true;
+    }
+    resolvedByPath.set(file.absPath, { stableId: file.stableId, childId: resolved.childId });
+  }
+
+  return resolvedByPath;
 }
 
 /**

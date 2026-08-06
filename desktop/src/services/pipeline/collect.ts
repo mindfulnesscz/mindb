@@ -40,6 +40,7 @@ export async function runDistribute(ctx: RunContext, stats: RunStats): Promise<v
   const vocabMap = buildVocabMap(ctx.vocab);
 
   for (let idx = 0; idx < packages.length; idx++) {
+    if (ctx.isStopping?.()) return;
     const pkg = packages[idx];
     const pkgName = await basename(pkg);
     appendLog('section', `📦  ${pkgName}`);
@@ -78,4 +79,3 @@ export async function runDistribute(ctx: RunContext, stats: RunStats): Promise<v
     + `${stats.copied} copied · ${stats.skipped} unchanged · ${stats.errors} errors ━━━`,
   );
 }
-

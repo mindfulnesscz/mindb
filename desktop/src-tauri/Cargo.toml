@@ -1,6 +1,6 @@
 [package]
 name = "sotto-app"
-version = "3.2.0"
+version = "3.2.1"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -41,8 +41,10 @@ tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
 reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
 sha2 = "0.10"
+md-5 = "0.11"
 hmac = "0.12"
 hex = "0.4"
+keyring = "4.1.6"
 tokio = { version = "1", features = ["net", "io-util", "time", "fs"] }
 # Thumbnail rendering, all in-process. `image` decodes rasters; `webp` is libwebp built from
 # vendored C and STATICALLY linked (verified: no libwebp in `otool -L`), replacing the `cwebp`
@@ -53,4 +55,3 @@ webp = "0.3"
 # state (FPDF_InitLibrary/FPDF_DestroyLibrary). The pipeline renders 8 files at once, so without
 # this — plus the single process-wide instance in `render` — concurrent thumbnails segfault.
 pdfium-render = { version = "0.9", features = ["thread_safe"] }
-

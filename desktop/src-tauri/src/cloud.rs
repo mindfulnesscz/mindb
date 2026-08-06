@@ -115,12 +115,15 @@ async fn dropbox_sharing_link(
 /// Uses Rust/reqwest — no WKWebView body-size or CSP restrictions.
 #[tauri::command]
 pub async fn upload_to_dropbox(
+    app:          tauri::AppHandle,
     file_path:    String,
     remote_path:  String,
     access_token: String,
     get_link:     bool,
 ) -> Result<DropboxUploadResult, String> {
     let client = reqwest::Client::new();
+    let file_path =
+        crate::path_policy::require_allowed_file(&app, &file_path, "Dropbox upload source")?;
 
     // Skip upload if the file already exists on Dropbox
     if dropbox_file_exists(&client, &access_token, &remote_path).await? {
@@ -133,7 +136,7 @@ pub async fn upload_to_dropbox(
     }
 
     let bytes = std::fs::read(&file_path)
-        .map_err(|e| format!("Cannot read {file_path}: {e}"))?;
+        .map_err(|e| format!("Cannot read {}: {e}", file_path.display()))?;
 
     // Dropbox's simple /files/upload endpoint is capped at 150 MB; larger files
     // must use a chunked upload session (start → append_v2 → finish).
@@ -316,7 +319,7 @@ pub struct OneDriveDeviceCodeInfo {
     pub message:          String,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OneDriveTokenResult {
     pub access_token:  String,
@@ -331,6 +334,27 @@ struct MsTokenResponse {
     expires_in:         Option<u64>,
     error:             Option<String>,
     error_description: Option<String>,
+}
+
+fn classify_device_code_token(
+    response: MsTokenResponse,
+) -> Result<Option<OneDriveTokenResult>, String> {
+    if let Some(access_token) = response.access_token {
+        return Ok(Some(OneDriveTokenResult {
+            access_token,
+            refresh_token: response.refresh_token.unwrap_or_default(),
+            expires_in: response.expires_in.unwrap_or(3600),
+        }));
+    }
+
+    if let Some(error) = response.error {
+        return match error.as_str() {
+            "authorization_pending" | "slow_down" => Ok(None),
+            _ => Err(response.error_description.unwrap_or(error)),
+        };
+    }
+
+    Err("OneDrive token poll returned neither a token nor an OAuth error".into())
 }
 
 #[tauri::command]
@@ -367,7 +391,7 @@ pub async fn onedrive_device_code(
 
 /// Poll the device-code token endpoint once. Returns Ok(None) while the user
 /// hasn't finished signing in yet (`authorization_pending` / `slow_down`),
-/// Ok(Some(..)) once a token is issued, and Err on decline/expiry.
+/// Ok(Some(..)) once a token is issued, and Err on every terminal OAuth error.
 #[tauri::command]
 pub async fn onedrive_poll_token(
     client_id:   String,
@@ -387,24 +411,9 @@ pub async fn onedrive_poll_token(
         .map_err(|e| format!("OneDrive token poll failed: {e}"))?;
 
     let text = res.text().await.unwrap_or_default();
-    let json: MsTokenResponse = serde_json::from_str(&text).unwrap_or_default();
-
-    if let Some(access_token) = json.access_token {
-        return Ok(Some(OneDriveTokenResult {
-            access_token,
-            refresh_token: json.refresh_token.unwrap_or_default(),
-            expires_in:    json.expires_in.unwrap_or(3600),
-        }));
-    }
-
-    if let Some(error) = json.error {
-        if error == "authorization_declined" || error == "expired_token" {
-            return Err(json.error_description.unwrap_or(error));
-        }
-    }
-
-    // 'authorization_pending' or 'slow_down' — caller keeps polling
-    Ok(None)
+    let json: MsTokenResponse = serde_json::from_str(&text)
+        .map_err(|error| format!("OneDrive token poll response parse failed: {error}"))?;
+    classify_device_code_token(json)
 }
 
 #[tauri::command]
@@ -508,5 +517,46 @@ mod tests {
         let authority = |u: &str| u.split("/oauth2/").next().unwrap().to_string();
         assert_eq!(authority(&device_code_url(&tenant)), authority(&token_url(&tenant)));
         assert_eq!(authority(&device_code_url(&None)), authority(&token_url(&None)));
+    }
+
+    #[test]
+    fn device_code_poll_retries_only_pending_and_slow_down() {
+        for error in ["authorization_pending", "slow_down"] {
+            let response = MsTokenResponse { error: Some(error.into()), ..Default::default() };
+            assert!(classify_device_code_token(response).unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn device_code_poll_surfaces_every_terminal_oauth_error() {
+        for error in ["authorization_declined", "expired_token", "invalid_client", "bad_verification_code"] {
+            let response = MsTokenResponse {
+                error: Some(error.into()),
+                error_description: Some(format!("terminal: {error}")),
+                ..Default::default()
+            };
+            assert_eq!(classify_device_code_token(response).unwrap_err(), format!("terminal: {error}"));
+        }
+    }
+
+    #[test]
+    fn device_code_poll_rejects_a_malformed_success_response() {
+        assert!(classify_device_code_token(MsTokenResponse::default())
+            .unwrap_err()
+            .contains("neither a token nor an OAuth error"));
+    }
+
+    #[test]
+    fn device_code_poll_returns_the_issued_token() {
+        let response = MsTokenResponse {
+            access_token: Some("access".into()),
+            refresh_token: Some("refresh".into()),
+            expires_in: Some(42),
+            ..Default::default()
+        };
+        let token = classify_device_code_token(response).unwrap().unwrap();
+        assert_eq!(token.access_token, "access");
+        assert_eq!(token.refresh_token, "refresh");
+        assert_eq!(token.expires_in, 42);
     }
 }

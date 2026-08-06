@@ -6,6 +6,10 @@ Client-specific **machine-local** configuration includes source/target/vault fol
 
 Global pipeline settings define stage toggles, folder markers, filters, thumbnail parameters, and run options.
 
+For super admins, Settings also provides bucket-wide **CDN garbage collection** beside Diagnostics:
+a read-only analysis followed by a separately confirmed execution and verification pass. See the
+[GC runbook](/operations/cdn-garbage-collection).
+
 Native commands include thumbnail generation, the OAuth/auth callback listener, R2 upload/list/delete (with grant credentials), Dropbox/OneDrive operations, and a native Supabase request bridge. See [Code map](/reference/code-map).
 
 The app does not provide a distributed job queue or transaction spanning providers. A run is an ordered collection of best-effort operations; errors are logged and most per-file loops continue. This makes partial success normal and makes the [publishing runbook](/operations/runbook) important.

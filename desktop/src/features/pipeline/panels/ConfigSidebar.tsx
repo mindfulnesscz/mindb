@@ -177,16 +177,6 @@ export function ConfigSidebar() {
             checked={settings.dryRun}
             onChange={v => setField('dryRun', v)}
           />
-          <TaskRow
-            label="Keep highest version only"
-            checked={settings.keepHighestVersion}
-            onChange={v => setField('keepHighestVersion', v)}
-          />
-          <TaskRow
-            label="Preserve folder structure in packages"
-            checked={settings.preserveStructure}
-            onChange={v => setField('preserveStructure', v)}
-          />
           {/* Off by default and not sticky in spirit: it exists for the one run where a large
               cleanup is genuinely correct. See services/guardrail.ts. */}
           <TaskRow

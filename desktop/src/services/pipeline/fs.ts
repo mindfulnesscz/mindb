@@ -1,16 +1,17 @@
 /* Filesystem helpers shared by every stage.
  *
  * listDir swallows read errors on purpose: a permission-denied or vanished directory must not
- * abort a whole run. listDirLogged is the same read for places where the operator should see it.
+ * abort a whole run. listDirResult preserves the error for destructive walks that must distinguish
+ * an empty directory from an unreadable one.
  * 
- * isUnchanged is the copy/skip decision for every stage. It compares mtimes and treats a missing
- * destination as "changed", so a failed read always errs toward copying rather than skipping.
+ * isUnchanged is the copy/skip decision for every stage. It compares size as well as mtimes and
+ * treats a missing destination as "changed", so a failed read always errs toward copying.
  */
 
 import { readDir, stat, type DirEntry } from '@tauri-apps/plugin-fs';
+import { invoke } from '@tauri-apps/api/core';
 import { join } from '@tauri-apps/api/path';
 import type { AppSettings } from '../../store/settingsStore';
-import type { LogType } from '../../store/pipelineStore';
 import { shouldSkip, isPackageFolder, isPublishableFile } from './naming';
 import { isPreviewArtifact } from '@sotto/domain';
 
@@ -22,15 +23,17 @@ export async function listDir(path: string): Promise<DirEntry[]> {
   }
 }
 
-export async function listDirLogged(
-  path: string,
-  appendLog: (t: LogType, m: string) => void
-): Promise<DirEntry[]> {
+export interface DirectoryRead {
+  entries: DirEntry[];
+  error: unknown | null;
+}
+
+/** A directory read that preserves the difference between "empty" and "unreadable". */
+export async function listDirResult(path: string): Promise<DirectoryRead> {
   try {
-    return await readDir(path);
-  } catch (e) {
-    appendLog('error', `  ✕  Cannot read directory: ${path}\n     ${e}`);
-    return [];
+    return { entries: await readDir(path), error: null };
+  } catch (error) {
+    return { entries: [], error };
   }
 }
 
@@ -58,13 +61,18 @@ export async function collectFiles(dir: string, s: AppSettings, directOnly = fal
   return results;
 }
 
-/* ── Unchanged check (mtime — dest missing/older → copy, dest newer-or-same → skip) ── */
+/* ── Unchanged check (size + mtime fast gate, exact byte comparison before skipping) ── */
 
 export async function isUnchanged(src: string, dest: string): Promise<boolean> {
   try {
     const [ss, ds] = await Promise.all([stat(src), stat(dest)]);
-    if (ss.mtime && ds.mtime) return ds.mtime.getTime() >= ss.mtime.getTime();
-    return ss.size === ds.size; // mtime unavailable on this filesystem — fall back to size
+    if (ss.size !== ds.size) return false;
+    if (ss.mtime && ds.mtime && ds.mtime.getTime() < ss.mtime.getTime()) return false;
+    // A destination newer than a restored source is not proof of equality. Compare in Rust so a
+    // same-size content swap republishes without loading both large files into the webview.
+    return await invoke<boolean>('files_equal', {
+      sourcePath: src,
+      destinationPath: dest,
+    });
   } catch { return false; } // dest missing (or unreadable) — not unchanged, copy it
 }
-

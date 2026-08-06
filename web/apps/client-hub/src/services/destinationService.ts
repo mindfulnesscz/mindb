@@ -1,6 +1,6 @@
 /**
  * Portal-managed export destinations (structure in clients.cloud_destinations).
- * OAuth tokens stay on desktop only — never written from the web.
+ * OAuth tokens persist in the desktop workstation's OS keychain — never written from the web.
  */
 import { supabase } from '../lib/supabase'
 import { isStaff, type Role } from '@sotto/asset-library'
@@ -99,7 +99,7 @@ function normalizeDest(raw: Record<string, unknown>): PortalDestination {
     id: String(raw.id ?? crypto.randomUUID()),
     name: String(raw.name ?? ''),
     role: (raw.role === 'internal' ? 'internal' : 'client'),
-    minRole: (['public', 'member', 'editor', 'admin'].includes(String(raw.minRole))
+    minRole: (['public', 'member', 'editor', 'admin', 'super_admin'].includes(String(raw.minRole))
       ? (raw.minRole as Role)
       : 'member'),
     exportLayout: shape.exportLayout,

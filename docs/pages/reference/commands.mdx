@@ -41,10 +41,29 @@ symlinks and signature Tauri's resource copy destroys), and regenerates the DMG.
 
 | Command | Effect |
 |---|---|
-| `npm run deps:native` | Fetches the bundled render engines (PDFium, LibreOffice) for this platform. Run by `npm run setup`; idempotent. ~290MB download, ~800MB on disk. |
-| `npm run smoke:functions` | Asserts every Supabase edge function boots. Add `--fresh` to recreate the local runtime first — it caches a module on first import and ignores later edits, so a green run after an edit otherwise proves nothing. |
+| `npm run deps:native` | Fetches SHA-256-pinned PDFium and LibreOffice artifacts for this platform and verifies the extracted cache by digest. Run by `npm run setup`; idempotent. ~290MB download, ~800MB on disk. |
+| `npm run smoke:functions` | Asserts every Supabase edge function boots; a missing full stack or a 404 fails. Add `--fresh` to recreate the local runtime first — it caches a module on first import and ignores later edits, so a green run after an edit otherwise proves nothing. |
 
 See [Third-party engines](/reference/third-party-engines) and [Testing](/reference/testing).
+
+## R2 maintenance
+
+CDN garbage collection is operator-started; there is no scheduled cron or GitHub Actions job. A
+super admin can use web **Admin → CDN GC** or desktop **Settings → CDN garbage collection** for
+analyze/confirm/execute/verify. For shell operation,
+always create and review a dry-run report before executing:
+
+| Command | Effect |
+|---|---|
+| `node scripts/gc-cdn-objects.mjs --env staging` | Lists both staging R2 buckets and writes JSON/text reports; deletes nothing. |
+| `node scripts/gc-cdn-objects.mjs --env staging --execute` | Rebuilds the report, confirms the asset snapshot, prompts, then batch-deletes staging orphans. |
+| `node scripts/gc-cdn-objects.mjs --env production` | Creates the independent production report; deletes nothing. |
+| `node scripts/gc-cdn-objects.mjs --env production --execute` | Prompts with totals and a second production confirmation before deleting. |
+
+`--yes` only skips prompts for an explicitly launched `--execute` run. It does not schedule the GC
+or bypass the reference and blast-radius rails. See
+[CDN garbage collection](/operations/cdn-garbage-collection) for prerequisites, report review,
+flags, audit manifests, and recovery from an interrupted run.
 
 ## Versioning
 
