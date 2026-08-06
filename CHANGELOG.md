@@ -22,6 +22,28 @@ imported back.
 
 ### Fixed
 
+- **A failed sign-in signed you in as the previous user of that browser.** An OAuth denial, an expired
+  magic link, or a `?code=` whose exchange was refused produced no error and no signed-out state — the
+  portal rendered the session already in `localStorage`, with that user's tenant, assets, and role. At
+  the UI it is indistinguishable from a cross-tenant leak.
+
+  Three things composed into it. supabase-js keeps an existing session when a URL login fails, on
+  purpose ("a failed attempt shouldn't invalidate a valid session"), and reports the failure only as
+  the resolved value of an internal promise — no throw, no `onAuthStateChange`. Its PKCE detection
+  also requires a stored code-verifier *alongside* the `?code=`, so a return into a browser that lost
+  the verifier was not classified as a callback at all and fell through to "restore from storage". And
+  the two components that did parse `error=` out of the URL — `AdminSignIn`, `ClientPortalPage` — do
+  not render when a session was restored, so the one case that mattered was the one case they missed.
+
+  The return is now resolved in one place, `web/apps/client-hub/src/lib/authReturn.ts`, called by
+  `AuthProvider` before any persisted session is trusted: the portal client is built with
+  `detectSessionInUrl: false`, the `?code=` is exchanged explicitly, and any failure drops the local
+  token and surfaces as `AuthContext.authError`. The sign-in surfaces render that one value and no
+  longer read `window.location`. Provider sign-in also drops the existing local token before
+  redirecting. URL cleanup keeps the query and strips only an auth hash, so a filtered `redirectTo`
+  still survives an expired link. See [Authentication → Returning from a
+  redirect](docs/pages/auth.mdx).
+
 - **A tag could become its own parent, which made the client's taxonomy un-importable.** Exporting a
   client's taxonomy produced a file the portal's own importer refused — `node "format.document"
   cannot parent itself`, followed by `cycle detected` for every node beneath it. The export was
