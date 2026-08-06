@@ -86,8 +86,17 @@ reason the app appeared to hang for the whole render phase.
 - [Testing](docs/pages/reference/testing.mdx) documents `realFs` — and, as importantly, what it
   cannot prove: Tauri's capability scope and `path_policy` do not exist under vitest, so the
   end-to-end check is still a packaged build on a clean profile.
-- [Troubleshooting](docs/pages/operations/troubleshooting.mdx) gains entries for the two new
-  diagnosable failures and for reading the build badge first.
+- [Thumbnails](docs/pages/desktop/thumbnails.mdx) explains why the measured 8-way throughput was
+  never realised in the app before 3.2.2, and states the rule that keeps it: a blocking command must
+  be `#[tauri::command(async)]`, and `async fn` is not an equivalent fix.
+- [Troubleshooting](docs/pages/operations/troubleshooting.mdx) gains entries for the freeze, the two
+  newly diagnosable failures, and reading the build badge first — and **corrects advice that had
+  become actively wrong**: "install LibreOffice, Poppler, and WebP tools" predated in-process Rust
+  rendering with bundled engines, and a host install is now deliberately ignored, so following it
+  cost time and changed nothing. Replaced with the messages a person actually sees, plus the Linux
+  exception where LibreOffice genuinely is a package dependency.
+- [Versioning](docs/pages/reference/versioning.mdx) is the home for "which build am I looking at",
+  and [File layout](docs/pages/reference/file-layout.mdx) lists `realFs` and `lib/buildInfo`.
 
 
 ## [3.2.1] — 2026-08-06
