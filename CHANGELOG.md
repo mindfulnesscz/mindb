@@ -12,6 +12,25 @@ reason the app appeared to hang for the whole render phase.
 
 ### Fixed
 
+- **A tag could become its own parent, which made the client's taxonomy un-importable.** Exporting a
+  client's taxonomy produced a file the portal's own importer refused — `node "format.document"
+  cannot parent itself`, followed by `cycle detected` for every node beneath it. The export was
+  faithful; three `tags` rows carried `parent_id = id`.
+
+  The desktop sync resolves a parent group by **name** (`dimension::name`) in one pass and finds the
+  row to update by **key or shortcode** in another. Nothing connected the two, so both could land on
+  the same row — a keyed, shortcode-less group whose name is also the leaf's `parentGroup` — and the
+  sync patched that row to be its own parent.
+
+  Refused in three places now, because the symptom appeared so far from the cause: the sync leaves
+  the tag ungrouped and says so in the run log; the exporter emits `parent_key: null` and warns which
+  rows still need fixing, so a corrupt database can no longer produce an unusable file; and
+  `tags_parent_id_not_self` rejects it in the database, including via a manual edit. The migration
+  repairs existing rows before adding the constraint. Deeper cycles (`a → b → a`) remain a write-path
+  and validator concern — a `CHECK` sees only one row — and an export now breaks such a cycle rather
+  than shipping a file that cannot be re-imported. See
+  [Taxonomy](docs/pages/data-model/taxonomy.mdx).
+
 - **The window froze for the entire render phase, and the 8-way concurrency never happened.** Every
   blocking Tauri command was declared synchronous, and Tauri v2 runs a command without the `async`
   keyword *on the main thread* unless it is declared `#[tauri::command(async)]`. The main thread
