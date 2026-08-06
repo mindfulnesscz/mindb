@@ -28,7 +28,6 @@
 
 export type { SupabaseConfig } from './supabase/rest';
 export { requestR2Grant, type R2Grant } from './supabase/r2Grant';
-export { processRenameTasks } from './supabase/renameTasks';
 
 /* ── Shared-ready: pure mapping rules ─────────────────────────────────────── */
 export { parseAssetForSupabase } from './supabase/rowMapping';

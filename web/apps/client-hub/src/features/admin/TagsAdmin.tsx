@@ -64,6 +64,8 @@ export function TagsAdmin({
         </a>
         <span className="text-[11px] font-sans text-text-subtle">
           Parent groups are portal-only. Leaves (shortcodes) can also be added from desktop.
+          Shortcode edits apply to newly generated filenames after desktop sync; existing files are
+          not renamed automatically.
         </span>
       </div>
       {admin.importMsg && <p className="text-[11px] font-sans text-cosmos-black">{admin.importMsg}</p>}

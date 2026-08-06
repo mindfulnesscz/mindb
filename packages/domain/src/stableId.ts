@@ -20,6 +20,11 @@ export function appendStableId(name: string, hash: string): string {
   return `${stripStableId(name)} __${hash}`;
 }
 
+/** Permanent composite key for one manifest child within an asset package. */
+export function assetIdentityKey(stableId: string, childId: string): string {
+  return `${stableId}:${childId}`;
+}
+
 export function generateStableId(taken: Set<string>): string {
   let hash: string;
   do {

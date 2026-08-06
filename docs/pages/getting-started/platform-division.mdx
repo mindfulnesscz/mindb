@@ -23,6 +23,6 @@ Practical walkthrough: [Tags and export destinations](/getting-started/tags-and-
 - Desktop reads portal/branding/destination structure; structure edits happen on the web.
 - Desktop may push **leaf tag** upserts/deletes and must **never** push OAuth tokens into `cloud_destinations`.
 - Object keys in R2 are prefixed `{client_id}/` within the environment bucket.
-- Rename tasks (future) queue filesystem updates when tags change on web; until then, shortcode renames do not rewrite existing filenames.
+- The legacy `rename_tasks` table has no active producer or consumer. Shortcode edits do not rewrite existing filenames.
 
 See [Architecture](/getting-started/architecture), [Team staging setup](/getting-started/team-dev-setup), and [Auth & secrets roadmap](/desktop/authentication-plan).

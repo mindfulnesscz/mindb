@@ -1,3 +1,4 @@
+use md5::{Digest, Md5};
 use std::io::{BufReader, Read};
 
 mod r2;
@@ -60,6 +61,44 @@ fn files_equal(
         if left_len == 0 {
             return Ok(true);
         }
+    }
+}
+
+/// Google Drive exposes an MD5 checksum for binary files. Hash locally in Rust so a same-size
+/// content change is not mistaken for an unchanged upload, without loading the file into the
+/// webview or duplicating the asset identity rules.
+fn reader_md5(mut reader: impl Read) -> Result<String, String> {
+    const CHUNK: usize = 64 * 1024;
+    let mut hasher = Md5::new();
+    let mut buffer = [0_u8; CHUNK];
+    loop {
+        let read = reader.read(&mut buffer).map_err(|e| e.to_string())?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+#[tauri::command]
+fn file_md5(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let path = path_policy::require_allowed_file(&app, &path, "checksum source")?;
+    let file = std::fs::File::open(&path)
+        .map_err(|e| format!("open {}: {e}", path.display()))?;
+    reader_md5(BufReader::new(file))
+}
+
+#[cfg(test)]
+mod checksum_tests {
+    use super::reader_md5;
+
+    #[test]
+    fn computes_drive_compatible_md5() {
+        assert_eq!(
+            reader_md5("Sotto".as_bytes()).unwrap(),
+            "c39024601df40316b87597c62fe31275",
+        );
     }
 }
 
@@ -276,6 +315,7 @@ pub fn run() {
            this line. */
         .invoke_handler(tauri::generate_handler![
             files_equal,
+            file_md5,
             generate_thumbnail,
             generate_document_previews,
             wait_for_oauth_redirect,

@@ -91,8 +91,9 @@ runPipeline      one scan, then stages in fixed order:
 exportAssets…    identify → plan → write parents, then children → disconnect
 ```
 
-Tags are administered on the web (the database is the source of truth); the desktop may process
-`rename_tasks` afterwards. Two guardrails sit in this flow:
+Tags are administered on the web (the database is the source of truth). Display-label edits update
+portal metadata immediately; shortcode edits affect future generated filenames after desktop sync
+and do not rename existing files. Two guardrails sit in this flow:
 
 - **Blast radius.** A run must not destroy more than it wrote. The client-wide disconnect and the CDN
   delete both consult `assessDestruction`, which refuses past `max(10, rows written)` and says why.

@@ -65,7 +65,31 @@ describe('tag-sync deletion safety', () => {
 
     const deletes = sbFetch.mock.calls.filter(call => call[1]?.method === 'DELETE');
     expect(deletes).toHaveLength(1);
+    expect(sbFetch.mock.calls.some(call => String(call[0]).includes('rename_tasks'))).toBe(false);
     expect(result).toMatchObject({ deleted: 1, deletionRefused: false });
+  });
+
+  it('updates a shortcode without creating a filesystem rename task', async () => {
+    fetchAllForClient.mockResolvedValue([{
+      ...row('leaf'),
+      key: 'entity.leaf',
+      shortcode: 'OLD',
+      name: 'Leaf',
+    }]);
+    const vocab: VocabularyData = {
+      ...emptyVocab,
+      tags: [{
+        shortcode: 'NEW', slot: 'entity', parentGroup: null,
+        label: 'Leaf', key: 'entity.leaf', icon: '',
+      }],
+    };
+
+    const result = await syncTagsFromVocabulary(
+      vocab, 'client-1', config, () => {}, { sourceFresh: true },
+    );
+
+    expect(result.updated).toBe(1);
+    expect(sbFetch.mock.calls.some(call => String(call[0]).includes('rename_tasks'))).toBe(false);
   });
 
   it('previews inserts and deletes in dry-run without issuing any mutation', async () => {

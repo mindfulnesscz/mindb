@@ -4,5 +4,8 @@ Cloud export activates only when its pipeline toggle is on and selected non-loca
 
 Destinations run sequentially; within one destination files run with high concurrency. Failure of one file increments errors and does not stop its siblings. There is no provider rollback and no remote deletion/reconciliation when a source disappears.
 
-When `generateLink` is off, upload still happens but no link can be stored. When on, links are collected by source stem. Only `client`-role destinations contribute entries; same destination name replaces its previous entry for that asset. These entries later populate Supabase `download_urls`, while R2 populates singular `download_url`.
-
+When `generateLink` is off, upload still happens but no link can be stored. When on, links are keyed
+by the permanent `(stable_id, child_id)` pair; filenames and stems are never lookup keys. Only
+`client`-role destinations contribute entries, and the same destination replaces its previous entry
+for that asset. These entries later populate Supabase `download_urls`, while R2 populates singular
+`download_url`.

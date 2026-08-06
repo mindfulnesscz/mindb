@@ -12,11 +12,11 @@ Steps 1–5 are numbered checkboxes in the app's **Tasks** panel and can each be
 
 **Dry run is end-to-end.** It may scan local files and read portal/provider state to build a plan,
 but it does not render or copy files, update identity manifests or caches, upload/delete CDN or
-cloud objects, mutate Supabase rows/tags/version history/rename tasks, write DAM output, or start
+cloud objects, mutate Supabase rows/tags/version history, write DAM output, or start
 Stream uploads. Intended actions are written to the activity log with `[DRY]`.
 
 **Stop is cooperative.** An in-flight bounded batch is allowed to finish; the run halts at the next
-stage or batch checkpoint. Post-run Supabase, CDN reconcile, tag, version-history, rename-task and
+stage or batch checkpoint. Post-run Supabase, CDN reconcile, tag, version-history and
 Stream work use the same stop signal, so the run is not marked complete before that tail finishes.
 
 | Step | What it does | |
@@ -28,7 +28,7 @@ Stream work use the same stop signal, so the run is not marked complete before t
 | 3 — Export to destinations | Mirrors the `OUT` tree into a local folder (e.g. a SharePoint-synced directory), flags removed files. | [→](#3--export-to-destinations) |
 | 4 — Cloud export | Flat-uploads files to Dropbox / OneDrive / Google Drive via OAuth, generates sharing links. | [→](#4--cloud-export) |
 | 5 — Publish to DAM | Generates the Obsidian vault's markdown notes. | [→](#5--publish-to-dam) |
-| Supabase sync | Upserts `assets` rows, marks stale ones; may process `rename_tasks`. Tags are web-admin SoT. | [→](#supabase-sync) |
+| Supabase sync | Upserts `assets` rows and marks stale ones. Tags are web-admin SoT. | [→](#supabase-sync) |
 | Version history sync | Syncs the `version_history` table from files found under `versions/`. | [→](#version-history-sync) |
 
 ---
@@ -101,7 +101,10 @@ For each cloud destination with a valid OAuth token:
 - **`flat`:** dumps files into `remotePath`.
 - **`includePackages`:** refreshes source packages from OUT, then uploads package files under their nested relative paths.
 
-Sharing links (when `generateLink`) are later written to Supabase for the portal.
+Sharing links (when `generateLink`) are keyed by `(stable_id, child_id)` and later written to
+Supabase for the portal. Equal filenames in separate packages cannot overwrite each other's links.
+Google Drive folder creation is coalesced within a run, and an existing same-name file is skipped
+only when both its size and Drive MD5 checksum match the local file.
 
 ### 5 — Publish to DAM
 
@@ -123,7 +126,8 @@ The portal remains authoritative for tag labels and groups. Local unpublished le
 upserted, but pass-3 tag deletion is refused when the local vocabulary is dirty/stale. Deletion is
 allowed only from an explicitly fresh portal-synchronized vocabulary, and then it passes the same
 write-to-delete blast-radius check as row disconnects. This prevents a cached vocabulary from
-deleting tags that were added in the portal. Pending `rename_tasks` may also be processed here.
+deleting tags that were added in the portal. Shortcode edits affect names generated after the
+desktop refreshes its vocabulary; existing filesystem names are not rewritten automatically.
 
 ### Version history sync
 

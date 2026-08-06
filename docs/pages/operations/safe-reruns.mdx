@@ -8,7 +8,7 @@
 | R2 thumbnails | May shortcut from DB inventory before hash check |
 | Dropbox | Remote path existence skip; may retain stale content |
 | OneDrive | Same path overwritten |
-| Google Drive | Skip if same-name + same size; else update in place |
+| Google Drive | Skip if same-name + matching size and MD5; else update in place |
 | Supabase | Reconnect by `(stable_id, child_id)`; missing rows are disconnected, never deleted |
 
 There is no global exactly-once guarantee. “Safe to rerun” means each phase’s consequence is understood, not that every provider is idempotent. For a changed local thumbnail, delete the sidecar. For stale Dropbox, remove its remote path. For Drive, clean duplicate IDs/names. Never run full R2 reconciliation before folder identity has resolved — without it every object looks stale.

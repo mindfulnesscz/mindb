@@ -54,7 +54,7 @@ export interface RunContext {
   // lets one package's URL land on another's row (F-5). See cdnStemKey in supabaseService.
   cdnUrls?:          Map<string, string>;                  // absPath → public CDN URL of the thumbnail
   originalUrls?:     Map<string, string>;                  // absPath → public CDN URL of the original file
-  cloudUrls?:        Map<string, CloudUrlEntry[]>;         // destId:stem (stem fallback) → cloud sharing URLs
+  cloudUrls?:        Map<string, CloudUrlEntry[]>;         // stable_id:child_id → cloud sharing URLs
   cloudDestinations?: CloudDestination[];                  // active cloud destinations to export to
   /** Local publish shape from the checked local destination. */
   localExportLayout?: DestExportLayout;

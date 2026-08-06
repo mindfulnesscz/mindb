@@ -75,16 +75,16 @@ export async function runPipeline(ctx: RunContext): Promise<RunStats> {
       ctx.collectedAssets?.push(...scanned);
     }
 
-    // Resolve folder identity before any CDN step runs — those steps key objects by
-    // stable_id/child_id, not by the current filename, so a rename or a retitle never
-    // orphans an uploaded object. Gated the same as the CDN steps themselves, so the
-    // cost is only paid when its result is actually used.
-    if (!settings.dryRun && !stopping('CDN identity resolution')
-        && ctx.r2 && (settings.doThumbnails || settings.doCdnOriginals)) {
+    // Resolve folder identity before anything stores an asset URL. CDN objects and cloud sharing
+    // links both use stable_id/child_id, never the current filename, so equal stems in different
+    // packages cannot overwrite each other.
+    const needsAssetIdentity = (ctx.r2 && (settings.doThumbnails || settings.doCdnOriginals))
+      || settings.doFlatExport;
+    if (!settings.dryRun && !stopping('asset identity resolution') && needsAssetIdentity) {
       try {
         ctx.cdnIdentity = await resolveCdnIdentity(ctx.collectedAssets ?? [], settings.outFolder || 'OUT');
       } catch (e) {
-        appendLog('error', `  ✕  CDN identity resolution failed — CDN steps will skip assets they can't key: ${e}`);
+        appendLog('error', `  ✕  Asset identity resolution failed — uploads cannot attach URLs to affected assets: ${e}`);
       }
     }
 

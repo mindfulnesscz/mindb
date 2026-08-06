@@ -15,7 +15,7 @@
 - **Package** — source grouping folder used by collection and, after migration, stable identity.
 - **Parent group** — taxonomy node without `shortcode`; portal-only grouping under a dimension.
 - **Platform division** — web vs desktop field ownership; one admin surface per field group.
-- **Rename task** — DB queue row telling the desktop to apply a filesystem rename after a web tag change (planned).
+- **Rename task** — legacy reserved DB row; no active workflow enqueues or processes these rows.
 - **Reveal bridge** — desktop localhost `:7624` service that opens a package folder from a portal `stableId`.
 - **Shortcode** — tag/token used in filenames; also a column on `tags`.
 - **Sidecar thumbnail** — local `-thumb.webp` beside its source.

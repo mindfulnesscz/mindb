@@ -19,7 +19,8 @@
  */
 
 import {
-  effectiveLevel, filterHighestVersions, storageTarget, stripStableId, type VocabularyData,
+  assetIdentityKey, effectiveLevel, filterHighestVersions, storageTarget, stripStableId,
+  type VocabularyData,
 } from '@sotto/domain';
 import type { CloudUrlEntry } from '../pipeline/types';
 import { parseAssetForSupabase, unionStrings, intersectStrings } from './rowMapping';
@@ -112,8 +113,7 @@ export async function planExport(input: PlanInput): Promise<ExportPlan> {
          already rendering from. */
       preview_page_count: pageCounts?.get(absPath)?.rendered ?? null,
       preview_page_total: pageCounts?.get(absPath)?.total ?? null,
-      // cloudUrls carries its own composite destId:stem key — see runCloudExport.
-      download_urls: cloudUrls?.get(stem) ?? [],
+      download_urls: cloudUrls?.get(assetIdentityKey(stableId, childId)) ?? [],
       ...extra,
     };
   }
@@ -269,7 +269,9 @@ export async function planExport(input: PlanInput): Promise<ExportPlan> {
       const firstChildOriginalKey  = firstChild && firstChildIdentity
         ? originalObjectKey(firstChild.absPath, stableId, firstChildIdentity.childId)
         : null;
-      const firstChildCloudUrls    = firstChild ? (cloudUrls?.get(firstChild.stem) ?? []) : [];
+      const firstChildCloudUrls    = firstChildIdentity
+        ? (cloudUrls?.get(assetIdentityKey(stableId, firstChildIdentity.childId)) ?? [])
+        : [];
       // Nested gallery paths (Galleries/Selected) — parse the leaf folder for tags/name.
       const leafFolder = group.name.includes('/') ? group.name.slice(group.name.lastIndexOf('/') + 1) : group.name;
       const pp         = parseAssetForSupabase(leafFolder, vocab);
@@ -327,7 +329,7 @@ export async function planExport(input: PlanInput): Promise<ExportPlan> {
             thumbnail_url: cdnUrls?.get(absPath) ?? null,
             download_url: originalUrls?.get(absPath) ?? null,
             download_key: originalObjectKey(absPath, stableId, resolved.childId),
-            download_urls: cloudUrls?.get(fileStem) ?? [],
+            download_urls: cloudUrls?.get(assetIdentityKey(stableId, resolved.childId)) ?? [],
           },
         });
       }
