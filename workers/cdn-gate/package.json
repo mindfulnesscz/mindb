@@ -1,6 +1,6 @@
 {
-  "name": "@dc-hub/cdn-gate",
-  "version": "3.2.0",
+  "name": "@sotto/cdn-gate",
+  "version": "3.2.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -18,6 +18,6 @@
     "wrangler": "^4.117.0"
   },
   "dependencies": {
-    "@dc-hub/domain": "*"
+    "@sotto/domain": "*"
   }
 }

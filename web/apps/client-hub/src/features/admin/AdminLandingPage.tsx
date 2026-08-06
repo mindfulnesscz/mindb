@@ -5,8 +5,8 @@
 
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Client } from '@dc-hub/asset-library'
-import { canManageClients, canCreateClients } from '@dc-hub/asset-library'
+import { Client } from '@sotto/asset-library'
+import { canManageClients, canCreateClients } from '@sotto/asset-library'
 import { useAuth } from '../../context/AuthContext'
 import { useClients } from '../../hooks/useClients'
 import { asRole } from '../../services/userService'
@@ -17,12 +17,13 @@ import { ClientDrawer } from './ClientDrawer'
 import { UsersView } from './UsersView'
 import { DCMark } from './DCMark'
 import { ErrorsView } from './errors/ErrorsView'
+import { CdnGarbageCollectionView } from './CdnGarbageCollectionView'
 
 function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
   const { profile, signOut } = useAuth()
   const navigate = useNavigate()
   const { clients, loading, error, usingMock, reload } = useClients()
-  const [tab, setTab] = useState<'clients' | 'users' | 'errors'>('clients')
+  const [tab, setTab] = useState<'clients' | 'users' | 'errors' | 'cdn-gc'>('clients')
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [editingClient, setEditingClient] = useState<Client | null>(null)
   const role = asRole(profile?.role ?? 'public')
@@ -46,17 +47,20 @@ function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
       <header className="flex items-center gap-4 px-6 py-4 border-b border-border bg-surface shrink-0">
         <div className="flex items-center gap-2">
           <DCMark />
-          <span className="font-sans text-sm font-bold tracking-[0.14em] uppercase text-cosmos-black">DC HUB</span>
+          <span className="font-sans text-sm font-bold tracking-[0.14em] uppercase text-cosmos-black">SOTTO</span>
         </div>
         <div className="flex gap-1 ml-4">
           <button className={tabCls('clients')} onClick={() => setTab('clients')}>Clients</button>
           {isAdmin && (
             <button className={tabCls('users')} onClick={() => setTab('users')}>Users</button>
           )}
-          {/* Maintainer surface: errors quote client asset names and paths, so it is super-admin only
-              here AND in RLS. The tab is hidden rather than disabled — an admin has no use for it. */}
+          {/* Maintainer surfaces can expose cross-client paths or mutate global storage, so they are
+              super-admin only here and at their server-side authorization boundaries. */}
           {role === 'super_admin' && (
-            <button className={tabCls('errors')} onClick={() => setTab('errors')}>Errors</button>
+            <>
+              <button className={tabCls('errors')} onClick={() => setTab('errors')}>Diagnostics</button>
+              <button className={tabCls('cdn-gc')} onClick={() => setTab('cdn-gc')}>CDN GC</button>
+            </>
           )}
         </div>
         <div className="flex-1" />
@@ -132,6 +136,10 @@ function AdminDashboard({ isAdmin }: { isAdmin: boolean }) {
           </div>
         )}
 
+        {tab === 'cdn-gc' && (
+          <CdnGarbageCollectionView isSuperAdmin={role === 'super_admin'} />
+        )}
+
         {tab === 'users' && isAdmin && (
           <>
             <div className="flex items-center justify-between mb-8">
@@ -176,11 +184,25 @@ function EditorRouter() {
 
 // ── Main page ─────────────────────────────────────────────────
 
+function AdminConfigurationRequired() {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center bg-bg px-4 text-center">
+      <DCMark size="lg" />
+      <h1 className="font-serif text-2xl font-medium text-cosmos-black mt-6 mb-2">
+        Admin unavailable
+      </h1>
+      <p className="font-sans text-sm text-text-muted max-w-sm">
+        This deployment is not configured for Supabase sign-in. Contact the site administrator.
+      </p>
+    </div>
+  )
+}
+
 export default function AdminLandingPage() {
   const configured = isConfigured()
   const { session, profile, loading, signOut } = useAuth()
 
-  if (!configured) return <AdminDashboard isAdmin />
+  if (!configured) return <AdminConfigurationRequired />
 
   if (loading) {
     return (
@@ -201,7 +223,7 @@ export default function AdminLandingPage() {
         <DCMark size="lg" />
         <h1 className="font-serif text-2xl font-medium text-cosmos-black mt-6 mb-2">Staff access only</h1>
         <p className="font-sans text-sm text-text-muted mb-1 max-w-sm">
-          You're signed in{session?.user?.email ? <> as <span className="font-mono text-cosmos-black">{session.user.email}</span></> : ''}, but this account doesn't have staff access to the DC Hub admin area.
+          You're signed in{session?.user?.email ? <> as <span className="font-mono text-cosmos-black">{session.user.email}</span></> : ''}, but this account doesn't have staff access to the Sotto admin area.
         </p>
         <p className="font-sans text-sm text-text-muted mb-6 max-w-sm">
           If you're a client, open your portal link (<span className="font-mono">hub.disruptcollective.com/your-brand</span>) to reach your workspace. Otherwise ask an admin to grant you access.
@@ -224,4 +246,3 @@ export default function AdminLandingPage() {
     </div>
   )
 }
-

@@ -10,7 +10,7 @@
  * everything else is the user's.
  */
 
-import type { ParsedFilename } from '@dc-hub/domain';
+import type { ParsedFilename } from '@sotto/domain';
 import type { CloudUrlEntry } from '../pipeline/types';
 import { toFileUrl } from './paths';
 

@@ -1,0 +1,7 @@
+You are working in Sotto, a monorepo at /Users/petrmucha/Sites/localhost/dc-hub (v3.2.0): a Tauri 2 + React desktop app (desktop/), a React/Vite Supabase portal (web/), shared TS packages (packages/: domain, asset-library, auth, database), Supabase (supabase/), and Cloudflare workers (workers/).
+
+The one non-negotiable — asset identity. An asset's identity is its package folder Name __<8hex>/ plus a .dchub.json manifest mapping filenames → stable child_ids. The pair (stable_id, child_id) is the permanent key for every DB row, CDN object, rating and comment. Identity is minted in exactly ONE place: desktop/src/features/vocabulary/createAssetFolder.ts (read its header comment). Never mint a stable_id/child_id anywhere else, never re-implement the minting, never key anything on a filename. Reuse @sotto/domain (stableId.ts) and desktop/src/services/supabase/manifest.ts. Getting this wrong reintroduces the duplicate-identity bug that v3.0.0 removed.
+
+Package contract for @sotto/domain: platform-free by contract — no Tauri, no Supabase, no React, no filesystem, no network, no window. Pure functions over strings/plain objects. If you need fs/path work, do it in the caller and pass clean data in.
+
+Before you finish, the code must pass (from repo root): npm run lint (eslint, max-warnings 0), npm run typecheck, and the relevant tests — npm run test:packages for packages/*, npm run test:desktop for desktop/src. Match existing file style (no new deps unless justified). Work on a feature branch. Do not run any db:reset/destructive DB command.

@@ -1,15 +1,14 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
-import type { Role, Client } from '@dc-hub/asset-library'
-import { MOCK_CLIENTS } from '@dc-hub/asset-library'
+import type { Role, Client } from '@sotto/asset-library'
 import { supabase, isConfigured } from '../lib/supabase'
 import { toClient } from '../services/clientService'
-import type { ClientRow } from '@dc-hub/database'
+import type { ClientRow } from '@sotto/database'
 import { asRole } from '../services/userService'
 import { useAuth } from './AuthContext'
 
 interface RoleContextValue {
   role: Role
-  setRole: (role: Role) => void   // no-op in auth mode
+  setRole: (role: Role) => void   // compatibility no-op; roles come only from authenticated profiles
   activeClient: Client | null
   setActiveClient: (client: Client | null) => void
   user: { name: string; initials: string }
@@ -17,29 +16,19 @@ interface RoleContextValue {
 
 const RoleContext = createContext<RoleContextValue | null>(null)
 
-const DEMO_USERS: Record<Role, { name: string; initials: string }> = {
-  public:      { name: 'Guest',       initials: 'G'  },
-  member:      { name: 'Jana K.',     initials: 'JK' },
-  editor:      { name: 'Petr Mucha',  initials: 'PM' },
-  admin:       { name: 'Petr Mucha',  initials: 'PM' },
-  super_admin: { name: 'Petr Mucha',  initials: 'PM' },
-}
+const PUBLIC_USER = { name: 'Guest', initials: 'G' }
 
 export function RoleProvider({ children }: { children: ReactNode }) {
   const configured = isConfigured()
   const { profile } = useAuth()
 
-  const [demoRole,     setDemoRole]     = useState<Role>('editor')
-  const [activeClient, setActiveClient] = useState<Client | null>(
-    configured ? null : MOCK_CLIENTS[0],
-  )
+  const [activeClient, setActiveClient] = useState<Client | null>(null)
 
-  const role: Role = configured
-    ? asRole(profile?.role ?? 'public')
-    : demoRole
+  // Missing backend configuration is an unauthenticated state, never a demo staff session.
+  const role: Role = configured && profile ? asRole(profile.role) : 'public'
   const user = configured && profile
     ? { name: profile.name, initials: profile.initials }
-    : DEMO_USERS[demoRole]
+    : PUBLIC_USER
 
   /* `activeClient` decides which client's assets the gallery lists, and it had TWO writers racing
      to set it: this effect, from the signed-in user's own profile, and ClientPortalPage, from the
@@ -82,7 +71,7 @@ export function RoleProvider({ children }: { children: ReactNode }) {
   return (
     <RoleContext.Provider value={{
       role,
-      setRole:       configured ? () => {} : setDemoRole,
+      setRole:       () => {},
       activeClient,
       // Every caller goes through chooseClient, so any deliberate selection — the portal route,
       // the staff client switcher — marks itself authoritative and the profile default stands down.

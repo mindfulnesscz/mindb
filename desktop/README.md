@@ -1,6 +1,6 @@
-# DC Hub Desktop
+# Sotto Desktop
 
-Tauri 2 desktop app for the DC Hub asset pipeline (see the [monorepo README](../README.md) for the product overview). Processes, versions, distributes, and syncs marketing assets across cloud storage and a Supabase DAM backend.
+Tauri 2 desktop app for the Sotto asset pipeline (see the [monorepo README](../README.md) for the product overview). Processes, versions, distributes, and syncs marketing assets across cloud storage and a Supabase DAM backend.
 
 Version history lives in the root [CHANGELOG.md](../CHANGELOG.md); the version workflow in [VERSIONING.md](../VERSIONING.md).
 
@@ -20,11 +20,11 @@ Version history lives in the root [CHANGELOG.md](../CHANGELOG.md); the version w
 ## Architecture
 
 ```text
-desktop/                      ← this directory (Tauri 2 desktop app), part of the mindb monorepo
+desktop/                      ← this directory (Tauri 2 desktop app), part of the Sotto monorepo
   src/                       ← React + TypeScript frontend
   src-tauri/                 ← Rust backend (Tauri commands)
   NAMING CONVENTION.md       ← canonical naming reference (company-wide)
-  settings.json              ← local dev overrides (not committed)
+  settings.json              ← machine-local app-data file (not committed)
 
 ../web/                       ← client portal monorepo workspace (same repo)
   apps/client-hub/           ← client-facing DAM portal (reads Supabase via anon key)
@@ -53,7 +53,8 @@ Tag dimensions:
 - **Angle** — purpose or content type (`SAL`, `TEC`, `ABM`, `EVT`, …)
 - **Format** — deliverable type (`SlD`, `PDF`, `Vid`, `Bnn`, …)
 
-Tags live in `src/assets/vocabulary.json` — the desktop app and web portal both read from this via Supabase.
+Tags are administered in the web portal and synchronized through Supabase. The desktop keeps a
+machine-local vocabulary cache for naming and pipeline work.
 
 ---
 
@@ -61,20 +62,24 @@ Tags live in `src/assets/vocabulary.json` — the desktop app and web portal bot
 
 Single Supabase project, multi-tenant via Row Level Security. All clients share the same tables; RLS policies enforce isolation by `client_id`.
 
-| Key | Where used |
+| Credential | Where used |
 | --- | --- |
-| `supabaseServiceKey` (service_role) | Desktop pipeline — bypasses RLS for writes |
-| `supabaseAnonKey` | Web portal — respects RLS for reads |
+| Project URL + anon/publishable key | Desktop and portal bootstrap |
+| Supabase user session | Desktop and portal reads/writes under RLS |
+| `service_role` | Trusted Edge Functions only; never desktop or browser config |
 
-The service_role key is **never** used from a browser context. The Tauri app proxies all Supabase calls through the Rust `supabase_request` command (native `reqwest`) to avoid Supabase's browser-key restriction.
+The desktop proxies Supabase calls through the Rust `supabase_request` command (native `reqwest`),
+but authorization still comes from the signed-in user's JWT and database RLS.
 
-Schema: `dc-hub-migration/` (separate directory, not tracked by this repo).
+Schema and replayable migrations live in [`../supabase`](../supabase).
 
 ---
 
 ## Cloud storage (Cloudflare R2)
 
-Each client has its own R2 bucket config. The pipeline uploads assets and returns public CDN URLs, which are written into the Supabase `assets.download_urls` column.
+The environment has public and gated R2 tiers. The pipeline requests short-lived, client-scoped
+credentials from `r2-grant`, uploads identity-keyed objects to the appropriate tier, and writes the
+resulting URLs into Supabase asset rows. Permanent parent credentials never reach desktop config.
 
 R2 operations are handled by native Rust commands (`upload_to_r2`, `list_r2_keys`, etc.) in `src-tauri/src/r2.rs`.
 
@@ -85,7 +90,8 @@ R2 operations are handled by native Rust commands (`upload_to_r2`, `list_r2_keys
 Clients are database-first (list from Supabase after sign-in). Each workstation stores machine-local fields:
 
 - Source, target, and vault folder paths
-- OAuth tokens / Google client secret for cloud destinations (structure comes from the portal)
+- Cloud destination preferences (structure comes from the portal); OAuth tokens and the Google
+  client secret persist in the OS keychain, not `client-local.json`
 - Last active client
 
 Step-by-step destination setup: [CLOUD_DESTINATIONS.md](CLOUD_DESTINATIONS.md). Product workflow (tags + destinations ownership): [docs/pages/getting-started/tags-and-destinations.mdx](../docs/pages/getting-started/tags-and-destinations.mdx).
@@ -94,7 +100,7 @@ Step-by-step destination setup: [CLOUD_DESTINATIONS.md](CLOUD_DESTINATIONS.md). 
 
 ## Development
 
-**Prerequisites:** Node.js 18+, Rust (stable), `cargo install tauri-cli`, and `npm run deps:native`
+**Prerequisites:** Node.js 24, Rust (stable), `cargo install tauri-cli`, and `npm run deps:native`
 from the repo root to fetch the bundled render engines (PDFium + LibreOffice, ~290MB download). No
 separately installed thumbnail tools are required.
 

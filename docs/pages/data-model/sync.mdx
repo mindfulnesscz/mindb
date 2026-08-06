@@ -2,6 +2,9 @@
 
 After the local pipeline returns, the UI syncs metadata as the **signed-in staff user** (JWT under RLS). Clients are DB-first — the desktop does not create client rows. Filename parsing derives shortcodes and taxonomy arrays for asset upserts; CDN and provider URL maps from the run are attached to records.
 
-Tags are **not** pushed from vocabulary JSON as source of truth — administer them on the web (TagsAdmin). Pending `rename_tasks` from web tag edits may be processed on the next run.
+Tags are **not** pushed from vocabulary JSON as source of truth — administer them on the web
+(TagsAdmin). Display-label edits update portal asset metadata immediately. Shortcode edits affect
+future desktop-generated filenames after vocabulary sync; existing files are not rewritten, and the
+legacy `rename_tasks` table has no active producer or consumer.
 
 Continue with [Taxonomy](/data-model/taxonomy), [Stable identity](/desktop/identity), and [Platform division](/getting-started/platform-division).

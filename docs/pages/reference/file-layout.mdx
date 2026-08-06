@@ -10,7 +10,7 @@ Everything both applications must agree about lives here, at the repository root
 | Path | Purpose |
 |---|---|
 | `packages/domain` | Platform-free product rules: identity, filename grammar, versions, vocabulary, grouping. No React, Tauri, Supabase or Node imports — CI-enforced |
-| `packages/database` | Generated `@dc-hub/database` types (`npm run db:types`) and the one `clients` row projection |
+| `packages/database` | Generated `@sotto/database` types (`npm run db:types`) and the one `clients` row projection |
 | `packages/auth` | Shared Supabase auth client and the email pre-flight |
 | `packages/asset-library` | Shared `Client` type, permissions, filters, `ErrorBoundary` |
 
@@ -55,8 +55,9 @@ Everything both applications must agree about lives here, at the repository root
 
 ## Not in git
 
-Machine-local desktop files under the app data directory: `environments.json`, `client-local.json`,
-OAuth tokens, and `errors.log`.
+Machine-local desktop files under the app data directory: `environments.json`, secret-free
+`client-local.json`, and `errors.log`. Provider OAuth tokens and the Google client secret persist in
+the operating system's credential store rather than as files in this directory.
 
 Generated directories (`node_modules`, `dist`, `.next`, `coverage`, `test-results`,
 `desktop/src-tauri/target`) are ignored and should not be reviewed as source.

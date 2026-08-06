@@ -8,7 +8,7 @@
 
 import type { AppSettings } from '../store/settingsStore';
 import type { LogType, RunStats } from '../store/pipelineStore';
-import { type VocabularyData, type VocabTag } from '@dc-hub/domain';
+import { type VocabularyData, type VocabTag } from '@sotto/domain';
 
 export const SRC = '/src';
 export const DST = '/dst';
@@ -18,7 +18,6 @@ export function makeSettings(over: Partial<AppSettings> = {}): AppSettings {
   return {
     sourceFolder: SRC,
     targetFolder: DST,
-    onedriveFlatFolder: '',
     vaultFolder: '',
 
     doThumbnails: false,
@@ -29,8 +28,6 @@ export function makeSettings(over: Partial<AppSettings> = {}): AppSettings {
     doCdnOriginals: false,
 
     dryRun: false,
-    keepHighestVersion: true,
-    preserveStructure: false,
     // Off, so the tests exercise the guardrail rather than bypassing it.
     allowLargeDeletions: false,
 
@@ -99,6 +96,9 @@ export function makeCtx(settings: AppSettings, over: Record<string, unknown> = {
     collectedAssets: [] as string[],
     cdnUrls: new Map<string, string>(),
     originalUrls: new Map<string, string>(),
+    // Successful pre-run DB read with no existing references. Undefined has a different meaning:
+    // reference state is unknown, so destructive per-asset CDN pruning must be skipped.
+    cdnKeyReferences: new Map<string, Set<string>>(),
     cloudUrls: new Map<string, unknown>(),
     ...over,
   };
@@ -119,11 +119,11 @@ export const R2 = {
   accessKeyId: 'ak',
   secretKey: 'sk',
   sessionToken: 'st',
-  bucket: 'dchub-test',
+  bucket: 'sotto-test',
   publicDomain: 'https://cdn.example.com',
   keyPrefix: 'client-abc/',
   clientId: 'client-abc',
-  gatedBucket: 'dchub-test-gated',
+  gatedBucket: 'sotto-test-gated',
   gatedDomain: 'https://files.example.com',
   gatedAccessKeyId: 'gated-ak',
   gatedSecretKey: 'gated-sk',

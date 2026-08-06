@@ -2,8 +2,8 @@
  *
  * That split is the whole design of this screen. Name, remote path, role and package-export shape come
  * from the portal (Sync pulls them); the local folder path and the OAuth tokens never leave this
- * machine. A write here therefore persists LOCALLY only — to the clients file and, when an environment
- * is active, to that environment's own copy.
+ * machine. A write here therefore persists LOCALLY only — preferences to the local config and
+ * credentials to the OS keychain.
  *
  *   ./panels/DestList              the list
  *   ./panels/DestCredentialsForm   one destination's credentials
@@ -12,8 +12,7 @@
 
 import { useState } from 'react';
 import { useClientStore } from '../../store/clientStore';
-import { useEnvironmentStore } from '../../store/environmentStore';
-import { saveClients, saveLocalClient, pullCloudDestinations } from '../../services/clientService';
+import { saveClients, pullCloudDestinations } from '../../services/clientService';
 import { reportError } from '../../services/reportError';
 import type { CloudDestination } from '../../domain/client';
 import { DestList } from './panels/DestList';
@@ -22,7 +21,6 @@ import css from './CloudDestinations.module.css';
 
 export function CloudDestinations() {
   const { clients, activeClientId, updateClient } = useClientStore();
-  const activeEnvId = useEnvironmentStore(s => s.activeEnvId);
   const activeClient = clients.find(c => c.id === activeClientId) ?? null;
   const [view, setView] = useState<'list' | 'form'>('list');
   const [editing, setEditing] = useState<CloudDestination | null>(null);
@@ -42,11 +40,6 @@ export function CloudDestinations() {
       ? { ...c, cloudDestinations: updated } : c);
     saveClients({ clients: updatedClients, activeClientId })
       .catch(e => reportError('config.CloudDestinations.saveClients', e));
-    if (activeEnvId) {
-      const next = updatedClients.find(c => c.id === activeClient.id);
-      if (next) saveLocalClient(activeEnvId, next)
-        .catch(e => reportError('config.CloudDestinations.saveLocalClient', e));
-    }
   }
 
   function handleSave(dest: CloudDestination) {

@@ -4,10 +4,11 @@
  * derivation lives in ./taxonomyKeys because the portal must derive the same keys.
  */
 
-import type { VocabularyData } from '@dc-hub/domain';
+import type { VocabularyData } from '@sotto/domain';
 import type { SupabaseConfig } from './rest';
 import { makeHeaders, sbFetch, fetchAllForClient } from './rest';
 import { slugifyKeyPart, parentKeyForLeaf } from './taxonomyKeys';
+import { assessFreshDestruction } from '../guardrail';
 
 /* ── Tag hierarchy sync ──────────────────────────────────────────────────── */
 
@@ -21,6 +22,14 @@ interface DbTagSyncRow {
   sort_order: number;
 }
 
+export interface TagSyncOptions {
+  dryRun?: boolean;
+  /** Deletions require a vocabulary freshly synchronized with the portal, never a dirty cache. */
+  sourceFresh?: boolean;
+  allowLargeDeletions?: boolean;
+  shouldStop?: () => boolean;
+}
+
 
 /** Publish local leaf vocabulary → public.tags.
  * Parent groups are portal-managed — this only upserts/deletes shortcoded leaves.
@@ -31,7 +40,14 @@ export async function syncTagsFromVocabulary(
   clientId:  string,
   config:    SupabaseConfig,
   appendLog: (type: string, msg: string) => void,
-): Promise<{ created: number; updated: number; deleted: number }> {
+  options:   TagSyncOptions = {},
+): Promise<{ created: number; updated: number; deleted: number; deletionRefused: boolean }> {
+  const {
+    dryRun = false,
+    sourceFresh = false,
+    allowLargeDeletions = false,
+    shouldStop,
+  } = options;
   appendLog('section', '━━━ TAG SYNC (local → portal) ━━━');
   const base    = `${config.url.replace(/\/+$/, '')}/rest/v1`;
   const headers = await makeHeaders(config.anonKey);
@@ -62,6 +78,18 @@ export async function syncTagsFromVocabulary(
   let deleted = 0;
 
   async function insertTag(body: Record<string, unknown>): Promise<DbTagSyncRow | null> {
+    if (dryRun) {
+      appendLog('dim', `  [DRY] would insert tag "${body.name}"`);
+      return {
+        id: `dry:${body.key}`,
+        name: String(body.name ?? ''),
+        key: String(body.key ?? ''),
+        dimension: String(body.dimension ?? ''),
+        parent_id: (body.parent_id as string | null) ?? null,
+        shortcode: String(body.shortcode ?? ''),
+        sort_order: Number(body.sort_order ?? 0),
+      };
+    }
     const res = await sbFetch(`${base}/tags`, {
       method:  'POST',
       headers: { ...headers, Prefer: 'return=representation' },
@@ -76,6 +104,10 @@ export async function syncTagsFromVocabulary(
   }
 
   async function patchTag(id: string, body: Record<string, unknown>): Promise<boolean> {
+    if (dryRun) {
+      appendLog('dim', `  [DRY] would update tag ${id}: ${Object.keys(body).join(', ')}`);
+      return true;
+    }
     const res = await sbFetch(`${base}/tags?id=eq.${id}`, {
       method:  'PATCH',
       headers: { ...headers, Prefer: 'return=minimal' },
@@ -98,6 +130,7 @@ export async function syncTagsFromVocabulary(
   }
 
   for (const slot of slots) {
+    if (shouldStop?.()) break;
     for (const leaf of vocab.tags.filter(t => t.slot === slot && t.parentGroup)) {
       const name = leaf.parentGroup!.trim();
       const mapKey = `${slot}::${name}`;
@@ -117,8 +150,10 @@ export async function syncTagsFromVocabulary(
   const desiredKeys = new Set<string>();
 
   for (const slot of slots) {
+    if (shouldStop?.()) break;
     const leaves = vocab.tags.filter(t => t.slot === slot);
     for (let i = 0; i < leaves.length; i++) {
+      if (shouldStop?.()) break;
       const tag = leaves[i];
       const shortcode = tag.shortcode.trim();
       if (!shortcode) continue;
@@ -145,32 +180,8 @@ export async function syncTagsFromVocabulary(
         if (existingLeaf.sort_order !== i) patch.sort_order = i;
 
         if (Object.keys(patch).length) {
-          const oldShortcode = existingLeaf.shortcode;
           if (await patchTag(existingLeaf.id, patch)) {
             updated++;
-            if (
-              patch.shortcode !== undefined &&
-              oldShortcode &&
-              patch.shortcode !== oldShortcode
-            ) {
-              try {
-                await sbFetch(`${base}/rename_tasks`, {
-                  method:  'POST',
-                  headers: { ...headers, Prefer: 'return=minimal' },
-                  body: JSON.stringify({
-                    client_id: clientId,
-                    task_type: 'tag_rename',
-                    payload: {
-                      tag_id: existingLeaf.id,
-                      old_shortcode: oldShortcode,
-                      new_shortcode: shortcode,
-                    },
-                  }),
-                });
-              } catch (e) {
-                appendLog('dim', `  ⚠  rename_task enqueue failed: ${e}`);
-              }
-            }
             Object.assign(existingLeaf, patch, { key, shortcode, parent_id: parentId, dimension: slot });
             byKey.set(key, existingLeaf);
             byShortcode.set(shortcode, existingLeaf);
@@ -198,11 +209,31 @@ export async function syncTagsFromVocabulary(
   }
 
   // Pass 3 — delete shortcoded DB leaves no longer in local vocab
-  for (const row of existing) {
+  const stale = existing.filter(row => {
     const sc = (row.shortcode ?? '').trim();
-    if (!sc) continue;
+    if (!sc) return false;
     const k = (row.key ?? '').trim();
-    if (desiredShortcodes.has(sc) || (k && desiredKeys.has(k))) continue;
+    return !desiredShortcodes.has(sc) && !(k && desiredKeys.has(k));
+  });
+  const verdict = assessFreshDestruction({
+    unit: 'portal tag(s)',
+    doomed: stale.length,
+    written: created + updated,
+    allowLarge: allowLargeDeletions,
+    sourceFresh,
+    source: 'the local vocabulary',
+  });
+  if (verdict.message) appendLog(verdict.blocked ? 'error' : 'dim', verdict.message);
+  const deletionRefused = verdict.blocked;
+
+  for (const row of verdict.blocked ? [] : stale) {
+    if (shouldStop?.()) break;
+    const sc = (row.shortcode ?? '').trim();
+    if (dryRun) {
+      appendLog('dim', `  [DRY] would delete portal tag "${row.name}" (${sc})`);
+      deleted++;
+      continue;
+    }
     try {
       const res = await sbFetch(`${base}/tags?id=eq.${row.id}`, {
         method: 'DELETE',
@@ -210,19 +241,6 @@ export async function syncTagsFromVocabulary(
       });
       if (res.ok) {
         deleted++;
-        if (sc) {
-          try {
-            await sbFetch(`${base}/rename_tasks`, {
-              method:  'POST',
-              headers: { ...headers, Prefer: 'return=minimal' },
-              body: JSON.stringify({
-                client_id: clientId,
-                task_type: 'tag_delete',
-                payload: { tag_id: row.id, shortcode: sc },
-              }),
-            });
-          } catch { /* non-fatal */ }
-        }
       } else {
         appendLog('error', `  ✕  Delete "${row.name}": ${await res.text()}`);
       }
@@ -233,6 +251,5 @@ export async function syncTagsFromVocabulary(
 
   appendLog('dim', `  ${created} created · ${updated} updated · ${deleted} deleted`);
   appendLog('section', '━━━ TAG SYNC DONE ━━━');
-  return { created, updated, deleted };
+  return { created, updated, deleted, deletionRefused };
 }
-

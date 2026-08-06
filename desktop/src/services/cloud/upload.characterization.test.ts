@@ -7,7 +7,7 @@
  *      drive and still returns 200;
  *   2. the simple/chunked boundary — Graph rejects a >4 MiB single PUT, and Drive's multipart create
  *      holds the whole file in memory, so picking the wrong branch fails only on large files;
- *   3. Drive's same-size skip — too eager and a re-export silently keeps the OLD file; too timid and
+ *   3. Drive's checksum skip — too eager and a re-export silently keeps the OLD file; too timid and
  *      every run re-uploads every asset.
  *
  * Chunk ranges get exact assertions because Graph requires contiguous, correctly-labelled ranges and
@@ -89,7 +89,7 @@ describe('uploadOneDriveFile — simple vs session', () => {
   });
 
   it('uploads a small file as a single PUT', async () => {
-    await uploadOneDriveFile('tok', bytes(1024), 'DC Hub/ESS/deck.pdf', false);
+    await uploadOneDriveFile('tok', bytes(1024), 'Sotto/ESS/deck.pdf', false);
 
     const call = stub.one(GRAPH_PUT);
     expect(call.method).toBe('PUT');
@@ -169,10 +169,13 @@ describe('uploadOneDriveFile — targeting and links', () => {
   });
 
   it('encodes each path SEGMENT but keeps the separators', async () => {
-    // "DC Hub/ESS 2026/a+b.pdf" must stay three folders deep with the spaces and + escaped —
-    // encoding the whole string would turn the slashes into %2F and create one long filename.
-    await uploadOneDriveFile('tok', bytes(10), 'DC Hub/ESS 2026/a+b.pdf', false);
-    expect(stub.calls[0].url).toContain('root:/DC%20Hub/ESS%202026/a%2Bb.pdf:/content');
+    /* "Client Assets/ESS 2026/a+b.pdf" must stay three folders deep with the spaces and + escaped —
+       encoding the whole string would turn the slashes into %2F and create one long filename.
+       The first segment deliberately CONTAINS A SPACE: that is what this test proves, and it used to
+       be the product name until the Sotto rename replaced it with a single word, which quietly
+       removed the space from the fixture while the encoded expectation still read `DC%20Hub`. */
+    await uploadOneDriveFile('tok', bytes(10), 'Client Assets/ESS 2026/a+b.pdf', false);
+    expect(stub.calls[0].url).toContain('root:/Client%20Assets/ESS%202026/a%2Bb.pdf:/content');
   });
 
   it('returns null and requests no link when getLink is false', async () => {
@@ -198,7 +201,9 @@ describe('uploadOneDriveFile — targeting and links', () => {
  * Folder paths must be UNIQUE per test: `getOrCreateGDriveFolder` caches ids in module state, which
  * is the behaviour the last test in this block asserts.
  */
-function routeDrive(opts: { existing?: { id: string; size: string; webViewLink?: string } | null } = {}) {
+function routeDrive(opts: {
+  existing?: { id: string; size: string; md5Checksum?: string; webViewLink?: string } | null;
+} = {}) {
   stub.route(DRIVE_LIST, c => {
     const q = new URL(c.url).searchParams.get('q') ?? '';
     if (FOLDER_Q.test(q)) return { json: { files: [{ id: `folder-${q.match(/name='([^']*)'/)?.[1]}` }] } };
@@ -210,24 +215,27 @@ function routeDrive(opts: { existing?: { id: string; size: string; webViewLink?:
   stub.route(/upload\.example\/gdrive/, { json: { id: 'resumable-file', webViewLink: 'https://drive/big' } });
 }
 
+const LOCAL_MD5 = 'd41d8cd98f00b204e9800998ecf8427e';
+
 const upload = (over: Partial<{
-  size: number; name: string; folder: string; getLink: boolean; driveId: string;
+  size: number; name: string; folder: string; getLink: boolean; driveId: string; md5: string;
 }> = {}) => uploadGDriveFile(
   'tok',
   over.size ?? 1024,
   async () => bytes(over.size ?? 1024),
+  async () => over.md5 ?? LOCAL_MD5,
   'application/pdf',
   over.name ?? 'deck.pdf',
-  over.folder ?? 'DC Hub/ESS',
+  over.folder ?? 'Sotto/ESS',
   over.getLink ?? false,
   over.driveId ?? '',
 );
 
 describe('uploadGDriveFile — the same-size skip', () => {
-  it('SKIPS the upload when a same-name file already has the same size', async () => {
-    // Drive has no cheap content hash, so size is the cheap proxy. This is what keeps a re-export of
-    // an unchanged 200-asset client from re-transferring every file.
-    routeDrive({ existing: { id: 'old', size: '1024', webViewLink: 'https://drive/old' } });
+  it('SKIPS the upload when a same-name file has the same size and MD5', async () => {
+    routeDrive({ existing: {
+      id: 'old', size: '1024', md5Checksum: LOCAL_MD5, webViewLink: 'https://drive/old',
+    } });
     const r = await upload({ size: 1024, folder: 'skip/same' });
 
     expect(r).toEqual({ url: null, skipped: true });
@@ -236,17 +244,40 @@ describe('uploadGDriveFile — the same-size skip', () => {
   });
 
   it('returns the EXISTING link when a skipped file is asked for one', async () => {
-    routeDrive({ existing: { id: 'old', size: '1024', webViewLink: 'https://drive/old' } });
+    routeDrive({ existing: {
+      id: 'old', size: '1024', md5Checksum: LOCAL_MD5, webViewLink: 'https://drive/old',
+    } });
     await expect(upload({ size: 1024, getLink: true, folder: 'skip/link' }))
       .resolves.toEqual({ url: 'https://drive/old', skipped: true });
   });
 
   it('never reads the file bytes when it skips', async () => {
-    // The whole point of the skip: no disk read, no transfer.
-    routeDrive({ existing: { id: 'old', size: '1024' } });
+    // The checksum streams natively, but the webview never loads the full file or transfers it.
+    routeDrive({ existing: { id: 'old', size: '1024', md5Checksum: LOCAL_MD5 } });
     const getBytes = vi.fn(async () => bytes(1024));
-    await uploadGDriveFile('tok', 1024, getBytes, 'application/pdf', 'deck.pdf', 'skip/noread', false);
+    const getMd5 = vi.fn(async () => LOCAL_MD5);
+    await uploadGDriveFile(
+      'tok', 1024, getBytes, getMd5, 'application/pdf', 'deck.pdf', 'skip/noread', false,
+    );
     expect(getBytes).not.toHaveBeenCalled();
+    expect(getMd5).toHaveBeenCalledOnce();
+  });
+
+  it('UPDATES IN PLACE when equal-size content has a different MD5', async () => {
+    routeDrive({ existing: { id: 'old', size: '1024', md5Checksum: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' } });
+    const r = await upload({ size: 1024, folder: 'update/equal-size' });
+
+    expect(r.skipped).toBe(false);
+    expect(stub.one(DRIVE_MEDIA).url).toContain('/files/old?');
+    expect(stub.matching(DRIVE_MULTIPART)).toHaveLength(0);
+  });
+
+  it('updates when Drive has no MD5 instead of trusting size alone', async () => {
+    routeDrive({ existing: { id: 'old', size: '1024' } });
+    const r = await upload({ size: 1024, folder: 'update/no-md5' });
+
+    expect(r.skipped).toBe(false);
+    expect(stub.one(DRIVE_MEDIA).url).toContain('/files/old?');
   });
 
   it('UPDATES IN PLACE when the size differs — no second same-name file', async () => {
@@ -317,7 +348,7 @@ describe('uploadGDriveFile — the 5 MiB boundary', () => {
 describe('uploadGDriveFile — folder resolution', () => {
   it('walks the path segment by segment, because Drive folders are ids and not paths', async () => {
     routeDrive();
-    await upload({ folder: 'walk/DC Hub/ESS' });
+    await upload({ folder: 'walk/Sotto/ESS' });
 
     const queries = stub.matching(DRIVE_LIST)
       .map(c => new URL(c.url).searchParams.get('q') ?? '')
@@ -327,7 +358,7 @@ describe('uploadGDriveFile — folder resolution', () => {
     // same-named folder anywhere in the drive.
     expect(queries[0]).toContain("'root' in parents");
     expect(queries[1]).toContain("'folder-walk' in parents");
-    expect(queries[2]).toContain("'folder-DC Hub' in parents");
+    expect(queries[2]).toContain("'folder-Sotto' in parents");
   });
 
   it('creates a missing folder instead of failing the upload', async () => {
@@ -339,6 +370,23 @@ describe('uploadGDriveFile — folder resolution', () => {
     const creates = stub.matching(DRIVE_CREATE).filter(c => c.method === 'POST');
     expect(creates).toHaveLength(2);
     expect(creates[0].json()).toMatchObject({ mimeType: 'application/vnd.google-apps.folder', name: 'create' });
+  });
+
+  it('deduplicates concurrent creates for the same missing folder path', async () => {
+    stub.route(DRIVE_LIST, { json: { files: [] } });
+    let nextFolder = 0;
+    stub.route(DRIVE_CREATE, c => c.method === 'POST'
+      ? { json: { id: `made-${++nextFolder}` } }
+      : { json: { files: [] } });
+    stub.route(DRIVE_MULTIPART, { json: { id: 'f' } });
+
+    await Promise.all([
+      upload({ folder: 'race/same-folder', name: 'a.pdf' }),
+      upload({ folder: 'race/same-folder', name: 'b.pdf' }),
+    ]);
+
+    const creates = stub.matching(DRIVE_CREATE).filter(c => c.method === 'POST');
+    expect(creates.map(c => (c.json() as { name: string }).name)).toEqual(['race', 'same-folder']);
   });
 
   it('scopes the search to a shared drive when one is configured', async () => {
@@ -383,12 +431,12 @@ describe('uploadDropboxFile', () => {
     // and streaming from disk in Rust avoids holding a large deliverable in webview memory.
     invokeStub.replies.set('upload_to_dropbox', { url: 'https://db/x', skipped: false });
 
-    const r = await uploadDropboxFile('tok', '/local/OUT/deck.pdf', '/DC Hub/ESS/deck.pdf', true);
+    const r = await uploadDropboxFile('tok', '/local/OUT/deck.pdf', '/Sotto/ESS/deck.pdf', true);
 
     expect(r).toEqual({ url: 'https://db/x', skipped: false });
     expect(invokeStub.argsFor('upload_to_dropbox')).toEqual([{
       filePath: '/local/OUT/deck.pdf',
-      remotePath: '/DC Hub/ESS/deck.pdf',
+      remotePath: '/Sotto/ESS/deck.pdf',
       accessToken: 'tok',
       getLink: true,
     }]);

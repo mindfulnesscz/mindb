@@ -9,7 +9,7 @@
  *   ./tags/LeafTable    the editable leaf table, used in both places leaves are listed
  */
 
-import type { Client } from '@dc-hub/asset-library'
+import type { Client } from '@sotto/asset-library'
 import type { Tag } from '../../services/tagService'
 import { buildDimensionTree, dimLabel } from './tags/tagTree'
 import { useTagAdmin } from './tags/useTagAdmin'
@@ -64,6 +64,8 @@ export function TagsAdmin({
         </a>
         <span className="text-[11px] font-sans text-text-subtle">
           Parent groups are portal-only. Leaves (shortcodes) can also be added from desktop.
+          Shortcode edits apply to newly generated filenames after desktop sync; existing files are
+          not renamed automatically.
         </span>
       </div>
       {admin.importMsg && <p className="text-[11px] font-sans text-cosmos-black">{admin.importMsg}</p>}

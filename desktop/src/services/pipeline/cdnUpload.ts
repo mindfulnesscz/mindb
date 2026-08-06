@@ -16,7 +16,7 @@ import { invoke } from '@tauri-apps/api/core';
 import {
   filterHighestVersions, storageTarget, assetUrl, tierFor,
   pageTarget, pagePrefix, pageObjectName, type AccessLevel, type ObjectKind,
-} from '@dc-hub/domain';
+} from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
 import { cdnStemKey } from '../supabaseService';
 import { loadR2Cache, saveR2Cache, r2CacheKey, rememberR2Upload } from './r2Cache';
@@ -28,10 +28,15 @@ import { PAGE_PREVIEW_EXTS, extensionOf } from './naming';
    disagreement is a 403 on a file the portal is offering. */
 const NEW_ASSET_LEVEL: AccessLevel = 'client';
 
-/* Every level an object could be sitting under. Used when sweeping for stale page objects: after a
-   level change the old ones are under a DIFFERENT prefix, so a single-level search would miss them
-   and leave a narrowed asset's pages readable at its old, wider address. */
+/* Every level an object could be sitting under. Used when sweeping stale objects: after a level
+   change the old ones are under a DIFFERENT prefix, so a single-level search would miss them and
+   leave a narrowed asset's bytes readable at its old, wider address. */
 const ALL_LEVELS: readonly AccessLevel[] = ['public', 'guest', 'client', 'internal'];
+
+interface CdnIdentity {
+  stableId: string;
+  childId: string;
+}
 
 /** Everything an upload needs to reach the right bucket, resolved per asset from its level. */
 function routeFor(r2: NonNullable<RunContext['r2']>, level: AccessLevel, kind: 'thumbnails' | 'originals',
@@ -47,6 +52,73 @@ function routeFor(r2: NonNullable<RunContext['r2']>, level: AccessLevel, kind: '
 /** The level this asset's bytes belong at. Absent from the map means the row does not exist yet. */
 function levelOf(ctx: RunContext, stableId: string, childId: string): AccessLevel {
   return (ctx.assetLevels?.get(`${stableId}:${childId}`) as AccessLevel | undefined) ?? NEW_ASSET_LEVEL;
+}
+
+function bucketForLevel(r2: NonNullable<RunContext['r2']>, level: AccessLevel) {
+  return tierFor(level) === 'public'
+    ? { bucket: r2.bucket, accessKeyId: r2.accessKeyId, secretKey: r2.secretKey,
+        sessionToken: r2.sessionToken }
+    : { bucket: r2.gatedBucket, accessKeyId: r2.gatedAccessKeyId,
+        secretKey: r2.gatedSecretKey, sessionToken: r2.gatedSessionToken };
+}
+
+interface StaleObject {
+  key: string;
+  level: AccessLevel;
+}
+
+/** Delete one bounded stale object only when no other live row still names it. */
+async function pruneStaleObject(
+  ctx: RunContext,
+  r2: NonNullable<RunContext['r2']>,
+  stale: StaleObject,
+  identity: CdnIdentity,
+  kind: 'thumbnail' | 'original',
+  currentKey: string,
+  plannedKeys: Set<string>,
+): Promise<boolean> {
+  if (ctx.isStopping?.() || stale.key === currentKey || plannedKeys.has(stale.key)) return false;
+
+  const owner = `${identity.stableId}:${identity.childId}`;
+  const references = ctx.cdnKeyReferences;
+  if (!references) {
+    ctx.appendLog('dim',
+      `  ↷  kept stale ${kind} (was ${stale.level}) — live row references unavailable: ${stale.key}`);
+    return false;
+  }
+  // Retain the object while ANY live row still points at it — including this asset's own row. The
+  // old-tier object only becomes safe to remove once the DB URL has actually been repointed to the
+  // current level (by the Supabase export or the reconcile); until then it is the object the portal
+  // is still serving. Deleting it here on the assumption the repoint "is about to happen" strands a
+  // live-referenced object whenever that repoint or the reconcile fails (regression, 2026-08-06). A
+  // genuine orphan — repoint already landed on a prior run — has no owners left and is still pruned.
+  const owners = references.get(stale.key);
+  if (owners && owners.size) {
+    const shared = [...owners].filter(candidate => candidate !== owner);
+    ctx.appendLog('dim', shared.length
+      ? `  ↷  kept shared stale ${kind} (was ${stale.level}; referenced by ${shared.join(', ')}): ${stale.key}`
+      : `  ↷  kept stale ${kind} (was ${stale.level}; own live row still points here — repoint not yet landed): ${stale.key}`);
+    return false;
+  }
+
+  if (ctx.settings.dryRun) {
+    ctx.appendLog('dim', `  [DRY] would prune stale ${kind} (was ${stale.level}): ${stale.key}`);
+    return false;
+  }
+
+  const from = bucketForLevel(r2, stale.level);
+  try {
+    await invoke('delete_r2_object', {
+      endpoint: r2.endpoint, bucket: from.bucket,
+      accessKeyId: from.accessKeyId, secretKey: from.secretKey,
+      sessionToken: from.sessionToken, objectKey: stale.key,
+    });
+    ctx.appendLog('dim', `  ↷  pruned stale ${kind} (was ${stale.level}): ${stale.key}`);
+    return true;
+  } catch (e) {
+    ctx.appendLog('warn', `  ↷  stale ${kind} prune failed (will retry): ${stale.key} — ${e}`);
+    return false;
+  }
 }
 
 export async function fetchR2KeyManifest(
@@ -145,20 +217,44 @@ export async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<vo
     appendLog('dim', '  No assets to upload.');
     return;
   }
+  if (ctx.settings.dryRun) {
+    appendLog('dim',
+      `  [DRY] would upload ${thumbFiles.length} thumbnail(s) and prune stale thumbnail objects`);
+    return;
+  }
 
   let uploaded = 0;
   let skipped  = 0; // no local thumb file, or already known uploaded per DB inventory
   let cached   = 0; // local mtime+size match last upload — skipped without hashing or a network call
   let deduped  = 0; // attempted, but R2 already had this exact content (content-hash match)
   let errors   = 0;
+  let pruned   = 0;
   let uploadLogged = 0;
 
   const r2Cache = await loadR2Cache();
   let r2CacheDirty = false;
   const remoteKeys = await fetchTieredManifest(r2, 'thumbnails', appendLog);
 
+  // Every current-level key claimed by this run. A shared thumbnail can appear more than once in
+  // thumbFiles (extension variants of one stem); neither copy may prune the other's target.
+  const plannedKeys = new Set<string>();
+  for (const { srcPath } of thumbFiles) {
+    const identity = ctx.cdnIdentity?.get(cdnStemKey(srcPath));
+    if (!identity) continue;
+    plannedKeys.add(storageTarget(
+      levelOf(ctx, identity.stableId, identity.childId),
+      r2.clientId, 'thumbnails', identity.stableId, identity.childId, '.webp',
+    ).key);
+  }
+  const pruneTargets = new Map<string, {
+    identity: CdnIdentity;
+    level: AccessLevel;
+    objectKey: string;
+  }>();
+
   const CONCURRENCY = 8;
   for (let i = 0; i < thumbFiles.length; i += CONCURRENCY) {
+    if (ctx.isStopping?.()) return;
     const batch = thumbFiles.slice(i, i + CONCURRENCY);
     await Promise.all(batch.map(async ({ thumbPath, stem, srcPath }) => {
       // Check thumbnail exists locally before attempting upload
@@ -180,7 +276,8 @@ export async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<vo
         stats.errors += 1;
         return;
       }
-      const route     = routeFor(r2, levelOf(ctx, identity.stableId, identity.childId),
+      const level     = levelOf(ctx, identity.stableId, identity.childId);
+      const route     = routeFor(r2, level,
                                  'thumbnails', identity.stableId, identity.childId, '.webp');
       const objectKey = route.key;
 
@@ -198,6 +295,8 @@ export async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<vo
         }
         cached += 1;
         stats.cdnThumbCached += 1;
+        pruneTargets.set(`${identity.stableId}:${identity.childId}`,
+          { identity, level, objectKey });
         return;
       }
 
@@ -223,6 +322,8 @@ export async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<vo
         rememberR2Upload(r2Cache, route.bucket, objectKey, mtimeMs, thumbInfo.size, result.sha256);
         r2CacheDirty = true;
         remoteKeys?.add(objectKey);
+        pruneTargets.set(`${identity.stableId}:${identity.childId}`,
+          { identity, level, objectKey });
         if (result.skipped) {
           appendLog('dim', `  ↷  unchanged, skipped: ${fileName}`);
           deduped += 1;
@@ -240,10 +341,36 @@ export async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<vo
     }));
   }
 
+  /* The reconciler copies/repoints thumbnails on a level change but deliberately keeps the source
+     for reversibility. Once this run has confirmed the current object, remove only this identity's
+     exact .webp key at each other level. A key referenced by another live row is retained. */
+  if (remoteKeys) {
+    for (const { identity, level, objectKey } of pruneTargets.values()) {
+      if (ctx.isStopping?.()) return;
+      const candidates = ALL_LEVELS
+        .filter(staleLevel => staleLevel !== level)
+        .map(staleLevel => ({
+          key: storageTarget(
+            staleLevel, r2.clientId, 'thumbnails', identity.stableId, identity.childId, '.webp',
+          ).key,
+          level: staleLevel,
+        }))
+        .filter(stale => remoteKeys.has(stale.key));
+      for (const stale of candidates) {
+        if (await pruneStaleObject(
+          ctx, r2, stale, identity, 'thumbnail', objectKey, plannedKeys,
+        )) {
+          remoteKeys.delete(stale.key);
+          pruned += 1;
+        }
+      }
+    }
+  }
+
   if (r2CacheDirty) await saveR2Cache(r2Cache);
 
   appendLog('section',
-    `━━━ CDN DONE — ${uploaded} uploaded · ${cached} cached · ${deduped} unchanged · ${skipped} no thumb · ${errors} errors ━━━`,
+    `━━━ CDN DONE — ${uploaded} uploaded · ${cached} cached · ${deduped} unchanged · ${pruned} pruned · ${skipped} no thumb · ${errors} errors ━━━`,
   );
 }
 
@@ -299,6 +426,11 @@ export async function runPagesUpload(ctx: RunContext, stats: RunStats): Promise<
     appendLog('dim', '  No page previews to upload.');
     return;
   }
+  if (ctx.settings.dryRun) {
+    const pages = docs.reduce((total, doc) => total + doc.rendered, 0);
+    appendLog('dim', `  [DRY] would upload ${pages} page preview(s) and prune stale page objects`);
+    return;
+  }
 
   let uploaded = 0, cached = 0, deduped = 0, pruned = 0, errors = 0;
   const r2Cache = await loadR2Cache();
@@ -309,6 +441,7 @@ export async function runPagesUpload(ctx: RunContext, stats: RunStats): Promise<
   // parallelising the many small uploads a multi-page deck produces.
   const CONCURRENCY = 8;
   for (const { srcPath, pagesDir, rendered } of docs) {
+    if (ctx.isStopping?.()) return;
     const identity = ctx.cdnIdentity?.get(cdnStemKey(srcPath));
     if (!identity) {
       appendLog('error',
@@ -331,6 +464,7 @@ export async function runPagesUpload(ctx: RunContext, stats: RunStats): Promise<
     );
 
     for (let i = 0; i < pageNumbers.length; i += CONCURRENCY) {
+      if (ctx.isStopping?.()) return;
       const batch = pageNumbers.slice(i, i + CONCURRENCY);
       await Promise.all(batch.map(async page => {
         const localPath = `${pagesDir}/${pageObjectName(page)}`;
@@ -455,11 +589,17 @@ export async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promi
     appendLog('dim', '  No assets to upload.');
     return;
   }
+  if (ctx.settings.dryRun) {
+    appendLog('dim',
+      `  [DRY] would upload ${files.length} original(s), remove stale siblings, and prune stale original objects`);
+    return;
+  }
 
   let uploaded = 0;
   let cached   = 0; // local mtime+size match last upload — skipped without hashing or a network call
   let deduped  = 0; // attempted, but R2 already had this exact content (content-hash match)
   let errors   = 0;
+  let pruned   = 0;
 
   const r2Cache = await loadR2Cache();
   let r2CacheDirty = false;
@@ -477,20 +617,30 @@ export async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promi
       stats.errors += 1;
       return [];
     }
-    const route = routeFor(r2, levelOf(ctx, identity.stableId, identity.childId),
+    const level = levelOf(ctx, identity.stableId, identity.childId);
+    const route = routeFor(r2, level,
                            'originals', identity.stableId, identity.childId, f.ext);
     // Prefix without the extension — the stale-sibling cleanup below matches on `${prefix}.`
     const keyPrefix = route.key.slice(0, route.key.length - f.ext.length);
-    return [{ ...f, keyPrefix, objectKey: route.key, route }];
+    return [{ ...f, identity, level, keyPrefix, objectKey: route.key, route }];
   });
   // Keys claimed by any file this run — the stale-sibling cleanup must never delete
   // these, or two files sharing a key prefix would destroy each other's upload.
   const plannedKeys = new Set(withKeys.map(f => f.objectKey));
+  const pruneTargets = new Map<string, {
+    identity: CdnIdentity;
+    level: AccessLevel;
+    ext: string;
+    objectKey: string;
+  }>();
 
   const CONCURRENCY = 8;
   for (let i = 0; i < withKeys.length; i += CONCURRENCY) {
+    if (ctx.isStopping?.()) return;
     const batch = withKeys.slice(i, i + CONCURRENCY);
-    await Promise.all(batch.map(async ({ srcPath, stem, ext, keyPrefix, objectKey, route }) => {
+    await Promise.all(batch.map(async ({
+      srcPath, stem, ext, identity, level, keyPrefix, objectKey, route,
+    }) => {
 
       // Cheap local check (mtime+size, no file read/hash/network) before the real thing.
       let srcInfo;
@@ -513,6 +663,8 @@ export async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promi
         }
         cached += 1;
         stats.cdnOrigCached += 1;
+        pruneTargets.set(`${identity.stableId}:${identity.childId}`,
+          { identity, level, ext, objectKey });
         return;
       }
 
@@ -536,6 +688,8 @@ export async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promi
         rememberR2Upload(r2Cache, route.bucket, objectKey, mtimeMs, srcInfo.size, result.sha256);
         r2CacheDirty = true;
         remoteKeys?.add(objectKey);
+        pruneTargets.set(`${identity.stableId}:${identity.childId}`,
+          { identity, level, ext, objectKey });
 
         // Safety net: if a version bump (or a genuine content change under stable
         // identity) changed the extension, remove the stale sibling object so it
@@ -553,13 +707,12 @@ export async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promi
                 prefix:       `${keyPrefix}.`,
               });
           for (const staleKey of siblingKeys.filter(k => k !== objectKey && !plannedKeys.has(k))) {
-            await invoke('delete_r2_object', {
-              endpoint: r2.endpoint, bucket: route.bucket,
-              accessKeyId: route.accessKeyId, secretKey: route.secretKey,
-              sessionToken: route.sessionToken, objectKey: staleKey,
-            });
-            remoteKeys?.delete(staleKey);
-            appendLog('dim', `  ↷  removed stale original: ${staleKey}`);
+            if (await pruneStaleObject(
+              ctx, r2, { key: staleKey, level }, identity, 'original', objectKey, plannedKeys,
+            )) {
+              remoteKeys?.delete(staleKey);
+              pruned += 1;
+            }
           }
         } catch { /* best-effort cleanup — never fails the run */ }
 
@@ -580,9 +733,37 @@ export async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promi
     }));
   }
 
+  /* Additive to the current-level extension-sibling cleanup above: remove every extension for this
+     stable identity at NON-current levels. That covers a level and extension change in one pass,
+     while keeping the delete set bounded to `${stableId}/${childId}`. */
+  if (remoteKeys) {
+    for (const { identity, level, ext, objectKey } of pruneTargets.values()) {
+      if (ctx.isStopping?.()) return;
+      const candidates = ALL_LEVELS.flatMap(staleLevel => {
+        if (staleLevel === level) return [];
+        const target = storageTarget(
+          staleLevel, r2.clientId, 'originals', identity.stableId, identity.childId, ext,
+        ).key;
+        const prefix = ext ? target.slice(0, -ext.length) : target;
+        return [...remoteKeys]
+          .filter(key => key === prefix || key.startsWith(`${prefix}.`))
+          .map(key => ({ key, level: staleLevel }));
+      });
+      for (const stale of candidates) {
+        if (await pruneStaleObject(
+          ctx, r2, stale, identity, 'original', objectKey, plannedKeys,
+        )) {
+          remoteKeys.delete(stale.key);
+          pruned += 1;
+        }
+      }
+    }
+  }
+
   if (r2CacheDirty) await saveR2Cache(r2Cache);
 
-  appendLog('section', `━━━ CDN ORIGINALS DONE — ${uploaded} uploaded · ${cached} cached · ${deduped} unchanged · ${errors} errors ━━━`);
+  appendLog('section',
+    `━━━ CDN ORIGINALS DONE — ${uploaded} uploaded · ${cached} cached · ${deduped} unchanged · ${pruned} pruned · ${errors} errors ━━━`);
 }
 
 
@@ -593,12 +774,16 @@ export function mimeFromExt(ext: string): string {
     '.pptm': 'application/vnd.ms-powerpoint.presentation.macroEnabled.12',
     '.ppt':  'application/vnd.ms-powerpoint',
     '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.docm': 'application/vnd.ms-word.document.macroEnabled.12',
     '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.xlsm': 'application/vnd.ms-excel.sheet.macroEnabled.12',
     '.png':  'image/png',
     '.jpg':  'image/jpeg',
     '.jpeg': 'image/jpeg',
     '.gif':  'image/gif',
     '.webp': 'image/webp',
+    '.tif':  'image/tiff',
+    '.tiff': 'image/tiff',
     '.mp4':  'video/mp4',
     '.mov':  'video/quicktime',
     '.svg':  'image/svg+xml',
@@ -608,4 +793,3 @@ export function mimeFromExt(ext: string): string {
   };
   return m[ext.toLowerCase()] ?? 'application/octet-stream';
 }
-

@@ -9,7 +9,7 @@
  * are skipped for the run.
  */
 
-import { extractStableId, type GalleryGroup, type SingleAsset } from '@dc-hub/domain';
+import { extractStableId, type GalleryGroup, type SingleAsset } from '@sotto/domain';
 
 export interface IdentifiedAssets {
   stableSingles: Array<SingleAsset & { stableId: string }>;

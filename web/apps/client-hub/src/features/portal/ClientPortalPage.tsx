@@ -4,13 +4,13 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../context/AuthContext'
 import { useRole } from '../../context/RoleContext'
 import { useClients } from '../../hooks/useClients'
-import { canSwitchClient } from '@dc-hub/asset-library'
-import type { Client } from '@dc-hub/asset-library'
+import { canSwitchClient } from '@sotto/asset-library'
+import type { Client } from '@sotto/asset-library'
 import SignInModal from '../auth/SignInModal'
 import CompleteProfile from '../auth/CompleteProfile'
 import GalleryView from '../gallery/GalleryView'
-import { DEFAULT_DIMENSION_LABELS } from '@dc-hub/database'
-import type { Database } from '@dc-hub/database'
+import { DEFAULT_DIMENSION_LABELS } from '@sotto/database'
+import type { Database } from '@sotto/database'
 
 /**
  * The anon-visible slice of a client, taken from the generated RPC types so it cannot drift from
@@ -34,10 +34,10 @@ function NotFoundPage() {
       >
         <span className="text-clear-white text-lg font-bold font-sans leading-none">C</span>
       </div>
-      <p className="font-sans text-[10px] font-bold tracking-[0.14em] uppercase text-text-muted mb-6">DC HUB</p>
+      <p className="font-sans text-[10px] font-bold tracking-[0.14em] uppercase text-text-muted mb-6">SOTTO</p>
       <h1 className="font-serif text-4xl font-medium text-cosmos-black mb-3">404</h1>
       <p className="font-sans text-sm text-text-muted mb-1">This portal doesn't exist.</p>
-      <p className="text-[11px] font-sans text-text-subtle">Check the URL or contact DC Hub for your access link.</p>
+      <p className="text-[11px] font-sans text-text-subtle">Check the URL or contact Sotto for your access link.</p>
     </div>
   )
 }
@@ -86,7 +86,7 @@ function AdminAppHeader({ slug }: { slug: string }) {
 
   return (
     <header className="flex items-center h-11 px-5 border-b border-border bg-surface shrink-0">
-      {/* DC Hub logo — click goes to admin home */}
+      {/* Sotto logo — click goes to admin home */}
       <button
         onClick={() => navigate('/')}
         className="flex items-center gap-2 mr-6 hover:opacity-70 transition-opacity"
@@ -95,7 +95,7 @@ function AdminAppHeader({ slug }: { slug: string }) {
           <span className="text-clear-white text-[10px] font-bold font-sans leading-none">C</span>
         </div>
         <span className="font-sans text-xs font-bold tracking-[0.14em] uppercase text-cosmos-black">
-          DC HUB
+          SOTTO
         </span>
       </button>
 
@@ -282,7 +282,7 @@ export default function ClientPortalPage() {
             <span className="text-clear-white text-[9px] font-bold font-sans leading-none">C</span>
           </div>
           <span className="font-sans text-[10px] font-bold tracking-[0.14em] uppercase text-cosmos-black opacity-60">
-            DC HUB
+            SOTTO
           </span>
         </div>
 
@@ -319,7 +319,6 @@ export default function ClientPortalPage() {
         {showModal && (
           <SignInModal
             redirectTo={window.location.href}
-            clientId={client.id}
             onClose={() => setShowModal(false)}
           />
         )}

@@ -45,7 +45,7 @@ Desktop → **Cloud destinations** → add/edit a **OneDrive** destination:
 5. Set the **remote path** (subfolder within the library).
 
 `driveId`/`siteUrl` are stored as destination structure in Supabase
-(`clients.cloud_destinations`); OAuth tokens stay on the machine.
+(`clients.cloud_destinations`); OAuth tokens stay in the machine's OS keychain.
 
 > After upgrading, **reconnect** the destination once so the token carries the new `Sites.ReadWrite.All` scope.
 

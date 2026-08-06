@@ -5,8 +5,8 @@
  */
 
 import { useState } from 'react'
-import { Client } from '@dc-hub/asset-library'
-import {} from '@dc-hub/asset-library'
+import { Client } from '@sotto/asset-library'
+import {} from '@sotto/asset-library'
 import { createUser } from '../../services/userService'
 import { assignableRoles, ROLE_LABELS } from './roles'
 import { inputCls } from './styles'

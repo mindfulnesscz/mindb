@@ -106,44 +106,80 @@ export async function checkGDriveConnection(accessToken: string): Promise<{ emai
 // Folder IDs are memoized for the process lifetime so a pipeline run that
 // uploads many files under the same tree does not re-list every path segment.
 const gdriveFolderCache = new Map<string, string>();
+const gdriveFolderInflight = new Map<string, Promise<string>>();
+
+async function resolveGDriveFolderPart(
+  accessToken: string,
+  parentId: string,
+  part: string,
+  sharedDriveId: string,
+): Promise<string> {
+  const q = `name='${part.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`;
+  const params = new URLSearchParams({
+    q,
+    fields: 'files(id)',
+    supportsAllDrives: 'true',
+    includeItemsFromAllDrives: 'true',
+  });
+  if (sharedDriveId.trim()) {
+    params.set('corpora', 'drive');
+    params.set('driveId', sharedDriveId.trim());
+  }
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) throw new Error(`GDrive folder list failed (${res.status}): ${await res.text()}`);
+  const data = await res.json() as { files?: Array<{ id: string }> };
+  if (data.files?.length) return data.files[0].id;
+
+  const create = await fetch('https://www.googleapis.com/drive/v3/files?supportsAllDrives=true', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: part,
+      mimeType: 'application/vnd.google-apps.folder',
+      parents: [parentId],
+    }),
+  });
+  if (!create.ok) throw new Error(`GDrive folder create failed (${create.status}): ${await create.text()}`);
+  const folder = await create.json() as { id?: string };
+  if (!folder.id) throw new Error('GDrive folder create returned no id.');
+  return folder.id;
+}
 
 async function getOrCreateGDriveFolder(
   accessToken:   string,
   folderPath:    string,
   sharedDriveId: string,
+  cacheScope:    string,
 ): Promise<string> {
-  const cacheKey = `${sharedDriveId.trim() || 'root'}::${folderPath}`;
-  const cached = gdriveFolderCache.get(cacheKey);
-  if (cached) return cached;
-
   const rootId = sharedDriveId.trim() || 'root';
   let parentId = rootId;
   const parts  = folderPath.split('/').filter(Boolean);
+  const scope = `${cacheScope || 'default'}::${rootId}`;
+  let prefix = '';
 
   for (const part of parts) {
-    const q      = `name='${part.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`;
-    const params = new URLSearchParams({ q, fields: 'files(id)', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true' });
-    if (sharedDriveId.trim()) {
-      params.set('corpora', 'drive');
-      params.set('driveId', sharedDriveId.trim());
+    prefix = prefix ? `${prefix}/${part}` : part;
+    const cacheKey = `${scope}::${prefix}`;
+    const cached = gdriveFolderCache.get(cacheKey);
+    if (cached) {
+      parentId = cached;
+      continue;
     }
-    const res  = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    const data = await res.json() as { files?: Array<{ id: string }> };
-    if (data.files?.length) {
-      parentId = data.files[0].id;
-    } else {
-      const cr = await fetch('https://www.googleapis.com/drive/v3/files?supportsAllDrives=true', {
-        method:  'POST',
-        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ name: part, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] }),
-      });
-      const folder = await cr.json() as { id: string };
-      parentId = folder.id;
+
+    let pending = gdriveFolderInflight.get(cacheKey);
+    if (!pending) {
+      pending = resolveGDriveFolderPart(accessToken, parentId, part, sharedDriveId)
+        .then(id => {
+          gdriveFolderCache.set(cacheKey, id);
+          return id;
+        })
+        .finally(() => gdriveFolderInflight.delete(cacheKey));
+      gdriveFolderInflight.set(cacheKey, pending);
     }
+    parentId = await pending;
   }
-  gdriveFolderCache.set(cacheKey, parentId);
   return parentId;
 }
 
@@ -203,9 +239,9 @@ async function ensureGDriveShareLink(
 
 /**
  * Sync a file to Google Drive with skip-if-unchanged semantics.
- * Bytes are loaded lazily via `getBytes` — unchanged remotes never read the local file.
- * - Same-name file + matching size → skip
- * - Same-name file + different size → media update in place
+ * Bytes are loaded lazily via `getBytes` — unchanged remotes never load the local file into memory.
+ * - Same-name file + matching size and MD5 → skip
+ * - Same-name file + changed size or MD5 → media update in place
  * - Missing → multipart create
  */
 // Multipart create holds the whole body in memory and is capped for large
@@ -254,21 +290,26 @@ export async function uploadGDriveFile(
   accessToken:   string,
   localSize:     number,
   getBytes:      () => Promise<Uint8Array<ArrayBuffer>>,
+  getMd5:        () => Promise<string>,
   mimeType:      string,
   fileName:      string,
-  folderPath:    string,   // e.g. "DC Hub/ESS"
+  folderPath:    string,   // e.g. "Sotto/ESS"
   getLink:       boolean,
   sharedDriveId: string = '',
+  cacheScope:    string = '',
 ): Promise<{ url: string | null; skipped: boolean }> {
-  const folderId = await getOrCreateGDriveFolder(accessToken, folderPath, sharedDriveId);
+  const folderId = await getOrCreateGDriveFolder(accessToken, folderPath, sharedDriveId, cacheScope);
   const existing = await findGDriveFile(accessToken, folderId, fileName, sharedDriveId);
   const sizeStr  = String(localSize);
 
-  if (existing && existing.size === sizeStr) {
-    if (!getLink) return { url: null, skipped: true };
-    if (existing.webViewLink) return { url: existing.webViewLink, skipped: true };
-    const url = await ensureGDriveShareLink(accessToken, existing.id);
-    return { url, skipped: true };
+  if (existing?.size === sizeStr && existing.md5Checksum) {
+    const localMd5 = await getMd5();
+    if (localMd5.toLowerCase() === existing.md5Checksum.toLowerCase()) {
+      if (!getLink) return { url: null, skipped: true };
+      if (existing.webViewLink) return { url: existing.webViewLink, skipped: true };
+      const url = await ensureGDriveShareLink(accessToken, existing.id);
+      return { url, skipped: true };
+    }
   }
 
   const bytes = await getBytes();
@@ -307,7 +348,7 @@ export async function uploadGDriveFile(
   }
 
   // Multipart create: metadata + file bytes
-  const boundary = '----dc_hub_boundary';
+  const boundary = '----sotto_boundary';
   const meta     = JSON.stringify({ name: fileName, parents: [folderId] });
   const encoder  = new TextEncoder();
   const parts    = [
@@ -340,4 +381,3 @@ export async function uploadGDriveFile(
     : null;
   return { url, skipped: false };
 }
-

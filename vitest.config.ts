@@ -11,11 +11,13 @@ const fromHere = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 export default defineConfig({
   resolve: {
     alias: {
-      '@dc-hub/asset-library': fromHere('./packages/asset-library/src/index.ts'),
-      // Subpath first — Vite matches aliases in order, and the bare entry would otherwise swallow
-      // `@dc-hub/domain/assetStorage` and resolve it to the barrel.
-      '@dc-hub/domain/assetStorage': fromHere('./packages/domain/src/assetStorage.ts'),
-      '@dc-hub/domain': fromHere('./packages/domain/src/index.ts'),
+      '@sotto/asset-library': fromHere('./packages/asset-library/src/index.ts'),
+      // Subpaths first — Vite matches aliases in order, and the bare entry would otherwise swallow
+      // `@sotto/domain/assetStorage` and resolve it to the barrel. Every subpath in the package's
+      // `exports` map that anything under test imports needs a line here.
+      '@sotto/domain/assetStorage': fromHere('./packages/domain/src/assetStorage.ts'),
+      '@sotto/domain/callerAuth': fromHere('./packages/domain/src/callerAuth.ts'),
+      '@sotto/domain': fromHere('./packages/domain/src/index.ts'),
     },
   },
   test: {
@@ -25,9 +27,13 @@ export default defineConfig({
     // I/O-free, so the security matrix runs in plain node with no workerd. Anything that needs a
     // real R2 binding or the Cache API is a `wrangler dev` job — see workers/cdn-gate/README.md.
     include: [
+      'scripts/**/*.test.mjs',
       'packages/*/src/**/*.test.ts',
       'web/apps/*/src/**/*.test.{ts,tsx}',
       'workers/*/src/**/*.test.ts',
+      // Pure policy modules used by Deno edge functions. These tests need no edge runtime and make
+      // the credential/CORS boundaries fail in the ordinary package gate when they regress.
+      'supabase/functions/_shared/**/*.test.ts',
     ],
     // Component tests opt into jsdom per file with `// @vitest-environment jsdom`, so the
     // pure-logic suites keep running in plain node (they are ~10x faster there).
@@ -52,7 +58,11 @@ export default defineConfig({
       thresholds: {
         // The shared rules both apps depend on — identity, naming, grouping. Highest bar in the repo,
         // because every asset in every client passes through them.
-        'packages/domain/src/**': { lines: 85, statements: 80, branches: 70 },
+        //
+        // Raised from 85/80/70 when `cdnGarbageCollection` got its own test file. That module is over
+        // half the branches in this directory and arrived at 47% — enough to fail the gate on its own,
+        // which is precisely what the ratchet is for. Now 98/96/91; these sit a few points below.
+        'packages/domain/src/**': { lines: 95, statements: 92, branches: 85 },
         // The one client projection: small, and the failure mode is silent, so it stays near-total.
         'packages/database/src/clients.ts': { lines: 95, statements: 95, branches: 95 },
       },

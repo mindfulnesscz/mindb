@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import type { Asset } from '@dc-hub/asset-library'
+import type { Asset } from '@sotto/asset-library'
 import { fetchChildAssets, fetchVariants } from '../../services/assetService'
+import { AssetImage } from '../../components/AssetImage'
 
 export interface SiblingPreview {
   id: string
@@ -166,12 +167,12 @@ export function MultiAssetHoverGrid({
                     {loading && !s.thumbnailUrl ? (
                       <ShimmerBlock />
                     ) : s.thumbnailUrl ? (
-                      <img
-                        referrerPolicy="no-referrer"
+                      <AssetImage
                         src={s.thumbnailUrl}
                         alt={s.name}
                         className="w-full h-full object-cover pointer-events-none"
-                        draggable={false}
+                        fallbackClassName="w-full h-full"
+                        compact
                       />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-[10px] font-sans text-clear-white/70 bg-cosmos-black/40">

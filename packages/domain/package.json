@@ -1,5 +1,5 @@
 {
-  "name": "@dc-hub/domain",
+  "name": "@sotto/domain",
   "version": "3.0.0",
   "private": false,
   "type": "module",
@@ -7,7 +7,9 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./assetStorage": "./src/assetStorage.ts"
+    "./assetStorage": "./src/assetStorage.ts",
+    "./callerAuth": "./src/callerAuth.ts",
+    "./cdnGarbageCollection": "./src/cdnGarbageCollection.ts"
   },
   "devDependencies": {
     "typescript": "5.9.3"

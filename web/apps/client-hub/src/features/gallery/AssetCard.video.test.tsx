@@ -13,7 +13,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, fireEvent, act } from '@testing-library/react';
-import type { Asset } from '@dc-hub/asset-library';
+import type { Asset } from '@sotto/asset-library';
 
 let reduceMotion = false;
 vi.mock('motion/react', async () => {

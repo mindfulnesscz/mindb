@@ -82,11 +82,10 @@ const inputCls =
 
 interface SignInModalProps {
   redirectTo?: string
-  clientId?: string     // portal's client id — stored on the new user's profile
   onClose?: () => void
 }
 
-export default function SignInModal({ redirectTo, clientId, onClose }: SignInModalProps = {}) {
+export default function SignInModal({ redirectTo, onClose }: SignInModalProps = {}) {
   const { checkEmail, sendMagicLink, signInWithProvider } = useAuth()
 
   const [step,     setStep]     = useState<Step>('email')
@@ -153,7 +152,7 @@ export default function SignInModal({ redirectTo, clientId, onClose }: SignInMod
     type: EmailAuthType,
     userData?: Record<string, string>,
   ) {
-    const err = await sendMagicLink(email, userData, redirectTo, clientId)
+    const err = await sendMagicLink(email, userData, redirectTo)
     if (err) {
       setError(err)
       setStep(type === 'unknown' ? 'extra' : 'email')
@@ -185,7 +184,7 @@ export default function SignInModal({ redirectTo, clientId, onClose }: SignInMod
               <span className="text-clear-white text-[10px] font-bold font-sans leading-none">C</span>
             </div>
             <span className="font-sans text-xs font-bold tracking-[0.14em] uppercase text-cosmos-black">
-              DC HUB
+              SOTTO
             </span>
           </div>
           <h1 className="font-serif text-xl font-medium text-cosmos-black">
@@ -211,7 +210,7 @@ export default function SignInModal({ redirectTo, clientId, onClose }: SignInMod
                   <path d="M2 4l6 5 6-5M2 4h12v9H2V4Z" />
                 </svg>
                 <p className="text-sm font-sans text-cosmos-black">
-                  Click the link in your email to sign in. It expires in 1 hour.
+                  Open the link in your email, then select Continue to sign in. It expires in 1 hour.
                   <br />
                   <span className="text-text-muted text-[11px]">If you don't see it, check your spam folder.</span>
                 </p>

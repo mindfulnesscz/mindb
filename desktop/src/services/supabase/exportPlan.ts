@@ -18,12 +18,15 @@
  * Reads and writes `.dchub.json` manifests, so this stage touches the filesystem.
  */
 
-import { stripStableId, filterHighestVersions, type VocabularyData } from '@dc-hub/domain';
+import {
+  assetIdentityKey, effectiveLevel, filterHighestVersions, storageTarget, stripStableId,
+  type VocabularyData,
+} from '@sotto/domain';
 import type { CloudUrlEntry } from '../pipeline/types';
 import { parseAssetForSupabase, unionStrings, intersectStrings } from './rowMapping';
 import {
-  type ManifestStates, getManifestState, resolveChildId, resolveGalleryParentChildId,
-  writeManifest,
+  compareIdentityPaths, type IdentityFile, type ManifestStates, getManifestState,
+  resolveGalleryParentChildId, resolveIdentityFiles, writeManifest,
 } from './manifest';
 import type { ExportPlan, ChildWrite, ParentWrite, ReadmeTarget, StableRow } from './exportTypes';
 import type { IdentifiedAssets } from './exportIdentify';
@@ -56,18 +59,40 @@ export interface PlanInput {
   originalUrls?: Map<string, string>;
   cloudUrls?: Map<string, CloudUrlEntry[]>;
   appendLog: (type: string, msg: string) => void;
+  /** Resolve identities in memory for previewing, but never persist the manifest. */
+  dryRun?: boolean;
 }
 
 export async function planExport(input: PlanInput): Promise<ExportPlan> {
   const {
     identified: { stableSingles, stableGalleries },
     clientId, vocab, existingByStableId, cdnUrls, originalUrls, cloudUrls, pageCounts, appendLog,
+    dryRun = false,
   } = input;
 
   // `stem` drives taxonomy parsing (display text); `absPath` keys the CDN URL maps, which must
   // never be looked up by name — two packages can hold the same filename and the second would
   // otherwise claim the first's URLs (F-5).
-  function buildRecord(stem: string, absPath: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  function originalObjectKey(absPath: string, stableId: string, childId: string): string | null {
+    if (!originalUrls?.has(absPath)) return null;
+    const filename = absPath.replace(/\\/g, '/').split('/').pop() ?? '';
+    const dot = filename.lastIndexOf('.');
+    const ext = dot > 0 ? filename.slice(dot) : '';
+    const existing = (existingByStableId.get(stableId) ?? []).find(row => row.child_id === childId);
+    const level = effectiveLevel({
+      perm: existing?.perm ?? PIPELINE_DEFAULT_PERM,
+      status: existing?.status ?? PIPELINE_DEFAULT_STATUS,
+    });
+    return storageTarget(level, clientId, 'originals', stableId, childId, ext).key;
+  }
+
+  function buildRecord(
+    stem: string,
+    absPath: string,
+    stableId: string,
+    childId: string,
+    extra: Record<string, unknown> = {},
+  ): Record<string, unknown> {
     const p = parseAssetForSupabase(stem, vocab);
     return {
       client_id:     clientId,
@@ -82,19 +107,34 @@ export async function planExport(input: PlanInput): Promise<ExportPlan> {
       perm:          PIPELINE_DEFAULT_PERM,
       thumbnail_url: cdnUrls?.get(absPath) ?? null,
       download_url:  originalUrls?.get(absPath) ?? null,
+      download_key:  originalObjectKey(absPath, stableId, childId),
       /* Page-preview counts for documents. Null for everything else, and stripped before an UPDATE
          (see stripAbsentUrls) so a run with thumbnails disabled cannot blank a count the portal is
          already rendering from. */
       preview_page_count: pageCounts?.get(absPath)?.rendered ?? null,
       preview_page_total: pageCounts?.get(absPath)?.total ?? null,
-      // cloudUrls carries its own composite destId:stem key — see runCloudExport.
-      download_urls: cloudUrls?.get(stem) ?? [],
+      download_urls: cloudUrls?.get(assetIdentityKey(stableId, childId)) ?? [],
       ...extra,
     };
   }
 
   const manifests: ManifestStates = new Map();
   const manifestState = (packageDir: string, stableId: string) => getManifestState(manifests, packageDir, stableId);
+
+  /* Resolve every physical file before deciding which row is primary or allocating synthetic
+     gallery-parent slots. CDN planning feeds the same files through the same resolver and sort,
+     so scan order and planner order cannot assign different child ids. */
+  const identityFiles: IdentityFile[] = [
+    ...stableSingles.map(({ packageDir, stableId, absPath }) => ({ packageDir, stableId, absPath })),
+    ...stableGalleries.flatMap(({ group, packageDir, stableId }) =>
+      group.children.map(({ absPath }) => ({ packageDir, stableId, absPath }))),
+  ];
+  const identityByPath = await resolveIdentityFiles(manifests, identityFiles);
+  const identityFor = (absPath: string) => {
+    const identity = identityByPath.get(absPath);
+    if (!identity) throw new Error(`Identity resolution produced no child id for "${absPath}"`);
+    return identity;
+  };
 
   const currentStableKeys = new Set<string>();
   const parentWrites: ParentWrite[] = [];
@@ -109,9 +149,9 @@ export async function planExport(input: PlanInput): Promise<ExportPlan> {
     (singlesByDir.get(packageDir) ?? singlesByDir.set(packageDir, []).get(packageDir)!).push({ stem, absPath, stableId });
   }
 
-    for (const [packageDir, items] of singlesByDir) {
+    for (const [packageDir, unorderedItems] of singlesByDir) {
+      const items = [...unorderedItems].sort((a, b) => compareIdentityPaths(a.absPath, b.absPath));
       const stableId = items[0].stableId;
-      const state    = await manifestState(packageDir, stableId);
 
       // Multiple files that differ only by trailing version (v1-2-1, v1-3-3, v1-3-5, ...)
       // are version history of ONE asset, not variants — collapse to the highest. Older
@@ -129,18 +169,19 @@ export async function planExport(input: PlanInput): Promise<ExportPlan> {
         return true;
       });
 
-      // Deterministic order for brand-new manifests (no prior child_id yet) — matches
-      // migrate-identity.ts's alphabetical assignment so a fresh folder's primary is stable.
-      const ordered  = [...deduped].sort((a, b) => a.stem.localeCompare(b.stem));
+      // `items` was sorted before duplicate stems were collapsed, so extension variants always
+      // choose the same physical file as the CDN resolver's directory-scoped thumbnail identity.
+      const ordered  = deduped;
 
       const resolvedItems: Array<{ stem: string; childId: string; record: Record<string, unknown> }> = [];
       for (const { stem, absPath } of ordered) {
-        const filename = absPath.split('/').pop()!;
-        const resolved = await resolveChildId(state.manifest, filename, absPath, state.used);
-        if (resolved.dirty) { state.manifest.children[filename] = { child_id: resolved.childId, sha256: resolved.sha256 }; state.dirty = true; }
+        const resolved = identityFor(absPath);
 
         const key    = `${stableId}:${resolved.childId}`;
-        const record = buildRecord(stem, absPath, { stable_id: stableId, child_id: resolved.childId });
+        const record = buildRecord(
+          stem, absPath, stableId, resolved.childId,
+          { stable_id: stableId, child_id: resolved.childId },
+        );
         currentStableKeys.add(key);
         resolvedItems.push({ stem, childId: resolved.childId, record });
       }
@@ -180,7 +221,7 @@ export async function planExport(input: PlanInput): Promise<ExportPlan> {
 
       parentWrites.push({ key: primaryKey, record: primary.record });
       readmeTargets.push({
-        packageDir, stableId, stem: primary.stem,
+        packageDir, stableId, primaryKey, stem: primary.stem,
         perm:   primary.record.perm   as string,
         status: primary.record.status as string,
       });
@@ -214,14 +255,23 @@ export async function planExport(input: PlanInput): Promise<ExportPlan> {
 
     for (const [, packageGalleries] of galleriesByPackage) {
       const pathsInPackage = new Set(packageGalleries.map(g => g.group.name));
-      for (const { group, packageDir, stableId } of packageGalleries) {
+      for (const { group, packageDir, stableId } of [...packageGalleries]
+        .sort((a, b) => compareIdentityPaths(a.group.name, b.group.name))) {
       const state = await manifestState(packageDir, stableId);
       const parentChildId = resolveGalleryParentChildId(state, group.name, pathsInPackage);
 
-      const firstChild             = group.children[0] ?? null;
+      const orderedChildren        = [...group.children]
+        .sort((a, b) => compareIdentityPaths(a.absPath, b.absPath));
+      const firstChild             = orderedChildren[0] ?? null;
       const firstChildThumb        = firstChild ? (cdnUrls?.get(firstChild.absPath) ?? null) : null;
       const firstChildOriginalUrl  = firstChild ? (originalUrls?.get(firstChild.absPath) ?? null) : null;
-      const firstChildCloudUrls    = firstChild ? (cloudUrls?.get(firstChild.stem) ?? []) : [];
+      const firstChildIdentity     = firstChild ? identityFor(firstChild.absPath) : null;
+      const firstChildOriginalKey  = firstChild && firstChildIdentity
+        ? originalObjectKey(firstChild.absPath, stableId, firstChildIdentity.childId)
+        : null;
+      const firstChildCloudUrls    = firstChildIdentity
+        ? (cloudUrls?.get(assetIdentityKey(stableId, firstChildIdentity.childId)) ?? [])
+        : [];
       // Nested gallery paths (Galleries/Selected) — parse the leaf folder for tags/name.
       const leafFolder = group.name.includes('/') ? group.name.slice(group.name.lastIndexOf('/') + 1) : group.name;
       const pp         = parseAssetForSupabase(leafFolder, vocab);
@@ -248,19 +298,18 @@ export async function planExport(input: PlanInput): Promise<ExportPlan> {
         version: pp.version || pkg?.version || '1-0-0',
         status: PIPELINE_DEFAULT_STATUS, perm: PIPELINE_DEFAULT_PERM,
         thumbnail_url: firstChildThumb,
-        download_url: firstChildOriginalUrl, download_urls: firstChildCloudUrls,
+        download_url: firstChildOriginalUrl, download_key: firstChildOriginalKey,
+        download_urls: firstChildCloudUrls,
       };
       readmeTargets.push({
-        packageDir, stableId, stem: group.name,
+        packageDir, stableId, primaryKey: parentKey, stem: group.name,
         perm: galleryParentRecord.perm, status: galleryParentRecord.status,
       });
       parentWrites.push({ key: parentKey, record: galleryParentRecord });
 
-      for (const child of group.children) {
+      for (const child of orderedChildren) {
         const absPath  = child.absPath;
-        const filename = absPath.split('/').pop()!;
-        const resolved = await resolveChildId(state.manifest, filename, absPath, state.used);
-        if (resolved.dirty) { state.manifest.children[filename] = { child_id: resolved.childId, sha256: resolved.sha256 }; state.dirty = true; }
+        const resolved = identityFor(absPath);
 
         const fileStem = child.stem;
         const cp      = parseAssetForSupabase(fileStem, vocab);
@@ -279,7 +328,8 @@ export async function planExport(input: PlanInput): Promise<ExportPlan> {
             status: PIPELINE_DEFAULT_STATUS, perm: PIPELINE_DEFAULT_PERM,
             thumbnail_url: cdnUrls?.get(absPath) ?? null,
             download_url: originalUrls?.get(absPath) ?? null,
-            download_urls: cloudUrls?.get(fileStem) ?? [],
+            download_key: originalObjectKey(absPath, stableId, resolved.childId),
+            download_urls: cloudUrls?.get(assetIdentityKey(stableId, resolved.childId)) ?? [],
           },
         });
       }
@@ -291,8 +341,15 @@ export async function planExport(input: PlanInput): Promise<ExportPlan> {
   // write never loses an id the next run would re-mint differently.
   for (const [dir, state] of manifests) {
     if (!state.dirty) continue;
+    if (dryRun) {
+      appendLog('dim', `  [DRY] would update identity manifest for "${dir}"`);
+      continue;
+    }
     try { await writeManifest(dir, state.manifest); }
-    catch (e) { appendLog('error', `  ✕  Manifest write failed for "${dir}": ${e}`); }
+    catch (e) {
+      appendLog('error', `  ✕  Manifest write failed for "${dir}": ${e}`);
+      throw e;
+    }
   }
 
   return { parentWrites, childWrites, readmeTargets, currentStableKeys };

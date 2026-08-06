@@ -121,11 +121,26 @@ invisible to both: narrowing a deck from `client` to `internal` moved its thumbn
 readable under the old `client/` prefix. Both now additionally LIST each of the four level prefixes for
 the asset's page directory.
 
-One deliberate asymmetry. For a thumbnail the source object is **left in place** — its URL column has
-been repointed, so nothing references the old object and leaving it is recoverable. For a page the
-source is **deleted as part of the move**, because there is no column to repoint: the old object would
-sit at a wider level, reachable by anyone holding a cookie for that level. Orphaned is not the same as
-unreachable.
+One deliberate asymmetry. For a thumbnail or original the reconciler **leaves the source in place** —
+its URL column has been repointed, so the move remains recoverable. The next desktop upload that
+touches that identity confirms the current target and then prunes its thumbnail and original from all
+other levels, unless another live row still references the key. For a page the source is **deleted as
+part of the move**, because there is no column to repoint: the old object would sit at a wider level,
+reachable by anyone holding a cookie for that level. Orphaned is not the same as unreachable.
+
+The desktop sweep is deliberately per-asset. It cannot find bytes for a row hard-deleted outside the
+normal flow or for a client whose desktop never runs again. The manual bucket-wide collector closes
+that residue with the parent R2 credential:
+
+```bash
+node scripts/gc-cdn-objects.mjs --env staging                 # report only
+node scripts/gc-cdn-objects.mjs --env staging --execute       # report, confirm, delete
+```
+
+It lists both buckets, protects every canonical and stored row reference plus non-asset namespaces,
+and writes the complete plan before deletion. It is not part of the desktop sweep and never touches
+Cloudflare Stream. See [CDN garbage collection](/operations/cdn-garbage-collection) for the report,
+flags, confirmations, and safety rails.
 
 **A trigger, not a call from the portal**, because the portal is not the only writer — and the two
 it cannot see are the ones most easily forgotten: the gallery-inheritance cascade rewrites
@@ -285,6 +300,7 @@ the URL — the leaked-URL case that re-keying cannot address anyway.
 | the move queue and its trigger | `supabase/migrations/20260802090000_cdn_move_queue.sql` |
 | the reconciler | `supabase/functions/cdn-reconcile/` |
 | bulk re-key | `scripts/rekey-gated-objects.mjs` |
+| bucket-wide garbage collection | [CDN garbage collection](/operations/cdn-garbage-collection) |
 | rolling out a new environment | [Gated delivery rollout](/operations/gated-delivery-rollout) |
 | what is exposed today | `supabase/audit/perm_exposure.sql` |
 | families whose levels disagree | `supabase/audit/perm_family_mismatch.sql` |
@@ -292,7 +308,7 @@ the URL — the leaked-URL case that re-keying cannot address anyway.
 Four programs must agree on the key shape: the pipeline writes keys, the reconciler and the re-key
 script move them, and the Worker parses them back to decide access. **All four import
 `assetStorage.ts`** — including the Worker, since `workers/cdn-gate` is an npm workspace member and
-wrangler resolves `@dc-hub/domain` through it at bundle time.
+wrangler resolves `@sotto/domain` through it at bundle time.
 
 That was not always true. The Worker carried its own copy of the parser on the assumption that a
 separate deployment could not share code, and `parseObjectPath` exists as one function because that

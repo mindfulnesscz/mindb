@@ -1,6 +1,6 @@
 # Cloud integration security
 
-> **Current residual risk:** provider OAuth tokens (and Google client secret where used) remain in machine-local client configuration. Supabase user authentication, secret-free exports, and R2 grants are **already shipped** — permanent service-role and parent R2 keys do not belong on the desktop. See [Auth & secrets roadmap](/desktop/authentication-plan).
+> Provider OAuth tokens (and the Google client secret where used) persist in the workstation's OS keychain. Supabase user authentication, secret-free exports, and R2 grants are **already shipped** — permanent service-role and parent R2 keys do not belong on the desktop. See [Auth & secrets roadmap](/desktop/authentication-plan).
 
 ## Two tiers of delivery
 
@@ -13,11 +13,16 @@ Two things this does not change. A URL that was already public **stays fetchable
 
 ## Local secrets today
 
-Expect only **OAuth tokens** (and optional Google client secret) in local config. Restrict OS account access, disk backups, logs, and screenshots. Never put a service-role key or parent R2 secret in web env vars or the desktop. Client export bundles are secret-free (`_version: 2.0`); importing an older bundle strips any credential fields it still carries and warns to rotate them.
+Provider **OAuth tokens** (and the optional Google client secret) use the OS credential store, not `client-local.json`. They are still available to the signed-in OS account and present in application memory during use, so restrict account access, logs, and screenshots. Old configuration backups may predate the automatic keychain migration and should be removed or protected. Never put a service-role key or parent R2 secret in web env vars or the desktop. Client export bundles are secret-free (`_version: 2.0`); importing an older bundle strips any credential fields it still carries and warns to rotate them.
 
 ## Temporary grants
 
-Pipeline CDN uploads use short-lived credentials from `r2-grant` (role + client scope). Branding uploads use `r2-branding-upload` (admin only). Failures when unprovisioned are explicit 503s — they do not fall back to embedding permanent keys.
+Pipeline CDN uploads use short-lived credentials from `r2-grant` after role and client-membership
+checks. The returned credentials are also object-key scoped by Cloudflare: `{client_id}/` in the
+public bucket and the three gated level namespaces for that same client in the gated bucket. This is
+the storage-layer boundary that prevents a credential issued for client A from reading, overwriting,
+or deleting client B's objects. Branding uploads use `r2-branding-upload` (admin only). Failures when
+unprovisioned are explicit 503s — they do not fall back to embedding permanent keys.
 
 ## Operator habits
 

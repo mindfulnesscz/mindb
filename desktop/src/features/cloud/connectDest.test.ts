@@ -161,7 +161,7 @@ describe('connectDestination — the OneDrive device-code wait', () => {
     await connectDestination(onedrive, { signal: signal() });
 
     expect(cloud.startOneDriveDeviceCode).toHaveBeenCalledWith('od-app', 'tenant-1');
-    expect(cloud.pollOneDriveToken).toHaveBeenCalledWith('od-app', 'tenant-1', 'dev-code', 5, expect.anything());
+    expect(cloud.pollOneDriveToken).toHaveBeenCalledWith('od-app', 'tenant-1', 'dev-code', expect.anything());
   });
 });
 

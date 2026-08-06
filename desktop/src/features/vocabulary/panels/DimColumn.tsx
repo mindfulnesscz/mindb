@@ -6,7 +6,7 @@
  */
 
 import { ChevronRight, Pencil, Trash2, Check, Plus } from 'lucide-react';
-import { parentGroupsForSlot, type Slot, type VocabTag } from '@dc-hub/domain';
+import { parentGroupsForSlot, type Slot, type VocabTag } from '@sotto/domain';
 import { useVocabularyStore } from '../../../store/vocabularyStore';
 import css from '../VocabularyView.module.css';
 

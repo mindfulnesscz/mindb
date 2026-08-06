@@ -2,15 +2,14 @@
  *
  * Rendering itself is in Rust; this stage only decides what needs doing. Two paths:
  *
- *   rasters    `generate_thumbnail`. A stat decides — existence is the whole cache, so re-runs are
- *              cheap and a present thumbnail is never questioned.
+ *   rasters    `generate_thumbnail`. Rust compares the recorded source size+mtime and render
+ *              settings before returning `cached`; existence alone is never treated as current.
  *   documents  `generate_document_previews`. Title thumbnail AND page previews from ONE LibreOffice
  *              conversion. Deliberately NOT pre-filtered by a stat: currency depends on the
  *              source's mtime/size, the page limit and the output settings, and a directory listing
  *              sees none of those. Rust owns that call via pages.json and reports `cached` back.
  */
 
-import { stat } from '@tauri-apps/plugin-fs';
 import { invoke } from '@tauri-apps/api/core';
 import type { RunContext, RunStats } from './types';
 import { THUMB_EXTS, PAGE_PREVIEW_EXTS, extensionOf, DEFAULT_PREVIEW_PAGE_LIMIT } from './naming';
@@ -43,6 +42,12 @@ export async function runThumbnails(ctx: RunContext, stats: RunStats): Promise<v
     return;
   }
 
+  if (settings.dryRun) {
+    appendLog('dim', `  [DRY] would generate thumbnails/previews for ${files.length} file(s)`);
+    stats.thumbnails += files.length;
+    return;
+  }
+
   appendLog('info', `  Found ${files.length} file(s) — checking for existing thumbnails…`);
 
   /* Documents get per-page previews as well as a title thumbnail, and BOTH come out of one Rust
@@ -54,33 +59,26 @@ export async function runThumbnails(ctx: RunContext, stats: RunStats): Promise<v
      source's mtime/size, the page limit and the output settings, none of which a directory listing
      can see. Rust owns that decision via pages.json and reports `cached` back. */
   type FileJob = { srcFile: string; fileName: string; destFile: string; pagesDir?: string };
-  const needsRegen: FileJob[] = [];
+  const rasterJobs: FileJob[] = [];
   const docJobs: FileJob[] = [];
-  let preSkipped = 0;
 
-  const STAT_CONCURRENCY = 16;
-  for (let i = 0; i < files.length; i += STAT_CONCURRENCY) {
-    const batch = files.slice(i, i + STAT_CONCURRENCY);
-    await Promise.all(batch.map(async srcFile => {
-      const fileName = srcFile.split('/').pop()!;
-      const dotIdx   = fileName.lastIndexOf('.');
-      const stem     = dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName;
-      const dir      = srcFile.slice(0, srcFile.lastIndexOf('/') + 1);
-      const destFile = dir + stem + '-thumb.webp';
+  for (const srcFile of files) {
+    if (ctx.isStopping?.()) return;
+    const fileName = srcFile.split('/').pop()!;
+    const dotIdx   = fileName.lastIndexOf('.');
+    const stem     = dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName;
+    const dir      = srcFile.slice(0, srcFile.lastIndexOf('/') + 1);
+    const destFile = dir + stem + '-thumb.webp';
 
-      if (PAGE_PREVIEW_EXTS.has(extensionOf(fileName))) {
-        // The previews folder shares the thumbnail's `-thumb` stem, which is what keeps it out of
-        // every walker and every package (see isPreviewArtifact).
-        docJobs.push({ srcFile, fileName, destFile, pagesDir: dir + stem + '-thumb' });
-        return;
-      }
-      try {
-        await stat(destFile);   // throws if not found → goes to needsRegen
-        preSkipped += 1;
-      } catch {
-        needsRegen.push({ srcFile, fileName, destFile });
-      }
-    }));
+    if (PAGE_PREVIEW_EXTS.has(extensionOf(fileName))) {
+      // The previews folder shares the thumbnail's `-thumb` stem, which is what keeps it out of
+      // every walker and every package (see isPreviewArtifact).
+      docJobs.push({ srcFile, fileName, destFile, pagesDir: dir + stem + '-thumb' });
+    } else {
+      // The native command owns the source fingerprint and render-settings cache. Calling it for
+      // an existing thumbnail is cheap and is what lets it detect restored/changed source bytes.
+      rasterJobs.push({ srcFile, fileName, destFile });
+    }
   }
 
   // Show exact paths for first file so path computation can be verified in the log
@@ -92,15 +90,16 @@ export async function runThumbnails(ctx: RunContext, stats: RunStats): Promise<v
     appendLog('dim', `  dest[0]: ${d0}`);
   }
   appendLog('dim',
-    `  Pre-filter: ${preSkipped} exist · ${needsRegen.length} to generate · ${docJobs.length} document(s)`);
+    `  Jobs: ${rasterJobs.length} raster(s) · ${docJobs.length} document(s)`);
 
   const total = files.length;
-  let done    = preSkipped;
+  let done    = 0;
   ctx.setProgress(Math.round((done / total) * 100));
 
   const CONCURRENCY = 8;
-  for (let i = 0; i < needsRegen.length; i += CONCURRENCY) {
-    const batch = needsRegen.slice(i, i + CONCURRENCY);
+  for (let i = 0; i < rasterJobs.length; i += CONCURRENCY) {
+    if (ctx.isStopping?.()) return;
+    const batch = rasterJobs.slice(i, i + CONCURRENCY);
     await Promise.all(batch.map(async ({ srcFile, fileName, destFile }) => {
       try {
         const result = await invoke<boolean>('generate_thumbnail', { src: srcFile, dest: destFile, width, quality });
@@ -108,7 +107,7 @@ export async function runThumbnails(ctx: RunContext, stats: RunStats): Promise<v
           appendLog('success', `  ✓  ${fileName}`);
           stats.thumbnails += 1;
         } else {
-          appendLog('dim', `  ↷  skipped (exists): ${fileName}`);
+          appendLog('dim', `  ↷  thumbnail current: ${fileName}`);
           stats.skipped += 1;
         }
       } catch (e) {
@@ -123,6 +122,7 @@ export async function runThumbnails(ctx: RunContext, stats: RunStats): Promise<v
      the rest of the pipeline — each call spawns exactly one render worker, and PDFium is only safe
      one-per-process (see render.rs). */
   for (let i = 0; i < docJobs.length; i += CONCURRENCY) {
+    if (ctx.isStopping?.()) return;
     const batch = docJobs.slice(i, i + CONCURRENCY);
     await Promise.all(batch.map(async ({ srcFile, fileName, destFile, pagesDir }) => {
       try {

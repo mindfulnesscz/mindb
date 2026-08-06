@@ -7,6 +7,7 @@
 import type { SupabaseConfig } from './rest';
 import { makeHeaders, sbFetch, fetchAllForClient } from './rest';
 import type { AssetStatsSnapshot } from '../readmeService';
+import { inspectCdnKeyReferences, type CdnReferenceRow } from './cdnReferences';
 
 export async function fetchExistingStableIds(
   clientId: string,
@@ -73,40 +74,61 @@ export async function fetchAssetStats(
   return result;
 }
 
+interface AssetStorageRow extends CdnReferenceRow {
+  effective_level: string;
+}
+
+export interface AssetStorageState {
+  levels: Map<string, string>;
+  references: Map<string, Set<string>> | null;
+}
+
 /**
- * `${stable_id}:${child_id}` → the asset's effective access level.
+ * Key-routing levels and the live rows that reference each CDN key, from one client-scoped read.
  *
- * The upload stages need this BEFORE they write, because the level is part of the object key and
- * decides which bucket the bytes go to. It cannot be derived locally: `perm` is portal-owned once
- * a row exists (see stripPortalOwnedFields), so the database is the only place that knows whether
- * an editor has promoted or locked down this asset since the last run.
+ * The upload stages need this before they write: the level is part of the key, and the reference
+ * index prevents deleting a shared key. Neither can be derived locally because portal rows own
+ * both values. A level absent from a successful read is a new asset and uses the create-time
+ * default; a failed read returns null so routing remains restrictive and pruning stops safely.
  *
- * A key that is absent from the map is a NEW asset, and the caller supplies the create-time
- * default rather than this function guessing — the two defaults would otherwise drift.
- *
- * Best-effort in the same sense as fetchAssetStats: a failure returns an empty map. The caller
- * then treats every asset as new, which sends everything to the create-time default of `client`.
- * That is the safe direction — the failure mode of a network blip is over-restriction, never
- * publishing a client's assets to the public bucket.
+ * `null` is deliberately distinct from an empty result. Empty means the client has no rows, while
+ * null means references are unknown and destructive orphan pruning must be skipped for this run.
  */
+export async function fetchAssetStorageState(
+  clientId: string,
+  config:   SupabaseConfig,
+): Promise<AssetStorageState | null> {
+  const base    = `${config.url}/rest/v1`;
+  const headers = await makeHeaders(config.anonKey);
+  try {
+    const rows = await fetchAllForClient<AssetStorageRow>(
+      base,
+      'assets?status=neq.archived',
+      clientId,
+      'stable_id,child_id,effective_level,thumbnail_url,download_url,download_key',
+      headers,
+    );
+    const levels = new Map<string, string>();
+    for (const r of rows) {
+      if (r.stable_id && r.child_id && r.effective_level) {
+        levels.set(`${r.stable_id}:${r.child_id}`, r.effective_level);
+      }
+    }
+    const referenceIndex = inspectCdnKeyReferences(rows);
+    return {
+      levels,
+      references: referenceIndex.complete ? referenceIndex.references : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchAssetLevels(
   clientId: string,
   config:   SupabaseConfig,
 ): Promise<Map<string, string>> {
-  const base    = `${config.url}/rest/v1`;
-  const headers = await makeHeaders(config.anonKey);
-  const out     = new Map<string, string>();
-  try {
-    const rows = await fetchAllForClient<{ stable_id: string; child_id: string; effective_level: string }>(
-      base, 'assets?status=neq.archived', clientId, 'stable_id,child_id,effective_level', headers,
-    );
-    for (const r of rows) {
-      if (r.stable_id && r.child_id && r.effective_level) {
-        out.set(`${r.stable_id}:${r.child_id}`, r.effective_level);
-      }
-    }
-  } catch { /* best-effort — see doc comment above */ }
-  return out;
+  return (await fetchAssetStorageState(clientId, config))?.levels ?? new Map<string, string>();
 }
 
 /**
@@ -166,4 +188,3 @@ export async function fetchVHForAssets(
   }
   return rows;
 }
-

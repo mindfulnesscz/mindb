@@ -13,7 +13,9 @@
  * only observable effect is that later `<img>` and download requests to the gate succeed.
  */
 
+import { SESSION_INVALID } from '@sotto/domain'
 import { reportError } from '../lib/reportError'
+import { reportSessionEnded } from '../lib/edgeFunction'
 
 export interface CdnGrant {
   /** Highest level this session may fetch: guest | client | internal. */
@@ -71,6 +73,15 @@ export function refreshDelayMs(expiresAt: number, now: number = Date.now()): num
   return Math.min(Math.max(remaining * 0.75, 30_000), 30 * 60_000)
 }
 
+/** The gate's own `code` from a refusal body, or null when it did not send one. */
+function refusalCode(body: string): string | null {
+  try {
+    return (JSON.parse(body) as { code?: string }).code ?? null
+  } catch {
+    return null
+  }
+}
+
 /**
  * Trade a Supabase access token for the cookie. `credentials: 'include'` is required in both
  * directions — without it the browser discards the Set-Cookie, silently, and every subsequent
@@ -91,7 +102,14 @@ export async function requestCdnCookie(accessToken: string): Promise<CdnGrant | 
     if (!res.ok) {
       // 503 means the gate exists but is not provisioned — worth distinguishing in the log from a
       // refusal, because they are fixed in completely different places.
-      reportError('cdn.requestCdnCookie', new Error(`CDN gate ${res.status}: ${await res.text()}`))
+      const detail = await res.text()
+      /* A revoked session is the one refusal retrying cannot fix, and this is the caller that would
+         retry it hardest: useCdnCookie renews on a timer for as long as the tab is open, so without
+         this the operator sits on a wall of blank gated thumbnails indefinitely. The gate names the
+         case with the same code the edge functions use — see packages/domain/src/callerAuth.ts.
+         Parsed rather than substring-matched: the body may be a proxy's HTML on a bad day. */
+      if (refusalCode(detail) === SESSION_INVALID) reportSessionEnded()
+      reportError('cdn.requestCdnCookie', new Error(`CDN gate ${res.status}: ${detail}`))
       return null
     }
     return (await res.json()) as CdnGrant

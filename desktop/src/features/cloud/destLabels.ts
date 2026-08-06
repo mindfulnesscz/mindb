@@ -28,5 +28,5 @@ export function statusTitle(s: ReturnType<typeof tokenStatus>, token: CloudToken
 export function credHint(type: DestType): string {
   if (type === 'dropbox')  return 'PKCE redirect URI: http://localhost:7623/callback';
   if (type === 'onedrive') return 'Enable public client flows in Azure; use tenant id for single-tenant apps.';
-  return 'Add http://localhost:7623/callback as an authorised redirect URI. Client secret stays on this machine.';
+  return 'Add http://localhost:7623/callback as an authorised redirect URI. Client secret is stored in the OS keychain.';
 }

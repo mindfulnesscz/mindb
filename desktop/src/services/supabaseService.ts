@@ -28,7 +28,6 @@
 
 export type { SupabaseConfig } from './supabase/rest';
 export { requestR2Grant, type R2Grant } from './supabase/r2Grant';
-export { processRenameTasks } from './supabase/renameTasks';
 
 /* ── Shared-ready: pure mapping rules ─────────────────────────────────────── */
 export { parseAssetForSupabase } from './supabase/rowMapping';
@@ -39,7 +38,8 @@ export { cdnStemKey, resolveCdnIdentity } from './supabase/identity';
 
 /* ── Queries ──────────────────────────────────────────────────────────────── */
 export {
-  fetchExistingStableIds, fetchAssetStats, fetchAssetLevels, fetchPreviewPageLimit,
+  fetchExistingStableIds, fetchAssetStats, fetchAssetLevels, fetchAssetStorageState,
+  fetchPreviewPageLimit,
 } from './supabase/assetQueries';
 export { reconcileCdnObjects } from './supabase/cdnReconcile';
 export { syncStreamVideos } from './supabase/streamSync';

@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useAuth, type OAuthProvider } from '../../context/AuthContext'
 import { OAUTH_PROVIDERS } from '../auth/SignInModal'
 import { DCMark } from './DCMark'
+import { getConfig } from '../../lib/supabase'
 
 type SignInStep = 'email' | 'checking' | 'error' | 'sending' | 'sent'
 
@@ -14,6 +15,7 @@ export function AdminSignIn() {
   const [error, setError] = useState('')
   const [oauthBusy, setOauthBusy] = useState<OAuthProvider | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const localDevelopment = /localhost|127\.0\.0\.1/i.test(getConfig().url)
 
   async function handleOAuth(provider: OAuthProvider) {
     setError(''); setOauthBusy(provider)
@@ -41,7 +43,7 @@ export function AdminSignIn() {
 
     const type = await checkEmail(trimmed)
     if (type !== 'staff') {
-      setError('This area is restricted to DC Hub administrators.')
+      setError('This area is restricted to Sotto administrators.')
       setStep('error')
       return
     }
@@ -60,7 +62,7 @@ export function AdminSignIn() {
         <div className="flex justify-center mb-4">
           <DCMark size="lg" />
         </div>
-        <h1 className="font-serif text-3xl font-medium text-cosmos-black mb-1">DC Hub</h1>
+        <h1 className="font-serif text-3xl font-medium text-cosmos-black mb-1">Sotto</h1>
         <p className="font-sans text-sm text-text-muted">Admin access only</p>
       </div>
 
@@ -71,7 +73,9 @@ export function AdminSignIn() {
             <p className="font-sans text-sm text-text-muted mb-1">
               We sent a magic link to <span className="font-mono text-cosmos-black">{email}</span>
             </p>
-            <p className="text-[11px] font-sans text-text-subtle mb-4">Click the link to sign in. It expires in 1 hour.</p>
+            <p className="text-[11px] font-sans text-text-subtle mb-4">
+              Open the link, then select Continue to sign in. It expires in 1 hour.
+            </p>
             <button
               onClick={() => { setStep('email'); setEmail(''); setError('') }}
               className="text-[11px] font-sans text-text-muted hover:text-cosmos-black underline transition-colors"
@@ -120,6 +124,12 @@ export function AdminSignIn() {
               >
                 {busy ? 'Checking…' : 'Continue with email'}
               </button>
+              {localDevelopment && (
+                <p className="text-[11px] font-sans text-text-muted leading-relaxed">
+                  Local development: use <span className="font-mono text-cosmos-black">admin@acme.test</span>,
+                  then open <a className="underline" href="http://localhost:54324" target="_blank" rel="noreferrer">Mailpit</a> for the sign-in link.
+                </p>
+              )}
             </form>
           </div>
         )}
@@ -127,4 +137,3 @@ export function AdminSignIn() {
     </div>
   )
 }
-

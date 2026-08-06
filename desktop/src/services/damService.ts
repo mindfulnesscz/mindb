@@ -18,7 +18,9 @@ import { writeTextFile, readTextFile, copyFile, mkdir, rename, remove } from '@t
 import { join } from '@tauri-apps/api/path';
 import type { RunStats } from '../store/pipelineStore';
 import type { RunContext } from './pipeline/types';
-import { buildVocabMap, parseFilename, buildNoteName, translateExportName } from '@dc-hub/domain';
+import {
+  assetIdentityKey, buildVocabMap, parseFilename, buildNoteName, translateExportName,
+} from '@sotto/domain';
 import { pathParts, safeName, isPublishable } from './dam/paths';
 import { listDir, fileExists, isUnchanged, shouldSkip } from './dam/fs';
 import { findPackageAnchors } from './dam/scope';
@@ -41,6 +43,11 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
 
   appendLog('section', '━━━ DAM / OBSIDIAN ━━━');
   appendLog('dim', `  → ${settings.vaultFolder}`);
+
+  if (settings.dryRun) {
+    appendLog('dim', '  [DRY] would rebuild DAM notes, attachments, and canvases');
+    return;
+  }
 
   const vocabMap = buildVocabMap(vocab);
   const damFolder = await join(settings.vaultFolder, '05 DAM');
@@ -72,6 +79,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
   const noteBases     = new Set<string>(); // one canvas per scope anchor
 
   for (let idx = 0; idx < outDirs.length; idx++) {
+    if (ctx.isStopping?.()) return;
     const { outPath, isOrphan, noteBase, projRel, clusterKey, sortKey } = outDirs[idx];
     noteBases.add(noteBase);
     appendLog('info', `  📁 ${projRel || '(root)'} → ${noteBase.split('/').pop()}`);
@@ -94,6 +102,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
 
     // ── Gallery notes ─────────────────────────────────────────────────────
     for (const gName of galleryNames) {
+      if (ctx.isStopping?.()) return;
       const gPath      = await join(outPath, gName);
       const gParsed    = parseFilename(gName, vocabMap);
       const title      = buildNoteName(gParsed);
@@ -164,6 +173,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
     }
 
     for (const file of assetFiles) {
+      if (ctx.isStopping?.()) return;
       const stem       = file.name.includes('.') ? file.name.slice(0, file.name.lastIndexOf('.')) : file.name;
       const ext        = file.name.includes('.') ? file.name.slice(file.name.lastIndexOf('.')) : '';
       const parsed     = parseFilename(stem, vocabMap);
@@ -173,7 +183,11 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
       const noteFileName = `${icon ? icon + ' ' : ''}${safe}.md`;
       const notePath     = await join(noteDir, noteFileName);
       const exportName   = translateExportName(stem, ext, vocabMap);
-      const stemCloudUrls = ctx.cloudUrls?.get(stem);
+      const assetPath    = await join(outPath, file.name);
+      const identity     = ctx.cdnIdentity?.get(assetPath);
+      const assetCloudUrls = identity
+        ? ctx.cloudUrls?.get(assetIdentityKey(identity.stableId, identity.childId))
+        : undefined;
 
       liveNotePaths.add(notePath);
       noteSourceMap.set(notePath, [clusterKey, sortKey]);
@@ -194,7 +208,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
       if (await fileExists(notePath)) {
         try {
           const existing = await readTextFile(notePath);
-          const { content: patched, changed } = patchMeta(existing, parsed, projRel, thumbName, outPath, stemCloudUrls);
+          const { content: patched, changed } = patchMeta(existing, parsed, projRel, thumbName, outPath, assetCloudUrls);
           if (changed) {
             await writeTextFile(notePath, patched);
             appendLog('success', `    ↑  updated: ${noteFileName}`);
@@ -208,7 +222,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
         }
       } else {
         try {
-          await writeTextFile(notePath, makeNote(parsed, file.name, projRel, exportName, thumbName, outPath, stemCloudUrls));
+          await writeTextFile(notePath, makeNote(parsed, file.name, projRel, exportName, thumbName, outPath, assetCloudUrls));
           appendLog('success', `    ✓  note: ${noteFileName}`);
           stats.notes += 1;
         } catch (e) {
@@ -343,4 +357,3 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
     `━━━ OBSIDIAN DONE — ${stats.notes} notes · ${stats.disconnected} disconnected · ${stats.errors} errors ━━━`
   );
 }
-

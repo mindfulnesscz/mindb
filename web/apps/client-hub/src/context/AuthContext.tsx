@@ -7,13 +7,14 @@ import {
   signOut as signOutCore,
   type EmailAuthType,
   type OAuthProvider,
-} from '@dc-hub/auth'
+} from '@sotto/auth'
 import { supabase, isConfigured, getConfig } from '../lib/supabase'
 import { configureErrorSink } from '../lib/reportError'
+import { configureSessionEndedHandler } from '../lib/edgeFunction'
 import { useCdnCookie } from '../hooks/useCdnCookie'
-import type { ProfileRow } from '@dc-hub/database'
+import type { ProfileRow } from '@sotto/database'
 
-// Auth logic + types now live in the shared @dc-hub/auth package. Re-export the
+// Auth logic + types now live in the shared @sotto/auth package. Re-export the
 // types so existing importers (e.g. SignInModal) keep resolving them from here.
 export type { EmailAuthType, OAuthProvider }
 
@@ -22,7 +23,7 @@ interface AuthContextValue {
   profile: ProfileRow | null
   loading: boolean
   checkEmail: (email: string) => Promise<EmailAuthType>
-  sendMagicLink: (email: string, userData?: Record<string, string>, redirectTo?: string, clientId?: string) => Promise<string | null>
+  sendMagicLink: (email: string, userData?: Record<string, string>, redirectTo?: string) => Promise<string | null>
   signInWithProvider: (provider: OAuthProvider, redirectTo?: string) => Promise<string | null>
   completeProfile: (fields: { name: string; company: string; country: string; industry: string }) => Promise<string | null>
   signOut: () => Promise<void>
@@ -76,6 +77,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe()
   }, [])
 
+  /* A revoked session is invisible from here: the access token still passes signature checks, so
+     reads keep working and nothing in this provider ever learns the session row is gone. The edge
+     functions do learn it, and say so — this is what turns that answer into a sign-out instead of a
+     portal that shows a signed-in header above "your session is no longer valid".
+
+     Local scope on purpose: the server-side session no longer exists, so a global sign-out is a
+     POST with a dead token that fails and leaves the stale token sitting in storage. */
+  useEffect(() => {
+    const client = supabase
+    if (!client) return
+    configureSessionEndedHandler(() => { void client.auth.signOut({ scope: 'local' }) })
+    return () => configureSessionEndedHandler(null)
+  }, [])
+
   async function fetchProfile(userId: string) {
     if (!supabase) return
     // maybeSingle: no profile row is a normal state (stale session, invite not completed).
@@ -99,13 +114,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     email: string,
     userData?: Record<string, string>,
     redirectTo?: string,
-    clientId?: string,
   ): Promise<string | null> {
     if (!supabase) return 'Supabase not configured'
     try {
       await sendMagicLinkCore(supabase, email, {
         emailRedirectTo: redirectTo ?? window.location.origin,
-        data: { ...userData, ...(clientId ? { client_id: clientId } : {}) },
+        // Profile fields are descriptive only. Tenant access comes from the server-controlled
+        // domain allow-list or a later admin assignment, never caller-supplied signup metadata.
+        data: userData,
       })
       return null
     } catch (e) {

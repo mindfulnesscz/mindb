@@ -11,8 +11,8 @@ import {
   DEFAULT_PREVIEW_PAGE_LIMIT, MAX_PREVIEW_PAGE_LIMIT,
 } from './clientForm'
 import { assignableRoles, ROLE_OPTIONS, ROLE_LABELS } from './roles'
-import type { Client } from '@dc-hub/asset-library'
-import { DEFAULT_DIMENSION_LABELS } from '@dc-hub/database'
+import type { Client } from '@sotto/asset-library'
+import { DEFAULT_DIMENSION_LABELS } from '@sotto/database'
 
 describe('getInitials', () => {
   it('takes the first letter of the first two words, uppercased', () => {

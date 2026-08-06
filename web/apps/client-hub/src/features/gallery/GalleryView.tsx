@@ -8,10 +8,10 @@
  * round trip, and Back leaves the portal instead of doing nothing.
  */
 
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { useNavigate, useLocation, useParams } from 'react-router-dom'
 import { useRole } from '../../context/RoleContext'
-import { getDefaultFilters, type Asset } from '@dc-hub/asset-library'
+import { getDefaultFilters, type Asset } from '@sotto/asset-library'
 import { useFilterParams } from '../../hooks/useFilterParams'
 import { useAssets } from '../../hooks/useAssets'
 import { useTags, type TagsByDimension } from '../../hooks/useTags'
@@ -25,7 +25,7 @@ import { useOpenAsset } from './hooks/useOpenAsset'
 import { FiltersRail } from './FiltersRail'
 import { useStreamMedia } from './hooks/useStreamMedia'
 import { STATUS_KEYS_STAFF, STATUS_KEYS_CLIENT } from './statusLabels'
-import { DEFAULT_DIMENSION_LABELS } from '@dc-hub/database'
+import { DEFAULT_DIMENSION_LABELS } from '@sotto/database'
 
 /** How long typing has to stop before the search reaches the URL. */
 const SEARCH_DEBOUNCE_MS = 250
@@ -57,13 +57,28 @@ export default function GalleryView() {
      history-replace per pause rather than one per keystroke. It is not only about history noise:
      writing per keystroke re-parses the URL into a new FilterState mid-word, the input re-renders
      from it, and the caret jumps. The draft is adopted back whenever the URL's search changes from
-     anywhere else — a cold load, Back, or Clear. */
+     anywhere else — a cold load, Back, or Clear.
+
+     A self-originated navigation is different. Its router update may be acknowledged after the
+     viewer has typed something newer; adopting that older value would erase the new draft. Remember
+     the canonical value sent to the URL so its acknowledgement can be ignored once. */
   const [searchDraft, setSearchDraft] = useState(filters.search)
-  useEffect(() => { setSearchDraft(filters.search) }, [filters.search])
+  const pendingSearch = useRef<string | null>(null)
+  useEffect(() => {
+    if (pendingSearch.current === filters.search) {
+      pendingSearch.current = null
+      return
+    }
+    pendingSearch.current = null
+    setSearchDraft(filters.search)
+  }, [filters.search])
   useEffect(() => {
     if (searchDraft === filters.search) return
     const t = window.setTimeout(
-      () => setFilters(f => ({ ...f, search: searchDraft })),
+      () => {
+        pendingSearch.current = searchDraft.trim()
+        setFilters(f => ({ ...f, search: searchDraft }))
+      },
       SEARCH_DEBOUNCE_MS,
     )
     return () => window.clearTimeout(t)
@@ -277,4 +292,3 @@ export default function GalleryView() {
     </div>
   )
 }
-

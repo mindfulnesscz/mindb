@@ -7,9 +7,12 @@
  * a provider metadata round-trip.
  */
 
+import { invoke } from '@tauri-apps/api/core';
 import { stat, readFile, readTextFile, writeTextFile, exists } from '@tauri-apps/plugin-fs';
 import { join, appDataDir } from '@tauri-apps/api/path';
-import { buildVocabMap, translateExportName, stripWorkflowPrefix } from '@dc-hub/domain';
+import {
+  assetIdentityKey, buildVocabMap, translateExportName, stripWorkflowPrefix,
+} from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
 import { resolveExportShape } from '../../domain/client';
 import { uploadDropboxFile, uploadOneDriveFile, uploadGDriveFile } from '../cloudService';
@@ -102,8 +105,31 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
 
   const outFolder = settings.outFolder || 'OUT';
   const vocabMap = buildVocabMap(vocab);
-  const cloudCache = await loadCloudCache();
+  const cloudCache = settings.dryRun ? {} : await loadCloudCache();
   let cloudCacheDirty = false;
+
+  function recordCloudUrl(
+    srcPath: string,
+    nestedOverride: string | null,
+    dest: (typeof activeDests)[number],
+    url: string | null,
+  ): void {
+    // Nested package copies are alternate placements of an OUT asset. The portal link belongs to
+    // the primary OUT upload, whose physical path is present in the identity manifest map.
+    if (!url || !cloudUrls || dest.role !== 'client' || nestedOverride !== null) return;
+    const identity = ctx.cdnIdentity?.get(srcPath);
+    if (!identity) {
+      appendLog('warn', `  No manifest identity for ${srcPath} — sharing link not attached to an asset.`);
+      return;
+    }
+    const key = assetIdentityKey(identity.stableId, identity.childId);
+    const existing = cloudUrls.get(key) ?? [];
+    const index = existing.findIndex(entry => entry.destId === dest.id || entry.name === dest.name);
+    const entry = { destId: dest.id, provider: dest.config.type, name: dest.name, url };
+    if (index >= 0) existing[index] = entry;
+    else existing.push(entry);
+    cloudUrls.set(key, existing);
+  }
 
   // Default OUT-tree file list (used when dest layout is folders or flat).
   let outAssetPaths = collectedAssets ?? [];
@@ -174,6 +200,7 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
   appendLog('info', `  ${activeDests.length} destination(s)`);
 
   for (const dest of activeDests) {
+    if (ctx.isStopping?.()) return;
     const cfg = dest.config;
     if (cfg.type === 'local') continue;
 
@@ -200,6 +227,12 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
       continue;
     }
 
+    if (settings.dryRun) {
+      appendLog('dim', `  [DRY] would upload ${files.length} file(s) to ${dest.name}`);
+      stats.published += files.length;
+      continue;
+    }
+
     if (!dest.generateLink) {
       appendLog('info', `  → ${dest.name} (${cfg.type}) — uploading without link collection`);
     } else {
@@ -215,6 +248,7 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
     // Match CDN: high concurrency; cache hits stay silent (summary only).
     const CONCURRENCY = 8;
     for (let i = 0; i < files.length; i += CONCURRENCY) {
+      if (ctx.isStopping?.()) return;
       const batch = files.slice(i, i + CONCURRENCY);
       await Promise.all(batch.map(async ({ srcPath, stem, ext, relativeDir, nestedOverride }) => {
         const translated = nestedOverride
@@ -251,15 +285,7 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
             url = dest.generateLink ? (cacheEntry.url ?? null) : null;
             cached += 1;
             skipped += 1;
-            if (url && cloudUrls && dest.role === 'client') {
-              const mapKey = relativeDir ? `${relativeDir}/${stem}` : stem;
-              const existing = cloudUrls.get(mapKey) ?? cloudUrls.get(stem) ?? [];
-              const idx = existing.findIndex(e => e.destId === dest.id || e.name === dest.name);
-              const entry = { destId: dest.id, provider: cfg.type, name: dest.name, url };
-              if (idx >= 0) existing[idx] = entry; else existing.push(entry);
-              cloudUrls.set(mapKey, existing);
-              if (mapKey !== stem) cloudUrls.set(stem, existing);
-            }
+            recordCloudUrl(srcPath, nestedOverride, dest, url);
             return;
           }
 
@@ -300,11 +326,13 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
               cfg.token!.accessToken,
               srcInfo.size,
               () => readFile(srcPath),
+              () => invoke<string>('file_md5', { path: srcPath }),
               mimeFromExt(ext),
               gdriveFileName,
               gdriveFolderPath,
               dest.generateLink,
               cfg.sharedDriveId,
+              dest.id,
             );
             url = result.url;
             if (result.skipped) {
@@ -325,15 +353,7 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
           rememberCloudUpload(cloudCache, dest.id, nestedName, mtimeMs, srcInfo.size, url);
           cloudCacheDirty = true;
 
-          if (url && cloudUrls && dest.role === 'client') {
-            const mapKey = relativeDir ? `${relativeDir}/${stem}` : stem;
-            const existing = cloudUrls.get(mapKey) ?? cloudUrls.get(stem) ?? [];
-            const idx      = existing.findIndex(e => e.destId === dest.id || e.name === dest.name);
-            const entry    = { destId: dest.id, provider: cfg.type, name: dest.name, url };
-            if (idx >= 0) existing[idx] = entry; else existing.push(entry);
-            cloudUrls.set(mapKey, existing);
-            if (mapKey !== stem) cloudUrls.set(stem, existing);
-          }
+          recordCloudUrl(srcPath, nestedOverride, dest, url);
         } catch (e) {
           appendLog('error', `  ✕  ${nestedName}: ${e}`);
           errors += 1;
@@ -356,4 +376,3 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
 
   appendLog('section', `━━━ CLOUD EXPORT DONE — ${stats.published} uploaded · ${totalLinks} link(s) collected ━━━`);
 }
-

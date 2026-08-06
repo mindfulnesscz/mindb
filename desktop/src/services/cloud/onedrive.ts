@@ -37,7 +37,6 @@ export async function pollOneDriveToken(
   clientId:   string,
   tenantId:   string,
   deviceCode: string,
-  _intervalSecs: number,
   signal: { cancelled: boolean },
 ): Promise<CloudToken | null> {
   const result = await invoke<{ accessToken: string; refreshToken: string; expiresIn: number } | null>(
@@ -154,7 +153,7 @@ async function onedriveCreateLink(
 export async function uploadOneDriveFile(
   accessToken: string,
   bytes:        Uint8Array<ArrayBuffer>,
-  remotePath:   string,   // e.g. "DC Hub/ESS/file.pdf"
+  remotePath:   string,   // e.g. "Sotto/ESS/file.pdf"
   getLink:      boolean,
   driveId?:     string,   // SharePoint/OneDrive-for-Business drive; empty → /me/drive
 ): Promise<string | null> {
@@ -206,4 +205,3 @@ export async function uploadOneDriveFile(
   if (!getLink) return null;
   return onedriveCreateLink(driveBase, encodedPath, accessToken);
 }
-

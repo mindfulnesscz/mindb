@@ -1,8 +1,8 @@
 # Desktop authentication and secret-management plan
 
-> **Status (2026-07):** Phase 2 (desktop identity), DB-first clients, Phase 3 (no service-role; `r2-grant`), and secret-free exports are **shipped**. Client admin, logos, tags, and users live on the **web** ([Platform division](/getting-started/platform-division)). Storage is **environment-level** (`R2_BUCKET` / `R2_PUBLIC_DOMAIN` secrets — not `clients` row fields). Machine-local config (`client-local.json`) holds **folder paths and OAuth tokens** only.
+> **Status (2026-08):** Phase 1 provider-credential storage, Phase 2 (desktop identity), DB-first clients, Phase 3 (no service-role; `r2-grant`), and secret-free exports are **shipped**. Client admin, logos, tags, and users live on the **web** ([Platform division](/getting-started/platform-division)). Storage is **environment-level** (`R2_BUCKET` / `R2_PUBLIC_DOMAIN` secrets — not `clients` row fields). Machine-local config (`client-local.json`) is secret-free; provider tokens and the optional Google client secret use the OS keychain.
 >
-> **Still outstanding:** protected local storage for OAuth tokens (Phase 1 storage half); provider OAuth standardization (Phase 4). Fully local S3 sandbox is deferred. Hosted Auth must allowlist `http://localhost:7623/auth-callback`. Team day-to-day backend: [Team staging setup](/getting-started/team-dev-setup).
+> **Still outstanding:** provider OAuth standardization and shared-destination ownership (Phase 4). Fully local S3 sandbox is deferred. Hosted Auth must allowlist `http://localhost:7623/auth-callback`. Team day-to-day backend: [Team staging setup](/getting-started/team-dev-setup).
 
 ## Objective
 
@@ -16,12 +16,13 @@ The target rule is:
 
 Already removed from the desktop: Supabase service-role key, permanent R2 parent keys, secret-bearing client exports.
 
-Still machine-local in plain config:
+Provider credentials now persist in the OS keychain rather than plain configuration. They remain:
 
-- Dropbox / Google Drive / OneDrive access and refresh tokens;
-- Google Drive client secret where used.
+- readable by processes running as the signed-in OS account;
+- present in application memory while destinations are loaded or used;
+- potentially present in backups of `client-local.json` created before the keychain migration.
 
-Treat OS backups and shared accounts accordingly until protected storage lands.
+Delete or protect old backups, and rotate provider credentials after suspected exposure.
 
 ## Target architecture
 
@@ -50,20 +51,28 @@ The desktop is a public client. Even when installed on a trusted employee workst
 
 ## Planned desktop sign-in flow
 
-The desktop should reuse the web portal's email OTP/magic-link experience:
+The desktop reuses the web portal's email magic-link experience through Supabase's
+`signInWithOtp` API:
 
 1. Start in a signed-out screen before loading privileged client controls.
 2. Ask for the operator's email address.
 3. Call the existing `check_email_auth` RPC.
 4. Send a Supabase OTP/magic link using authorization code flow with PKCE.
-5. Open the verification link in the system browser.
-6. Return through a registered desktop deep link or loopback callback.
-7. Exchange the authorization code for a Supabase session.
+5. Open the inert `/auth/confirm` link in the system browser and wait for an explicit
+   **Continue signing in** click, so a mail scanner cannot spend the token.
+6. Let Supabase verify the token and return through the loopback callback at
+   `http://localhost:7623/auth-callback`.
+7. Exchange the authorization code for a Supabase session in the webview that holds the PKCE verifier.
 8. Load the same `profiles` row used by the web portal.
 9. Allow desktop operation only for approved roles and client assignments.
 10. Attach the short-lived Supabase access token to every Control API request.
 
-The initial role policy should permit `editor` and `admin`. If operators require narrower rights, introduce an explicit `operator` role rather than treating every authenticated member as a desktop publisher.
+The confirmation page is hosted by the web portal named in Auth's Site URL. Local desktop sign-in
+therefore requires the portal dev server at `http://localhost:5173`; hosted desktop sign-in requires
+the matching portal release and Magic Link template to be deployed first. See
+[Authentication → Scanner-safe confirmation](/auth#scanner-safe-confirmation).
+
+The desktop role policy permits `editor`, `admin`, and `super_admin`. If operators require narrower rights, introduce an explicit `operator` role rather than treating every authenticated member as a desktop publisher.
 
 Web and desktop may share authentication types, email classification, profile loading, and role-policy logic. Browser callback handling should remain platform-specific.
 
@@ -113,26 +122,26 @@ Prefer system-browser authorization code flow with PKCE for the normal desktop e
 
 ## Local secure storage
 
-Some per-user refresh/session tokens may need to survive locally. Move those values out of `clients.json` into Tauri Stronghold or an equivalent OS-protected credential store.
+Provider access and refresh tokens must survive locally without becoming ordinary files. Desktop uses the operating system credential store through the native Tauri backend.
 
 The split should be:
 
 ```text
-clients.json
-  client identity and branding
+client-local.json
   local paths
   destination type and remote path
   non-secret OAuth client IDs
-  bucket/public-domain identifiers
+  per-machine destination preferences
 
-secure local vault
-  Supabase refresh session
+OS credential store
   per-user Dropbox refresh token
   per-user Google refresh token
   per-user OneDrive refresh token
+  provider access tokens
+  optional Google client secret
 ```
 
-Protected local storage reduces accidental exposure through files and backups, but it does not turn the desktop into a trusted server. Service-role and parent R2 credentials must still be removed entirely.
+On first load of a legacy file, every inline provider credential is written to the OS keychain. The file is rewritten without credentials only after all keychain writes succeed; a failure leaves the old file intact and surfaces an error rather than losing access. Protected local storage reduces accidental exposure through files and backups, but it does not turn the desktop into a trusted server. Service-role and parent R2 credentials remain forbidden entirely.
 
 ## Export and import behavior
 
@@ -161,12 +170,12 @@ The feature should include:
 
 ### Phase 1 — Contain plaintext exposure
 
-- Strip secrets from client exports.
-- Detect and sanitize old secret-bearing imports.
-- Introduce protected local secret storage.
-- Migrate existing local tokens and remove them from `clients.json`.
-- Rotate credentials that may have appeared in exports or backups.
-- Add log-redaction and export-sanitization tests.
+- Shipped: strip secrets from client exports.
+- Shipped: detect and sanitize old secret-bearing imports.
+- Shipped: store provider credentials in the OS keychain.
+- Shipped: migrate existing local tokens and remove them from `client-local.json`.
+- Operator action: rotate credentials that may have appeared in exports or old backups.
+- Shipped: export sanitization and keychain-boundary tests.
 
 ### Phase 2 — Add desktop identity
 

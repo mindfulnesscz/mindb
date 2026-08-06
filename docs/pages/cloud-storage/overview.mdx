@@ -1,6 +1,6 @@
 # Cloud destination comparison
 
-Cloud destinations are optional delivery copies, distinct from R2. **Structure is portal-owned** (`clients.cloud_destinations`); each workstation stores OAuth tokens (and Google client secret) locally after Sync. Full workflow: [Tags and export destinations](/getting-started/tags-and-destinations).
+Cloud destinations are optional delivery copies, distinct from R2. **Structure is portal-owned** (`clients.cloud_destinations`); each workstation stores OAuth tokens (and Google client secret) in its OS keychain after Sync. Full workflow: [Tags and export destinations](/getting-started/tags-and-destinations).
 
 A destination has a provider, name, pipeline role (`internal` / `client`), portal `minRole`, enabled flags, remote path, link toggle, credentials, and token. The pipeline uploads each scanned file separately with concurrency two.
 

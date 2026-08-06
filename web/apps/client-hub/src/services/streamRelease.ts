@@ -14,6 +14,7 @@
  */
 
 import { supabase } from '../lib/supabase'
+import { edgeFunctionError } from '../lib/edgeFunction'
 
 /** Raised when the video could not be released, so the caller can offer to proceed anyway. */
 export class StreamReleaseError extends Error {
@@ -35,24 +36,12 @@ export async function releaseStreamVideo(assetId: string): Promise<void> {
     body: { asset_id: assetId, release: true },
   })
   if (error) {
-    /* functions.invoke reports a non-2xx as a generic FunctionsHttpError and puts the body out of
-       reach, so the function's own message — which is the only thing that says WHY — has to be read
-       off the response. Without this the operator sees "Edge Function returned a non-2xx status
-       code", which is true of every possible cause. */
-    const detail = await readFunctionError(error)
+    /* The function's own message is the only thing that says WHY — see edgeFunction.ts on where
+       invoke hides it, and on the dead-session case that reader also handles. Without it the
+       operator sees "Edge Function returned a non-2xx status code", true of every possible cause. */
+    const detail = await edgeFunctionError(error)
     throw new StreamReleaseError(detail ?? error.message)
   }
   const body = data as { released?: boolean; error?: string } | null
   if (body?.error) throw new StreamReleaseError(body.error)
-}
-
-async function readFunctionError(error: unknown): Promise<string | null> {
-  const res = (error as { context?: Response })?.context
-  if (!res || typeof res.json !== 'function') return null
-  try {
-    const body = await res.json() as { error?: string }
-    return body?.error ?? null
-  } catch {
-    return null
-  }
 }
