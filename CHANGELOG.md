@@ -8,7 +8,17 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 ## [3.2.2] — 2026-08-06
 
 A hotfix for 3.2.1, which could not run a pipeline at all on a fresh install — and, alongside it, the
-reason the app appeared to hang for the whole render phase.
+reason the app appeared to hang for the whole render phase, and a taxonomy export that could not be
+imported back.
+
+**Deployment**
+
+- **This release carries a migration and will not be complete without it.**
+  `20260806210000_tags_no_self_parent` repairs any `tags` row where `parent_id = id` and then adds
+  the constraint that prevents it. Apply with `supabase migration up` — pending migrations only,
+  never a reset — local → staging → production. Until it runs, an affected client's taxonomy export
+  still needs repairing by hand before it will import.
+- No environment variables or secrets change.
 
 ### Fixed
 
@@ -21,6 +31,12 @@ reason the app appeared to hang for the whole render phase.
   row to update by **key or shortcode** in another. Nothing connected the two, so both could land on
   the same row — a keyed, shortcode-less group whose name is also the leaf's `parentGroup` — and the
   sync patched that row to be its own parent.
+
+  That path is reproduced in a test that fails against the old code, but it is not proven to be how
+  the reported rows got that way: their stored `key` is null, so the lookup above could not have
+  matched them. Some other writer, or an older build, produced them. That is why the database
+  constraint matters more than either code guard — it is the one that closes a path nobody has
+  identified yet.
 
   Refused in three places now, because the symptom appeared so far from the cause: the sync leaves
   the tag ungrouped and says so in the run log; the exporter emits `parent_key: null` and warns which
