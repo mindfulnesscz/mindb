@@ -5,6 +5,137 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [3.2.1] — 2026-08-06
+
+A security and correctness release. An external audit produced 42 findings; this closes all of them,
+along with the regressions the first round of fixes introduced. Nothing here changes what the product
+does — it changes what it refuses to do.
+
+Two themes run through it. **Privileges are now enforced where they are checked**, not one layer
+above: a member can no longer write their own `role`, a storage grant no longer covers the whole
+bucket, and a portal caller can no longer assert which tenant they belong to. And **destructive
+stages fail closed**: a transient read error, an unreadable folder, or a half-finished reconcile now
+keeps files rather than deleting them.
+
+### Added
+
+- **CDN garbage collection.** Per-asset pruning only heals identities the desktop touches again;
+  hard-deleted rows and never-revisited identities leave objects in both buckets that nothing points
+  at. A dry-run-first collector now reads the whole bucket pair against every asset reference, with
+  one shared classification behind three surfaces: `node scripts/gc-cdn-objects.mjs --env <dev|staging|production>`
+  for operators, **Admin → CDN GC** for super admins, and a desktop settings card.
+
+  Nothing is deleted without a fresh plan being reviewed and separately confirmed. Execution rebuilds
+  the analysis, binds the confirmation to a deterministic plan id, re-checks the row snapshot
+  immediately before deleting, and refuses any object not classified as an orphan. Disconnected rows
+  and `branding/` are protected, and a blast-radius gate blocks execution rather than trusting an
+  implausibly large plan. See [CDN garbage collection](docs/pages/operations/cdn-garbage-collection.mdx).
+- **Scanner-safe magic links.** A corporate mail scanner (Microsoft Safe Links) prefetches the link
+  and spends the token before the recipient clicks. Confirmation now happens on a page the user
+  interacts with, and the link is verified against its matching type.
+- **`file_md5` (Rust command)** — Google Drive publishes an MD5 for binary files, so the skip test can
+  compare content instead of size. Hashed in Rust in 64 KiB chunks: the webview never loads the file.
+
+### Fixed — security
+
+- **A member could grant themselves `super_admin`.** The `profiles` self-update policy checked the
+  row's owner but not which columns changed. It now runs `WITH CHECK` against a security-definer
+  function that freezes `role`, `client_id` and `can_create_clients`; benign self-edits still pass. A
+  pgTAP test asserts `42501` on each escalation attempt.
+- **Storage grants were bucket-wide.** `r2-grant` minted credentials over the entire bucket for any
+  editor. They are now prefix-scoped per client and tier (`{client_id}/`, `guest|client|internal/{client_id}/`),
+  and a grant that would resolve to no prefix throws rather than widening.
+- **Sign-up trusted caller-supplied tenancy.** `handle_new_user` read `client_id` out of
+  `raw_user_meta_data` — anyone talking to Supabase Auth directly could name the tenant they joined.
+  Tenancy is now derived only from the server-side `domain_whitelist`.
+- **CORS matched `*.vercel.app` by suffix**, so any Vercel deployment could call the edge functions
+  credentialed. Now exact allow-list membership.
+- **The Tauri command surface was open.** Path-taking commands are confined by a new `path_policy`
+  module (app data plus folders approved through a picker), `remove_dir_all` is forced to the exact
+  `<stem>-thumb/` sidecar, `supabase_request` is bound to the configured origin and no longer follows
+  redirects, the reveal bridge has an origin allow-list and an exact identity match, and `csp: null`
+  is replaced by a real CSP with a network allow-list.
+- **Native engine downloads were unverified.** Every PDFium and LibreOffice artifact now carries a
+  real sha256; an unpinned entry hard-fails the fetch, and the cache is validated by digest.
+- **The admin UI failed open** when unconfigured, and portal permission gates disagreed with the
+  documented matrix.
+
+### Fixed — data loss and correctness
+
+- **The cross-level prune deleted objects the portal was still serving.** When an asset moved tier,
+  the prune excluded the asset's own row from the "still referenced" check, assuming the same run
+  would repoint the database. If the reconcile did not fully land, the live object was deleted
+  anyway — observed as `pruned stale thumbnail (was public)` for keys the database still pointed at.
+  An object is now kept while **any** live row references it, including its own, and pruned only once
+  it is a genuine orphan. Reclaiming cross-level orphans is a separate, reference-checked pass.
+- **"Dry run" was not dry.** It skipped some stages and not others. It is now threaded through every
+  side-effecting stage: CDN uploads and prunes, Supabase inserts/patches/disconnects, manifest writes,
+  Stream, version history, tag sync and cloud uploads.
+- **A transient read error deleted live files.** An unreadable directory was indistinguishable from
+  an empty one, so reconcile treated "cannot list" as "nothing there". Unreadable subtrees are now
+  marked protected and skipped, on both source and target sides.
+- **A failed read of existing rows produced duplicate inserts** — the export planner now aborts
+  before planning rather than treating "unknown" as "absent".
+- **Tag sync could delete portal-authored tags** from a stale source. The delete pass is now behind
+  the blast-radius guard and locked at the caller while the source is dirty.
+- **`mtime` skips lost edits.** A same-size, same-mtime change is now caught by a byte comparison in
+  Rust after the cheap gate; raster thumbnails key on a `src_mtime+size+width+quality` fingerprint
+  instead of mere existence.
+- **The Stop button did not stop.** `isStopping` is now checked at every stage checkpoint.
+- **Google Drive created duplicate folders** under concurrent uploads (list-then-create with no
+  in-flight dedup), and skipped changed files of identical size. Folder creation is deduped in flight
+  and the skip test now compares MD5.
+- **Two assets sharing a filename stem overwrote each other's `download_urls`.** Cloud URLs are keyed
+  by `stableId:childId` — the asset's real identity — everywhere they are written and read.
+- **A portal-editable tag label became path structure.** A label containing `/` or `..` flowed
+  unescaped into a filesystem path; `sanitizeSegment` now normalises every user-editable label used as
+  a path segment, including reserved Windows device names.
+- **Rename tasks were a placebo** — the queue flipped `pending → completed` and applied nothing.
+  Removed, rather than left reporting success it never delivered.
+- **Large images failed to decode.** A 9922×14104 TIFF hit the image crate's 512 MiB default; the
+  budget is now 2 GiB, with files ≥32 MiB serialised behind a mutex so eight concurrent decodes cannot
+  peak at 16 GiB and kill the app. Three compile-time assertions pin the budget between the measured
+  floor and a sane ceiling.
+- **A failed thumbnail showed the browser's broken-image glyph** in four places that still rendered a
+  bare `<img>`. All four now degrade to a named placeholder with a download link.
+- **Unstable pagination** — `fetchAllForClient` now orders by `id`, so a page boundary cannot drop or
+  repeat a row.
+- **A revoked session left the portal looking signed in.** An access token stays signature-valid after
+  its session row is revoked (a password change, a sign-out elsewhere, a reset database), so reads
+  kept working while every GoTrue-resolving call refused — **Admin → CDN GC** answered "Not
+  authenticated" beneath a header showing a super admin. Backends now distinguish "your session ended"
+  from "you are not signed in", and the portal ends the session instead of rendering the contradiction.
+  This mattered most where it was least visible: the CDN cookie renews on a timer, so a dead session
+  meant an endless 401 loop behind blank gated thumbnails. See
+  [Revoked sessions](docs/pages/auth.mdx).
+
+### Changed
+
+- **The fs capability is a deliberate static scope again.** Replacing it with runtime grants broke
+  real working folders — a `~/Library/CloudStorage/Dropbox-…` source was refused, which surfaced as
+  "no folder identity" on every asset rather than as a permission error. The command-surface
+  hardening (`path_policy`, CSP) is unaffected and stays.
+- **CI gates are no longer vacuous.** A new `e2e` job boots the full Supabase stack; `smoke:functions`
+  and `test:e2e` hard-fail on a missing stack instead of passing green, and a 404 no longer counts as
+  "booted".
+- **One shared caller-auth vocabulary** in `@sotto/domain`, used by the edge functions, the cdn-gate
+  Worker and the portal. Three backends answer the same question and one portal acts on the answer; a
+  drifted copy of those strings fails silently.
+- Workflow `permissions:` blocks are least-privilege (6/6), and `cdn-reconcile`'s scheduled `dry_run`
+  defaults to `true`.
+
+### Documentation
+
+- **Where OAuth provider credentials live, per environment** — the clearest description of the local
+  mechanism was in a gitignored file, so a fresh clone never saw it. Local is `config.toml` +
+  `.env.local` (now with a committed example), staging and production are each project's dashboard.
+  Includes the `set -a; source supabase/.env.local; set +a` step, the Entra permissions and expiry
+  failure, and a warning against `supabase config push` at a shared project.
+- Keychain credential storage, CDN garbage collection, revoked sessions, and the Google Drive skip
+  rules are documented; `permissions.mdx` now matches `permissions.ts`, and the README describes the
+  real test suite.
+
+
 ## [3.2.0] — 2026-08-04
 
 Thumbnails need nothing installed, and a document can be paged through in the portal. The rendering
