@@ -38,7 +38,8 @@ export { cdnStemKey, resolveCdnIdentity } from './supabase/identity';
 
 /* ── Queries ──────────────────────────────────────────────────────────────── */
 export {
-  fetchExistingStableIds, fetchAssetStats, fetchAssetLevels, fetchPreviewPageLimit,
+  fetchExistingStableIds, fetchAssetStats, fetchAssetLevels, fetchAssetStorageState,
+  fetchPreviewPageLimit,
 } from './supabase/assetQueries';
 export { reconcileCdnObjects } from './supabase/cdnReconcile';
 export { syncStreamVideos } from './supabase/streamSync';

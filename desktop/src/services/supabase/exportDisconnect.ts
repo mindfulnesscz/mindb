@@ -10,19 +10,11 @@ import { effectiveLevel, pageTarget, storageTarget } from '@sotto/domain';
 import { sbFetch, BATCH } from './rest';
 import { assessFreshDestruction } from '../guardrail';
 import type { StableRow, SupabaseExportResult } from './exportTypes';
-
-function objectKeyFromUrl(url: string | null | undefined): string | null {
-  if (!url) return null;
-  try {
-    return decodeURIComponent(new URL(url).pathname).replace(/^\/+/, '');
-  } catch {
-    return null;
-  }
-}
+import { indexCdnKeyReferences, objectKeyFromReference } from './cdnReferences';
 
 function originalExtension(row: StableRow): string | null {
   const prefix = `${row.child_id}.`;
-  for (const key of [row.download_key, objectKeyFromUrl(row.download_url)]) {
+  for (const key of [row.download_key, objectKeyFromReference(row.download_url)]) {
     if (!key) continue;
     const leaf = key.split('/').pop() ?? '';
     if (leaf.startsWith(prefix)) return leaf.slice(row.child_id.length);
@@ -56,16 +48,10 @@ function referencedObjectKeys(
   existing: Map<string, StableRow>,
   currentStableKeys: Set<string>,
 ): Set<string> {
-  const referenced = new Set<string>();
-  for (const [stableKey, row] of existing) {
-    if (!currentStableKeys.has(stableKey)) continue;
-    for (const value of [row.thumbnail_url, row.download_url, row.download_key]) {
-      if (!value) continue;
-      const key = value.includes('://') ? objectKeyFromUrl(value) : value;
-      if (key) referenced.add(key);
-    }
-  }
-  return referenced;
+  const rows = [...existing]
+    .filter(([stableKey]) => currentStableKeys.has(stableKey))
+    .map(([, row]) => row);
+  return new Set(indexCdnKeyReferences(rows).keys());
 }
 
 function appendStaleObjectKeys(

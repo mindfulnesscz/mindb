@@ -17,6 +17,10 @@ v3.2.0. Two tracks: **security first, then asset management.**
    with the detailed tag-inference design (Part B).
 5. **`SOTTO_ASSET_MGMT_AGENT_PROMPTS.md`** — that plan split into 6 delegatable prompts (A–E), with a
    dependency graph. Run after the security track (no file overlap; can start once S0 is merged).
+6. **`SOTTO_CDN_ORPHAN_CLEANUP_PROMPT.md`** — S8, the CDN orphan follow-up. Its per-run
+   thumbnail/original sweep is implemented; the bucket-wide collector remains separate.
+7. **`SOTTO_CDN_GC_PROMPT.md`** — the remaining standalone, dry-run-first garbage collector for
+   objects already accumulated across dev, staging, and production buckets.
 
 ## How to delegate
 

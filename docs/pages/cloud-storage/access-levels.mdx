@@ -121,11 +121,18 @@ invisible to both: narrowing a deck from `client` to `internal` moved its thumbn
 readable under the old `client/` prefix. Both now additionally LIST each of the four level prefixes for
 the asset's page directory.
 
-One deliberate asymmetry. For a thumbnail the source object is **left in place** — its URL column has
-been repointed, so nothing references the old object and leaving it is recoverable. For a page the
-source is **deleted as part of the move**, because there is no column to repoint: the old object would
-sit at a wider level, reachable by anyone holding a cookie for that level. Orphaned is not the same as
-unreachable.
+One deliberate asymmetry. For a thumbnail or original the reconciler **leaves the source in place** —
+its URL column has been repointed, so the move remains recoverable. The next desktop upload that
+touches that identity confirms the current target and then prunes its thumbnail and original from all
+other levels, unless another live row still references the key. For a page the source is **deleted as
+part of the move**, because there is no column to repoint: the old object would sit at a wider level,
+reachable by anyone holding a cookie for that level. Orphaned is not the same as unreachable.
+
+The desktop sweep is deliberately per-asset. It cannot find bytes for a row hard-deleted outside the
+normal flow or for a client whose desktop never runs again. Closing that residue requires a separate
+bucket-wide garbage collector with parent `ListBucket` credentials; the temporary client grant does
+not have that authority. The dry-run-first standalone collector is tracked separately in
+`planning/SOTTO_CDN_GC_PROMPT.md` and is not part of the desktop sweep.
 
 **A trigger, not a call from the portal**, because the portal is not the only writer — and the two
 it cannot see are the ones most easily forgotten: the gallery-inheritance cascade rewrites

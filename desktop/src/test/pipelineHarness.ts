@@ -96,6 +96,9 @@ export function makeCtx(settings: AppSettings, over: Record<string, unknown> = {
     collectedAssets: [] as string[],
     cdnUrls: new Map<string, string>(),
     originalUrls: new Map<string, string>(),
+    // Successful pre-run DB read with no existing references. Undefined has a different meaning:
+    // reference state is unknown, so destructive per-asset CDN pruning must be skipped.
+    cdnKeyReferences: new Map<string, Set<string>>(),
     cloudUrls: new Map<string, unknown>(),
     ...over,
   };

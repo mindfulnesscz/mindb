@@ -254,8 +254,11 @@ Deno.serve(async (req) => {
       const { error } = await db.from('assets').update(patch).eq('id', a.id);
       if (error) { failed++; assetFailed = true; }
     }
-    // Source objects are left in place, exactly as the re-key script does: until they are removed
-    // separately, the whole move is undone by repointing the URLs back.
+    // Thumbnail/original sources stay in place so the move remains reversible by repointing the
+    // URLs. The next desktop upload touching this identity now sweeps both namespaces across all
+    // four levels (with a live-row shared-key guard), as it already does for pages. Residue for an
+    // identity never touched again still needs a separate bucket-wide GC with parent LIST access;
+    // the client-scoped temporary R2 grant intentionally cannot perform that global diff.
     if (!assetFailed) done.push(a.id);
   }
 

@@ -22,7 +22,7 @@ import { runPipeline, scanVersionMap, deleteCdnObjects, type RunContext } from '
 import type { CloudUrlEntry } from '../../services/pipelineService';
 import {
   exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary, requestR2Grant,
-  fetchAssetLevels, fetchPreviewPageLimit, reconcileCdnObjects, syncStreamVideos,
+  fetchAssetStorageState, fetchPreviewPageLimit, reconcileCdnObjects, syncStreamVideos,
 } from '../../services/supabaseService';
 import { loadVocabulary } from '../../services/vocabService';
 import { notifyRunComplete } from '../../services/notifyService';
@@ -87,6 +87,7 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
 
     let r2Config: RunContext['r2'];
     let assetLevels: Map<string, string> | undefined;
+    let cdnKeyReferences: Map<string, Set<string>> | undefined;
     let previewPageLimit: number | undefined;
     if (sbConfig && clientId && !effectiveSettings.dryRun
         && (effectiveSettings.doThumbnails || effectiveSettings.doCdnOriginals)) {
@@ -118,13 +119,17 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
         };
         log('dim', `  Storage grant issued for "${activeClient!.name}" (public ${grant.bucket} · gated ${grant.gatedBucket}, expires ${new Date(grant.expiresAt).toLocaleTimeString()})`);
 
-        /* Object keys carry the access level, so the upload stages need each asset's CURRENT
-           level before they write — and `perm` is portal-owned, so the database is the only place
-           that knows it. Fetched once per run. An empty map (a failed read) means every asset is
-           treated as new and written at the create-time default: the restrictive direction, and
-           the reconciler picks up anything that lands wrong. */
-        assetLevels = await fetchAssetLevels(clientId, sbConfig);
+        /* Object keys carry the access level, so the upload stages need each asset's CURRENT level
+           before they write. The same read indexes live URL/key references for safe pruning. A
+           failed read routes assets at the restrictive create-time default and disables pruning,
+           because the pipeline cannot prove a stale key is unshared. */
+        const storageState = await fetchAssetStorageState(clientId, sbConfig);
+        assetLevels = storageState?.levels ?? new Map<string, string>();
+        cdnKeyReferences = storageState?.references ?? undefined;
         log('dim', `  ${assetLevels.size} known asset level(s) loaded for key routing`);
+        if (!cdnKeyReferences) {
+          log('warn', '  CDN row references unavailable — stale thumbnail/original pruning disabled for safety');
+        }
 
         /* How many pages of a document get previewed is an admin setting on the client row, so it
            comes from the same place `perm` does. A failed read leaves it undefined and the pipeline
@@ -148,6 +153,7 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
       cdnUrls,
       originalUrls,
       assetLevels,
+      cdnKeyReferences,
       previewPageLimit,
       pageCounts,
       cloudUrls,
