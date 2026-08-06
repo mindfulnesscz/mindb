@@ -9,7 +9,8 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 A hotfix for 3.2.1, which could not run a pipeline at all on a fresh install — and, alongside it, the
 reason the app appeared to hang for the whole render phase, and a taxonomy export that could not be
-imported back.
+imported back. It also cleans up what a client actually sees: render artifacts move out of the OUT
+folder into one `thumbnails/` folder, and page previews stop leaking into local exports.
 
 **Deployment**
 
@@ -18,6 +19,13 @@ imported back.
   the constraint that prevents it. Apply with `supabase migration up` — pending migrations only,
   never a reset — local → staging → production. Until it runs, an affected client's taxonomy export
   still needs repairing by hand before it will import.
+- **The first run also migrates artifacts on disk**, moving each OUT folder's loose thumbnails,
+  previews and render caches into a `thumbnails/` folder beside them. It is automatic, needs no
+  operator action, and is a move rather than a regenerate — nothing re-renders and no CDN object
+  changes. It is reported in the run log as `⇄ artifact layout: N moved into thumbnails/`.
+- **Re-run any local export destination after upgrading.** Targets published by an earlier build may
+  hold page-preview folders that should never have been delivered (see below); the reconcile pass
+  disconnects them on the next publish.
 - No environment variables or secrets change.
 
 ### Fixed
@@ -145,13 +153,62 @@ imported back.
   `FsScope::default()` — empty — so capability globs are invisible to `path_policy` and vice versa.
   Changing one never fixes the other, which is why 3.2.1's `**` did not help the native commands.
 
+- **A document's page previews were published to local export targets.** In the `folders` layout,
+  the publish walk applied its artifact filter to files but recursed into every subdirectory
+  unconditionally — so a `<stem>-thumb/` previews folder was descended into and its `001.webp`,
+  `002.webp` … copied into the client's folder as deliverables. The page files are the one artifact
+  with no marker in their names, which is exactly why a filename filter never caught them, and
+  nothing downstream did either.
+
+  The exclusion is now applied to the directory entry *before* the descent, in both `publishDir` and
+  `publishFolder`. Targets published by an earlier build keep the stale folder until the next
+  publish reconciles it — see Deployment above.
+
 - **Reconcile failures say why.** `cdn-reconcile` returns `failures[]` of `{asset_id, stage, reason}`
   and writes the same reason to `cdn_move_queue.last_error`; the desktop prints them as warnings
   under the run summary instead of the opaque `⟳ 0 moved · 2 failed`. Identical reasons are grouped,
   because one unset secret fails every video in the batch. An unset `CF_STREAM_TOKEN` now reads as
   "stream token not configured for this environment" rather than a bare failure.
 
+### Changed
+
+- **A delivered OUT folder now shows deliverables, not machinery.** Every render artifact moved into
+  one `thumbnails/` folder beside the files it serves — `OUT/thumbnails/` for the files directly
+  under OUT, and the gallery's own folder for gallery children. A document's title thumbnail joins
+  the other thumbnails instead of getting a folder of its own; only the per-page previews keep a
+  subfolder, inside `thumbnails/`, because they really are a set. The `.json` render caches are
+  dot-prefixed. A three-image OUT folder goes from nine visible entries to four; a deck's gallery
+  from seven to three.
+
+  Two consequences worth stating plainly. **Location, not naming, now decides what is an artifact**:
+  the exclusion applies to the `thumbnails/` folder as a unit, which is the first version of this
+  rule that covers the page files — they are called `001.webp` and carry no marker, so a filter
+  applied to filenames alone never caught them. And the rule lives in exactly one place
+  (`packages/domain/src/artifactLayout.ts`), instead of the eight ad-hoc `-thumb` substring tests it
+  replaces, one of which was always going to be the one someone forgot.
+
+  Migration is automatic and free. An existing library is moved in place at the start of the render
+  stage: the manifests travel with the artifacts they describe, so **nothing re-renders** (~6.4s per
+  Office document saved across the library), and R2 keys are derived from folder identity rather
+  than a local path, so **no object moves and nothing orphans**. `-thumb` deliberately stays in the
+  thumbnail filenames as a safety net for libraries that have not run yet.
+
+  The hidden manifests use a leading dot, which macOS and Linux honour and **Windows does not** —
+  Windows needs `FILE_ATTRIBUTE_HIDDEN`. Sotto ships macOS only, so that attribute is not set; the
+  one place to set it is where the manifests are written in `render.rs`.
+
+  `render::validate_preview_area` — the guard in front of `remove_dir_all`, running in both the
+  Tauri command and the one-shot PDFium worker — was rewritten for the new layout and is stricter
+  than a location test: both outputs are computed from the source path and compared exactly, so a
+  sibling inside the *same* `thumbnails/` folder is refused too.
+
 ### Added
+
+- **A destination-boundary test.** Local publish (both layouts), the package mirror and cloud export
+  are each handed an OUT folder holding every artifact shape at once — current layout, legacy
+  layout, page previews, hidden caches — and must deliver exactly the assets. `cloudExport` now
+  filters explicitly rather than inheriting a filtered list; it had no test of its own and was clean
+  only because its input happened to arrive pre-filtered.
 
 - **Regression coverage for the bugs above**: the prune guard's four decisions for thumbnails and
   originals (red against the pre-fix behaviour), the `path_policy` re-read, the fs capability's

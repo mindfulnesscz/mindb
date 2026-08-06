@@ -15,7 +15,7 @@ import { copyFile, mkdir, rename, remove } from '@tauri-apps/plugin-fs';
 import { join, dirname } from '@tauri-apps/api/path';
 import type { AppSettings } from '../../store/settingsStore';
 import type { LogType } from '../../store/pipelineStore';
-import { buildVocabMap, translateExportName, stripStableId } from '@sotto/domain';
+import { buildVocabMap, translateExportName, stripStableId, isPreviewArtifact } from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
 import type { DestExportLayout } from '../../domain/client';
 import { shouldSkip, isPackageFolder, isOutFolder, isPublishableFile } from './naming';
@@ -306,7 +306,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
     for (const srcPath of assets) {
       if (ctx.isStopping?.()) return;
       const rawName = srcPath.split('/').pop()!;
-      if (!isPublishableFile(rawName) || rawName.includes('-thumb')) continue;
+      if (!isPublishableFile(rawName) || isPreviewArtifact(rawName)) continue;
       const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
       const stem = ext ? rawName.slice(0, -ext.length) : rawName;
       const translated = translateExportName(stem, ext, vocabMap);
@@ -320,7 +320,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
       const items = await readSourceDir(dirPath, targetDir);
       const fileItems = items.filter(
         item => item.isFile && !shouldSkip(item.name, settings)
-          && isPublishableFile(item.name) && !item.name.includes('-thumb'),
+          && isPublishableFile(item.name) && !isPreviewArtifact(item.name),
       );
       const paths = await Promise.all(fileItems.map(f => join(dirPath, f.name)));
       const { kept, dropped } = keepOnlyHighestVersions(paths);
@@ -342,6 +342,10 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
       for (const item of items) {
         if (ctx.isStopping?.()) return;
         if (shouldSkip(item.name, settings) || !item.isDirectory) continue;
+        /* Before the descent, not after: the artifacts folder's contents are ordinary publishable
+           names (`001.webp`), so a filter applied to files alone would let a document's page
+           previews through into a client's folder as assets. */
+        if (isPreviewArtifact(item.name)) continue;
         const subSrc    = await join(dirPath, item.name);
         const subTarget = await join(targetDir, item.name);
         livePub.add(subTarget);
@@ -356,6 +360,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
         if (ctx.isStopping?.()) return;
         if (shouldSkip(e.name, settings)) continue;
         if (!e.isDirectory) continue;
+        if (isPreviewArtifact(e.name)) continue;
         // Package dirs next to OUT are handled by publishNestedPackages when enabled.
         if (isPackageFolder(e.name, settings)) continue;
         const childSrc = await join(src, e.name);

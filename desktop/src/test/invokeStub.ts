@@ -141,9 +141,10 @@ class InvokeStub {
         for (let p = 1; p <= rendered; p++) {
           await this.backend.put(`${pagesDir}/${String(p).padStart(3, '0')}.webp`, 'webp-bytes');
         }
-        /* pages.json last, as Rust does — it is what marks the set complete, and the upload stage
-           reads it rather than listing the directory, so a fake without it publishes nothing. */
-        await this.backend.put(`${pagesDir}/pages.json`, JSON.stringify({
+        /* `.pages.json` last, as Rust does — it is what marks the set complete, and the upload
+           stage reads it rather than listing the directory, so a fake without it publishes
+           nothing. Hidden, because it is a render cache and not something a client should see. */
+        await this.backend.put(`${pagesDir}/.pages.json`, JSON.stringify({
           version: 1, srcMtimeMs: 0, srcSize: 0,
           total: this.documentPages, rendered,
           limit: args.limit, width: args.width, quality: args.quality,

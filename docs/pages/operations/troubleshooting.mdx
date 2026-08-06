@@ -10,7 +10,7 @@ Start by locating the failing boundary: scan, local conversion, local copy, R2, 
   - `Unsupported thumbnail format: <ext>` — not a failure. Only PDF, Office formats and common rasters render; [video is handled by Stream](/cloud-storage/video), not here.
   - A single document failing while others succeed is usually the file: test it by opening it, and see [thumbnail generation](/desktop/thumbnails).
   - On **Linux only**, LibreOffice is a package dependency rather than bundled, so a missing install is real there — see [third-party engines](/reference/third-party-engines#linux-is-a-package-dependency-not-a-bundle).
-  - Remove a stale `-thumb` sidecar only when regeneration is intended.
+  - Since 3.2.2 a changed source re-renders on its own (mtime + size are recorded), so deleting an artifact by hand is rarely the fix. Deleting a `thumbnails/` folder is safe but re-renders everything it held; deleting only its hidden `.json` manifests has the same effect.
 - Thumbnails correct but very slow in development: check `[profile.dev.package."*"] opt-level = 3` is still in `desktop/src-tauri/Cargo.toml`. Without it a large JPEG takes ~21s instead of ~0.25s. This is a build-profile problem, not a rendering one.
 - Portal shows old preview: distinguish local sidecar staleness, R2 inventory shortcut, browser/CDN cache, and stale Supabase URL.
 - Asset vanished after rename: determine whether the client was truly migrated and inspect folder suffix/manifest.

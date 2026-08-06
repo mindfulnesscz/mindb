@@ -200,10 +200,22 @@ fn pdfium_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 /// Hidden argv flag that turns this executable into a one-shot render worker.
 pub const WORKER_FLAG: &str = "--sotto-render-worker";
 
-/// A deletable page-preview directory is never an arbitrary caller path. It is the exact
-/// `<source-stem>-thumb` sidecar documented by the pipeline, and its title thumbnail is the sibling
-/// `<source-stem>-thumb.webp` file. This check also runs inside the one-shot worker immediately
-/// before `remove_dir_all`, so the destructive boundary is local to the operation that needs it.
+/// The artifacts folder that serves the assets beside it.
+///
+/// The layout contract itself lives in `packages/domain/src/artifactLayout.ts`, which is what the
+/// pipeline composes these paths from; Rust cannot import it, so this constant is the second copy
+/// and must not drift. Everything else here is COMPUTED from the source path.
+const THUMBNAILS_DIR: &str = "thumbnails";
+
+/// A deletable page-preview directory is never an arbitrary caller path.
+///
+/// This is not a naming convention — it is the guard in front of `remove_dir_all`, and it also runs
+/// inside the one-shot worker immediately before that call, so the destructive boundary is local to
+/// the operation that needs it. Both outputs are derived from `src` and compared exactly: for
+/// `<dir>/<stem>.<ext>` the only acceptable targets are `<dir>/thumbnails/<stem>-thumb.webp` and
+/// `<dir>/thumbnails/<stem>`. Nothing here is caller-supplied, and nothing about it may be relaxed
+/// into a prefix test — "somewhere under thumbnails/" would let one document's render delete
+/// another's previews.
 pub fn validate_preview_area(src: &Path, thumb: &Path, pages_dir: &Path) -> Result<(), String> {
     let parent = src
         .parent()
@@ -211,16 +223,16 @@ pub fn validate_preview_area(src: &Path, thumb: &Path, pages_dir: &Path) -> Resu
     let stem = src
         .file_stem()
         .ok_or_else(|| format!("preview source has no file stem: {}", src.display()))?;
+    let artifacts = parent.join(THUMBNAILS_DIR);
     let mut thumb_name = stem.to_os_string();
     thumb_name.push("-thumb.webp");
-    let mut pages_name = stem.to_os_string();
-    pages_name.push("-thumb");
-    let expected_thumb = parent.join(thumb_name);
-    let expected_pages = parent.join(pages_name);
+    let expected_thumb = artifacts.join(thumb_name);
+    let expected_pages = artifacts.join(stem);
 
     if thumb != expected_thumb || pages_dir != expected_pages {
         return Err(format!(
-            "Refusing preview outputs outside the source's preview sidecars (expected {} and {})",
+            "Refusing preview outputs outside the source folder's own {THUMBNAILS_DIR}/ \
+             (expected {} and {})",
             expected_thumb.display(),
             expected_pages.display(),
         ));
@@ -480,6 +492,12 @@ fn render_pdf(job: &RenderJob) -> Result<RenderOutcome, String> {
     };
 
     let first = render_one(0)?;
+    // The thumbnail lives in the source folder's `thumbnails/`, which may not exist yet. Created
+    // here rather than in the command so the worker is self-sufficient — it is also what runs for
+    // an Office document, where the command never sees this path at all.
+    if let Some(parent) = Path::new(&job.thumb).parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
     write_webp(&first, Path::new(&job.thumb), job.width, job.quality)?;
 
     let Some(pages_dir) = job.pages_dir.as_deref() else {
@@ -730,7 +748,7 @@ pub fn page_budget(ext: &str, limit: u32) -> u32 {
 
 /* ── The pages manifest ─────────────────────────────────────────────────── */
 
-/// `pages.json`, written beside the rendered pages.
+/// `.pages.json`, written beside the rendered pages.
 ///
 /// Existence alone cannot decide whether previews are current, which is how the plain `-thumb.webp`
 /// check works. Three things invalidate them and none are visible from a directory listing: the
@@ -758,8 +776,23 @@ pub struct PagesManifest {
 /// Current manifest format. Bump to force regeneration across the library.
 pub const PAGES_MANIFEST_VERSION: u32 = 1;
 
+/* ── Hiding the render caches ─────────────────────────────────────────────────
+   Both manifests are caches, not metadata: they hold the source's size+mtime and the settings the
+   output was rendered at, which is the only way to know a render is stale — a directory listing
+   cannot see that the source changed or that the page limit did. Delete them and the whole library
+   re-renders (~6.4s per Office document). So they stay, and stop being visible instead.
+
+   Only the manifests are dot-prefixed. The thumbnails and page previews keep visible names: they
+   are useful to look at in the source folder, and `thumbnails/` is what keeps them tidy.
+
+   WINDOWS GAP, ACCEPTED DELIBERATELY. Windows does not hide dot-prefixed files — it uses
+   FILE_ATTRIBUTE_HIDDEN, set via SetFileAttributesW. Sotto ships macOS only today (the release
+   workflow builds a single macOS bundle and there is no Windows CI), so a windows-only FFI call
+   would be code no build here can compile or exercise. When a Windows build is added, the one place
+   to set the attribute is right after each `std::fs::write` below. */
+
 pub fn manifest_path(pages_dir: &Path) -> PathBuf {
-    pages_dir.join("pages.json")
+    pages_dir.join(".pages.json")
 }
 
 /// mtime (ms since epoch) and size of a file — the cheap fingerprint.
@@ -780,7 +813,7 @@ pub(crate) fn fingerprint(src: &Path) -> Result<(i64, u64), String> {
 ///
 /// Existence used to be the entire cache key, so replacing/restoring a source file never refreshed
 /// its thumbnail. This mirrors the document-preview manifest's size+mtime decision while keeping
-/// the generated sidecar beside the thumbnail (and therefore covered by every `-thumb` exclusion).
+/// the cache beside the thumbnail it describes — inside `thumbnails/`, and hidden.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ThumbnailManifest {
@@ -793,8 +826,17 @@ pub struct ThumbnailManifest {
 
 pub const THUMBNAIL_MANIFEST_VERSION: u32 = 1;
 
+/// `.<thumbnail-file-name>.json`, hidden beside the thumbnail it describes.
+///
+/// Derived from the thumbnail's own name so it travels with it: the migration MOVES artifacts into
+/// `thumbnails/` rather than re-rendering them, and a manifest keyed on anything else would be left
+/// behind — which reads as "cache miss" and re-renders the library.
 pub fn thumbnail_manifest_path(dest: &Path) -> PathBuf {
-    PathBuf::from(format!("{}.json", dest.display()))
+    match dest.file_name().and_then(|n| n.to_str()) {
+        Some(name) => dest.with_file_name(format!(".{name}.json")),
+        // No file name to hide behind: keep the old sibling form rather than losing the cache.
+        None => PathBuf::from(format!("{}.json", dest.display())),
+    }
 }
 
 pub fn thumbnail_current(
@@ -871,7 +913,7 @@ pub fn previews_current(
     (matches && complete).then_some(manifest)
 }
 
-/// Write `pages.json` last, once every page is on disk.
+/// Write `.pages.json` last, once every page is on disk.
 ///
 /// Ordering matters: the manifest is what marks the set complete, so writing it before the pages
 /// would let an interrupted run leave a directory that passes `previews_current` while missing files.
@@ -1252,21 +1294,49 @@ mod tests {
         }
     }
 
+    /* The guard in front of `remove_dir_all`. Both outputs must be the ones COMPUTED from the
+       source, inside that source folder's own `thumbnails/` — the previews root is no longer a
+       sibling of the source, so "near the source" is not a check any more. */
     #[test]
-    fn preview_area_is_the_exact_source_sidecar() {
+    fn preview_area_is_the_computed_target_inside_the_source_folders_thumbnails() {
         let src = Path::new("/approved/Deck.pdf");
-        assert!(validate_preview_area(
-            src,
-            Path::new("/approved/Deck-thumb.webp"),
-            Path::new("/approved/Deck-thumb"),
-        )
-        .is_ok());
-        assert!(validate_preview_area(
-            src,
-            Path::new("/approved/Deck-thumb.webp"),
-            Path::new("/outside/delete-me"),
-        )
-        .is_err());
+        let thumb = Path::new("/approved/thumbnails/Deck-thumb.webp");
+        let pages = Path::new("/approved/thumbnails/Deck");
+
+        assert!(validate_preview_area(src, thumb, pages).is_ok());
+
+        // The pre-3.2.2 sidecars are no longer where previews go.
+        assert!(
+            validate_preview_area(src, Path::new("/approved/Deck-thumb.webp"), Path::new("/approved/Deck-thumb")).is_err(),
+            "the old sibling layout must not be accepted once the writer moved",
+        );
+        // Another document's previews, inside the SAME thumbnails/ folder. A prefix test would
+        // pass this and let one render delete another document's pages.
+        assert!(
+            validate_preview_area(src, thumb, Path::new("/approved/thumbnails/Other")).is_err(),
+            "a sibling inside thumbnails/ is still outside this source's preview area",
+        );
+        // A different folder's thumbnails/, and somewhere else entirely.
+        assert!(validate_preview_area(src, thumb, Path::new("/elsewhere/thumbnails/Deck")).is_err());
+        assert!(validate_preview_area(src, thumb, Path::new("/outside/delete-me")).is_err());
+        // The thumbnail is checked just as strictly as the directory.
+        assert!(validate_preview_area(src, Path::new("/approved/thumbnails/Other-thumb.webp"), pages).is_err());
+    }
+
+    /* Both manifests are caches, not metadata: delete them and the whole library re-renders. They
+       stay on disk and stop being visible instead — dot-prefixed, beside what they describe (see
+       the Windows note above `manifest_path`). */
+    #[test]
+    fn the_render_manifests_are_hidden_beside_what_they_describe() {
+        let thumbs = Path::new("/approved/[03] OUT/thumbnails");
+        assert_eq!(
+            thumbnail_manifest_path(&thumbs.join("Deck v2-thumb.webp")),
+            thumbs.join(".Deck v2-thumb.webp.json"),
+        );
+        assert_eq!(
+            manifest_path(&thumbs.join("Deck v2")),
+            thumbs.join("Deck v2").join(".pages.json"),
+        );
     }
 
     /// The bundled PDFium, or None when `npm run deps:native` has not been run.
@@ -1370,8 +1440,8 @@ mod tests {
         let Some(lib_dir) = pdfium_lib_dir() else { return };
         let work = TempDir::new("sotto-pages").unwrap();
         let src = work.path().join("in.pdf");
-        let thumb = work.path().join("in-thumb.webp");
-        let pages = work.path().join("in-thumb");
+        let thumb = work.path().join("thumbnails").join("in-thumb.webp");
+        let pages = work.path().join("thumbnails").join("in");
         std::fs::write(&src, minimal_pdf()).unwrap();
 
         let outcome = render_pdf(&job(&lib_dir, &src, &thumb, Some(&pages), 50)).unwrap();
@@ -1391,8 +1461,8 @@ mod tests {
         let Some(lib_dir) = pdfium_lib_dir() else { return };
         let work = TempDir::new("sotto-pages-cap").unwrap();
         let src = work.path().join("in.pdf");
-        let thumb = work.path().join("in-thumb.webp");
-        let pages = work.path().join("in-thumb");
+        let thumb = work.path().join("thumbnails").join("in-thumb.webp");
+        let pages = work.path().join("thumbnails").join("in");
         std::fs::write(&src, minimal_pdf()).unwrap();
 
         // limit 0 renders nothing, yet `total` must still describe the document — that difference is
@@ -1411,8 +1481,8 @@ mod tests {
         let Some(lib_dir) = pdfium_lib_dir() else { return };
         let work = TempDir::new("sotto-pages-stale").unwrap();
         let src = work.path().join("in.pdf");
-        let thumb = work.path().join("in-thumb.webp");
-        let pages = work.path().join("in-thumb");
+        let thumb = work.path().join("thumbnails").join("in-thumb.webp");
+        let pages = work.path().join("thumbnails").join("in");
         std::fs::write(&src, minimal_pdf()).unwrap();
         std::fs::create_dir_all(&pages).unwrap();
         let orphan = pages.join("007.webp");

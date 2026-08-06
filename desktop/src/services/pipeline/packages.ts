@@ -114,8 +114,8 @@ export async function purgePackageMirror(
       const childRel = rel ? `${rel}/${e.name}` : e.name;
       const childPath = await join(dir, e.name);
       if (e.isDirectory) {
-        /* A previews folder has no business in a package mirror. Purging it as a unit also removes
-           the now-empty directory, which a file-by-file purge would leave behind. */
+        /* An artifacts folder has no business in a package mirror. Purging it as a unit also
+           removes the now-empty directory, which a file-by-file purge would leave behind. */
         if (isPreviewArtifact(e.name)) {
           purgeRels.add(childRel);
           continue;
@@ -124,7 +124,7 @@ export async function purgePackageMirror(
         continue;
       }
       if (!e.isFile) continue;
-      if (e.name.includes('-thumb') || e.name.startsWith('🚫')) {
+      if (isPreviewArtifact(e.name) || e.name.startsWith('🚫')) {
         purgeRels.add(childRel);
         continue;
       }
@@ -180,13 +180,13 @@ export async function syncPackageFromOut(
   if (dropped.length) {
     appendLog('skip', `  ⊘  OUT older versions not packaged: ${dropped.map(p => p.split('/').pop()).join(', ')}`);
   }
-  result.sources = kept.filter(p => !p.split('/').pop()!.includes('-thumb'));
+  result.sources = kept.filter(p => !isPreviewArtifact(p.split('/').pop()!));
   appendLog('dim', `  └─ ${result.sources.length} OUT file(s) from siblings/nested → package`);
 
   const liveNames = new Set<string>();
   for (const srcFile of result.sources) {
     const rawName = srcFile.split('/').pop()!;
-    if (rawName.includes('-thumb')) continue;
+    if (isPreviewArtifact(rawName)) continue;
     const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
     const stem = ext ? rawName.slice(0, -ext.length) : rawName;
     liveNames.add(translateExportName(stem, ext, vocabMap));
@@ -204,7 +204,7 @@ export async function syncPackageFromOut(
 
   for (const srcFile of result.sources) {
     const rawName = srcFile.split('/').pop()!;
-    if (rawName.includes('-thumb')) continue;
+    if (isPreviewArtifact(rawName)) continue;
     const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
     const stem = ext ? rawName.slice(0, -ext.length) : rawName;
     const translated = translateExportName(stem, ext, vocabMap);
