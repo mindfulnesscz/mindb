@@ -26,7 +26,29 @@ A hotfix for 3.2.1, which could not run a pipeline at all on a fresh install.
   The boundary itself is unchanged: roots still come only from Rust reading the machine-local
   configuration or from a folder the user picked, never from an IPC argument.
 
+- **The filesystem capability is a deliberate scope again**, replacing 3.2.1's machine-wide `**`
+  stopgap: `$HOME/**` + `/Volumes/**` + `$APPDATA/**`, declared once through `fs:scope` (the plugin
+  unions the global scope with each command scope, so one declaration covers every command).
+  `requireLiteralLeadingDot: false` stays in the fs plugin config — the plugin reads it only from
+  there, it defaults to true on unix, and without it the globs stop matching `.dchub.json`.
+
+  Note these are two independent mechanisms: `tauri-plugin-fs` seeds its runtime scope from
+  `FsScope::default()` — empty — so capability globs are invisible to `path_policy` and vice versa.
+  Changing one never fixes the other, which is why 3.2.1's `**` did not help the native commands.
+
+- **Reconcile failures say why.** `cdn-reconcile` returns `failures[]` of `{asset_id, stage, reason}`
+  and writes the same reason to `cdn_move_queue.last_error`; the desktop prints them as warnings
+  under the run summary instead of the opaque `⟳ 0 moved · 2 failed`. Identical reasons are grouped,
+  because one unset secret fails every video in the batch. An unset `CF_STREAM_TOKEN` now reads as
+  "stream token not configured for this environment" rather than a bare failure.
+
 ### Added
+
+- **Regression coverage for the bugs above**: the prune guard's four decisions for thumbnails and
+  originals (red against the pre-fix behaviour), the `path_policy` re-read, the fs capability's
+  shape, and an out-of-appdata pipeline smoke test that runs scan → identity → thumbnail → CDN
+  upload against a **real** temp directory via the new `realFs` harness — the shape of path the
+  in-memory `vfs` cannot represent, and the one 3.2.1 broke.
 
 - **Build badge in both apps**, so which build and which backend is never a guess. The desktop shows
   the active environment and version in the nav rail; the portal pins the same pair to the corner —
