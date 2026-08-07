@@ -32,6 +32,37 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **A Google Drive destination can be re-laid-out by moving its files, not re-uploading them.**
+  Settings → Cloud destinations → a Drive destination → **Export layout migration**: preview every
+  `from → to`, type `move`, and the delivered library re-parents itself into the destination's
+  current layout.
+
+  Changing a layout relocates every file a client has. Left to the export that is the expensive
+  resolution — upload each file again under its new path and leave the old copy where it is, since
+  the cloud export never deletes — which on the library that prompted this is minutes of re-sent
+  bytes and a client folder holding two of everything. Drive's move is a parent swap: one metadata
+  request, no bytes, and the file keeps its id, so **sharing links already stored in Supabase and
+  shown in the portal keep working** with no re-collection pass.
+
+  **It decides what to move from the delivery records, not from a name search.** The upload cache is
+  keyed by destination and remote path, so it is a precise record of what this machine put where; the
+  tool computes each file's path under every layout and the one holding a record is where the file is
+  now. That means the old layout never has to be specified, a half-migrated destination is planned
+  file by file — and a file with no record is reported and left strictly alone, because the record is
+  the only evidence that the remote file is ours rather than the client's.
+
+  Preview-then-confirm, with the duplicate-folder cleanup's rails: nothing is deleted (emptied source
+  folders are trashed), an occupied destination path is never overwritten, a folder is trashed only
+  after a fresh listing at execution time shows it empty, the destination's own folder is never
+  trashed, a failed listing aborts the scan rather than reading as "already empty", and execution
+  refuses a plan whose fingerprint no longer matches the one on screen. Applied moves re-key the
+  delivery records, so the next run stays warm instead of paying a cold export to rediscover files
+  that never changed.
+
+  Dropbox and OneDrive have no mover yet — both have a metadata-only move, so the same tool is
+  possible; until then, switching their layout re-uploads and leaves the old copies to be pruned by
+  hand. Docs: operations/gdrive-relayout.mdx.
+
 - **A cloud destination can now be told to deliver the full source tree.** `exportLayout` takes a
   third value, `source`: package and category folders are kept (identity suffixes stripped), the
   `OUT` segment is dropped, galleries keep their folder — the same tree a local destination has

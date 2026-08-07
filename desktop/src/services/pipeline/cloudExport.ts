@@ -26,17 +26,18 @@ import { stat, readFile, readTextFile, writeTextFile, exists } from '@tauri-apps
 import { appDataDir } from '@tauri-apps/api/path';
 import { timePhase, timeStep } from './timing';
 import {
-  assetIdentityKey, buildVocabMap, translateExportName, stripWorkflowPrefix, isArtifactPath,
+  assetIdentityKey, buildVocabMap, translateExportName, isArtifactPath,
 } from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
-import { resolveExportShape, type DestExportLayout } from '../../domain/client';
+import { resolveExportShape } from '../../domain/client';
+import { buildCloudFileJobs, remoteNamesFor, type CloudFileJob } from './exportNames';
 import {
   uploadDropboxFile, uploadOneDriveFile, uploadGDriveFile,
   ensureGDriveFolderPaths, sweepGDriveFolderFiles, drainGDriveDuplicateFolders,
   oneDriveRemoteItem, oneDriveShareLink,
 } from '../cloudService';
 import { findPackageFolders, syncPackageFromOut, keepOnlyHighestVersions } from './packages';
-import { nestedPublishRel, deliveredRelDir } from './deliveryLayout';
+import { nestedPublishRel } from './deliveryLayout';
 import { mimeFromExt } from './cdnUpload';
 import { asyncPool } from './pool';
 import { joinPath } from './paths';
@@ -125,6 +126,51 @@ function rememberCloudUpload(
   cache.uploads[cloudCacheKey(destId, nestedName)] = { mtimeMs, size, url: url ?? null }
 }
 
+/* ── What this machine delivered, for the re-layout mover ────────────────────
+ *
+ * The mover needs two things this module owns. First, EVIDENCE: a remote file may be moved only
+ * when this destination's cache says we put it at that path — a client's own file at a path we
+ * happen to compute must never be re-parented. Second, the cache is keyed BY remote path, so a move
+ * invalidates every key it touches; leaving them stale would not corrupt anything (the next run
+ * would ask the provider and skip on a hash match) but it would pay a full cold-cache export to
+ * rediscover files that never changed. */
+
+/** Remote paths this machine has delivered to `destId`, as recorded by the last export. */
+export async function deliveredRemotePaths(destId: string): Promise<Set<string>> {
+  const cache  = await loadCloudCache()
+  const prefix = `${destId}::`
+  const paths  = new Set<string>()
+  for (const key of Object.keys(cache.uploads)) {
+    if (key.startsWith(prefix)) paths.add(key.slice(prefix.length))
+  }
+  return paths
+}
+
+/**
+ * Re-key upload records after files were moved remotely, and persist.
+ *
+ * A pair whose source key is absent is skipped rather than invented: the record is what proves we
+ * delivered that file, so writing one for a path we cannot vouch for would hand the mover its own
+ * evidence next time round. A destination occupied by an existing record is overwritten — the move
+ * has already happened, and the newer record describes the file that is there now.
+ */
+export async function renameDeliveredPaths(
+  destId: string,
+  pairs:  Array<{ from: string; to: string }>,
+): Promise<number> {
+  const cache = await loadCloudCache()
+  let moved = 0
+  for (const { from, to } of pairs) {
+    const entry = cache.uploads[cloudCacheKey(destId, from)]
+    if (!entry) continue
+    cache.uploads[cloudCacheKey(destId, to)] = entry
+    delete cache.uploads[cloudCacheKey(destId, from)]
+    moved += 1
+  }
+  if (moved) await saveCloudCache(cache)
+  return moved
+}
+
 /** The hash of a source file, computed at most once per (path, mtime, size) — ever, not per run.
  *  A stale fingerprint discards BOTH hashes: they describe the same bytes, so if one is out of date
  *  the other is too. */
@@ -144,72 +190,6 @@ async function sourceContentHash(
   cache.hashes[srcPath] = { ...(current ?? { mtimeMs, size }), [kind]: hash }
   return { hash, hashed: true }
 }
-
-type CloudFileJob = {
-  srcPath: string;
-  stem: string;
-  ext: string;
-  fileName: string;
-  /** `folders`: the path below the OUT folder — a gallery, or nothing. */
-  relativeDir: string;
-  /** `source`: the full delivered tree, identical to what a local destination receives. */
-  sourceDir: string;
-  /** When set, used as the full remote relative path (package mode). */
-  nestedOverride: string | null;
-}
-
-/** The containing folder a job is delivered into, chosen by the destination's layout. Both trees
- *  are computed once per file when the jobs are built; this only picks between them. */
-function jobDirFor(job: CloudFileJob, layout: DestExportLayout): string {
-  if (layout === 'flat')   return '';
-  if (layout === 'source') return job.sourceDir;
-  return job.relativeDir;
-}
-
-/** Where one job lands remotely. Shared so the Drive folder pre-resolve targets exactly the folders
- *  the upload loop will ask for — two copies of these rules would pre-warm the wrong tree. */
-function remoteNamesFor(
-  job: CloudFileJob,
-  vocabMap: ReturnType<typeof buildVocabMap>,
-  layout: DestExportLayout,
-  remotePath: string,
-): { nestedName: string; gdriveFolderPath: string; gdriveFileName: string } {
-  const { stem, ext, nestedOverride } = job;
-  const dir = jobDirFor(job, layout);
-  const translated = nestedOverride
-    ? nestedOverride.split('/').pop()!
-    : translateExportName(stem, ext, vocabMap);
-  const nestedName = nestedOverride
-    ?? (dir ? `${dir}/${translated}` : translated);
-  const base = remotePath.replace(/\/$/, '');
-  const sub = nestedOverride
-    ? nestedName.split('/').slice(0, -1).join('/')
-    : dir;
-  const gdriveFolderPath = nestedOverride || sub
-    ? [base, sub].filter(Boolean).join('/')
-    : remotePath;
-  return {
-    nestedName,
-    gdriveFolderPath,
-    gdriveFileName: nestedOverride ? nestedName.split('/').pop()! : translated,
-  };
-}
-
-function relativeUnderOut(srcPath: string, outFolderName: string): { dir: string; fileName: string } {
-  const parts = srcPath.replace(/\\/g, '/').split('/');
-  let outIdx = -1;
-  for (let i = parts.length - 1; i >= 0; i--) {
-    const want = stripWorkflowPrefix(outFolderName || 'OUT').toLowerCase();
-    const got  = stripWorkflowPrefix(parts[i]).toLowerCase();
-    if (got === want || got === 'out') { outIdx = i; break; }
-  }
-  const fileName = parts[parts.length - 1] ?? '';
-  if (outIdx < 0) return { dir: '', fileName };
-  const relative = parts.slice(outIdx + 1);
-  if (relative.length <= 1) return { dir: '', fileName };
-  return { dir: relative.slice(0, -1).join('/'), fileName };
-}
-
 
 export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
   const { vocab, appendLog, collectedAssets, cloudDestinations, cloudUrls, settings } = ctx;
@@ -233,7 +213,6 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
     return;
   }
 
-  const outFolder = settings.outFolder || 'OUT';
   const vocabMap = buildVocabMap(vocab);
   const cloudCache = settings.dryRun ? emptyCloudCache() : await loadCloudCache();
   let cloudCacheDirty = false;
@@ -286,24 +265,7 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
     outAssetPaths = kept;
     if (dropped.length) appendLog('skip', `  ⊘  dropped ${dropped.length} older version(s) from cloud export`);
   }
-  /* Both trees are derived here, once per file, and the destination picks between them: the run
-     may hold destinations on different layouts, and re-deriving per destination would be the same
-     work N times. `sourceDir` is empty without a source folder — there is nothing to be relative
-     to — which degrades a `source` destination to the destination root rather than guessing. */
-  const outFiles = outAssetPaths.map(srcPath => {
-    const fileName = srcPath.split('/').pop()!;
-    const dotIdx   = fileName.lastIndexOf('.');
-    const ext      = dotIdx > 0 ? fileName.slice(dotIdx) : '';
-    const stem     = dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName;
-    const { dir: relativeDir } = relativeUnderOut(srcPath, outFolder);
-    const sourceDir = settings.sourceFolder
-      ? deliveredRelDir(settings.sourceFolder, srcPath, settings)
-      : relativeDir;
-    return {
-      srcPath, stem, ext, fileName, relativeDir, sourceDir,
-      nestedOverride: null as string | null,
-    };
-  });
+  const outFiles = buildCloudFileJobs(outAssetPaths, settings);
 
   /* THE EXPORT BOUNDARY. A client destination receives assets — never a thumbnail, a previews
      folder or a render cache.
