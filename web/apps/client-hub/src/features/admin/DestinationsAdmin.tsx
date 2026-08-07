@@ -14,9 +14,16 @@ const ROLE_OPTIONS: Role[] = ['public', 'member', 'editor', 'admin']
 const TYPE_OPTIONS: DestType[] = ['gdrive', 'dropbox', 'onedrive', 'local']
 const LAYOUT_OPTIONS: { value: DestExportLayout; label: string; hint: string }[] = [
   {
+    value: 'source',
+    label: 'Full source tree',
+    hint: 'Mirror the source folders — the same tree a local export delivers. '
+      + 'Package and category folders are kept (identity suffixes stripped), OUT itself is not.',
+  },
+  {
     value: 'folders',
-    label: 'Full folders',
-    hint: 'Preserve OUT folder tree (default)',
+    label: 'OUT folders only',
+    hint: 'Preserve the OUT subtree (default). Galleries keep their folder; '
+      + 'everything else lands at the destination root.',
   },
   {
     value: 'flat',
@@ -34,7 +41,8 @@ function typeLabel(t: DestType): string {
 
 function layoutBadge(d: PortalDestination): string {
   if (d.exportLayout === 'flat') return 'Flat'
-  return d.includePackages ? 'Folders + packages' : 'Full folders'
+  const base = d.exportLayout === 'source' ? 'Source tree' : 'OUT folders'
+  return d.includePackages ? `${base} + packages` : base
 }
 
 function emptyConfig(type: DestType): PortalDestination['config'] {

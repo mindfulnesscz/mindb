@@ -1,7 +1,15 @@
 /* PUBLISH stage (runPublish) — mirror OUT into the client-visible target, then reconcile.
  *
- * Two layouts: `folders` preserves the OUT tree (stable-id suffixes stripped from folder names,
- * since identity is internal); `flat` dumps everything into the target root.
+ * Layouts: `source` and `folders` both mirror the SOURCE tree (stable-id suffixes stripped from
+ * folder names, since identity is internal, and the OUT segment dropped); `flat` dumps everything
+ * into the target root.
+ *
+ * The two folder layouts are deliberately NOT distinguished here, where they are in the cloud
+ * export. A local destination has mirrored the source tree since it existed, and `folders` is what
+ * every stored destination carries — reading it as "OUT subtree only" to match the cloud would
+ * restructure every local delivery on the next run to fix a naming inconsistency nobody asked
+ * about. `source` is the value that means this unambiguously; `folders` on a local destination
+ * keeps meaning what it always did.
  * 
  * Reconciliation is deliberately asymmetric, and both halves are characterized:
  *   - OUTSIDE a package folder, a file no longer in source is RENAMED with a 🚫 prefix. Nothing
@@ -22,6 +30,7 @@ import type { DestExportLayout } from '../../domain/client';
 import { shouldSkip, isPackageFolder, isOutFolder, isPublishableFile } from './naming';
 import { listDirResult, isUnchanged } from './fs';
 import { findPackageFolders, syncPackageFromOut, keepOnlyHighestVersions, purgePackageMirror } from './packages';
+import { nestedPublishRel } from './deliveryLayout';
 import { scanAllAssets } from './scan';
 import { assessReconciliationRead, assessTargetReconciliationRead } from '../guardrail';
 
@@ -138,25 +147,9 @@ export async function flagDisconnected(
   }
 }
 
-/** Relative path from source root → target, stripping stable-id suffixes on ancestors. */
-export function nestedPublishRel(sourceRoot: string, absPath: string): string {
-  const root = sourceRoot.replace(/\\/g, '/').replace(/\/+$/, '');
-  const abs  = absPath.replace(/\\/g, '/').replace(/\/+$/, '');
-  let rel: string;
-  if (abs === root) {
-    rel = '';
-  } else if (abs.startsWith(root + '/')) {
-    rel = abs.slice(root.length + 1);
-  } else {
-    // Fallback: find root as a path prefix (handles mild join/realpath drift).
-    const idx = abs.toLowerCase().indexOf(root.toLowerCase() + '/');
-    rel = idx >= 0 ? abs.slice(idx + root.length + 1) : (abs.split('/').pop() ?? '');
-  }
-  const parts = rel.split('/').filter(Boolean);
-  return parts
-    .map(seg => stripStableId(seg))
-    .join('/');
-}
+/* The source→delivered path rules live in ./deliveryLayout, where the cloud export reads the same
+   ones. Re-exported because this module is where callers have always looked for them. */
+export { nestedPublishRel };
 
 /* ── Publish operation ──────────────────────────────────────────────────── */
 
@@ -170,7 +163,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
   }
 
   const layout: DestExportLayout = ctx.localExportLayout ?? 'folders';
-  const includePackages = layout === 'folders' && !!ctx.localIncludePackages;
+  const includePackages = layout !== 'flat' && !!ctx.localIncludePackages;
 
   const phase = timePhase('PUBLISH');
   appendLog('section', `━━━ ${dryRun ? 'DRY RUN' : 'PUBLISHING'} ━━━`);
@@ -315,7 +308,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
       await copyOne(srcPath, joinPath(targetFolder, translated), translated);
     }
   } else {
-    appendLog('dim', '  Mode: full folders (OUT tree)');
+    appendLog('dim', '  Mode: full folders (source tree, OUT contents in place)');
 
     async function publishDir(dirPath: string, targetDir: string) {
       if (ctx.isStopping?.()) return;

@@ -55,12 +55,19 @@ export type DestConfig =
 export type HubRole = 'public' | 'member' | 'editor' | 'admin';
 
 /**
- * Required base layout.
- * - folders — preserve OUT-relative folder tree
- * - flat — dump files into one folder
- * Packages are optional via includePackages (nested inside folders — never root-only).
+ * Required base layout. Three values, because "keep the folders" meant two different trees and
+ * the destination had no way to say which:
+ * - source  — mirror the SOURCE tree: package/category folders (identity suffix stripped), the
+ *             OUT segment dropped, galleries kept. What a local destination has always produced.
+ * - folders — preserve the OUT-relative tree only: galleries keep their folder, everything else
+ *             lands at the destination root. What a cloud destination has always produced.
+ * - flat    — dump files into one folder.
+ * Packages are optional via includePackages (nested inside the tree — never root-only), and are
+ * meaningless without one, so `flat` clears the flag.
  */
-export type DestExportLayout = 'folders' | 'flat';
+export type DestExportLayout = 'source' | 'folders' | 'flat';
+
+const EXPORT_LAYOUTS: DestExportLayout[] = ['source', 'folders', 'flat'];
 
 export interface CloudDestination {
   id:           string;
@@ -77,13 +84,18 @@ export interface CloudDestination {
   config:       DestConfig;
 }
 
+/* An unknown or absent layout resolves to `folders`, NOT to `source`: every destination stored
+   before `source` existed carries `folders`, and silently promoting them would move a client's
+   whole delivery on the next run. Widening is a decision the operator makes per destination. */
 export function resolveExportShape(
   raw: Partial<Pick<CloudDestination, 'exportLayout' | 'includePackages'>>,
 ): { exportLayout: DestExportLayout; includePackages: boolean } {
-  const exportLayout: DestExportLayout = raw.exportLayout === 'flat' ? 'flat' : 'folders';
+  const exportLayout: DestExportLayout = EXPORT_LAYOUTS.includes(raw.exportLayout as DestExportLayout)
+    ? raw.exportLayout as DestExportLayout
+    : 'folders';
   return {
     exportLayout,
-    includePackages: exportLayout === 'folders' && Boolean(raw.includePackages),
+    includePackages: exportLayout !== 'flat' && Boolean(raw.includePackages),
   };
 }
 

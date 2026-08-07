@@ -1,7 +1,14 @@
 /* CLOUD EXPORT stage — push deliverables to Dropbox / OneDrive / Google Drive.
  *
- * Per-destination export honouring each destination's layout (folders vs flat, optional nested
- * packages) and role. Sharing links are collected into ctx.cloudUrls for the Supabase sync.
+ * Per-destination export honouring each destination's layout and role. Sharing links are collected
+ * into ctx.cloudUrls for the Supabase sync.
+ *
+ * THREE layouts, and the middle one is why this comment exists: `source` mirrors the source tree
+ * exactly as a local destination does, `folders` keeps only the OUT-relative part (so a deliverable
+ * with no gallery lands at the destination root), `flat` keeps nothing. `folders` was the only
+ * meaning a cloud destination had until 3.2.3 and remains the default, because promoting a stored
+ * destination to `source` would move a client's whole delivery without anyone asking for it. The
+ * path rules for `source` live in ./deliveryLayout, shared with the publish stage.
  * 
  * Has its own mtime+size cache for the same reason R2 does: without it every unchanged file costs
  * a provider metadata round-trip.
@@ -22,14 +29,14 @@ import {
   assetIdentityKey, buildVocabMap, translateExportName, stripWorkflowPrefix, isArtifactPath,
 } from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
-import { resolveExportShape } from '../../domain/client';
+import { resolveExportShape, type DestExportLayout } from '../../domain/client';
 import {
   uploadDropboxFile, uploadOneDriveFile, uploadGDriveFile,
   ensureGDriveFolderPaths, sweepGDriveFolderFiles, drainGDriveDuplicateFolders,
   oneDriveRemoteItem, oneDriveShareLink,
 } from '../cloudService';
 import { findPackageFolders, syncPackageFromOut, keepOnlyHighestVersions } from './packages';
-import { nestedPublishRel } from './publishLocal';
+import { nestedPublishRel, deliveredRelDir } from './deliveryLayout';
 import { mimeFromExt } from './cdnUpload';
 import { asyncPool } from './pool';
 import { joinPath } from './paths';
@@ -143,9 +150,20 @@ type CloudFileJob = {
   stem: string;
   ext: string;
   fileName: string;
+  /** `folders`: the path below the OUT folder — a gallery, or nothing. */
   relativeDir: string;
+  /** `source`: the full delivered tree, identical to what a local destination receives. */
+  sourceDir: string;
   /** When set, used as the full remote relative path (package mode). */
   nestedOverride: string | null;
+}
+
+/** The containing folder a job is delivered into, chosen by the destination's layout. Both trees
+ *  are computed once per file when the jobs are built; this only picks between them. */
+function jobDirFor(job: CloudFileJob, layout: DestExportLayout): string {
+  if (layout === 'flat')   return '';
+  if (layout === 'source') return job.sourceDir;
+  return job.relativeDir;
 }
 
 /** Where one job lands remotely. Shared so the Drive folder pre-resolve targets exactly the folders
@@ -153,19 +171,20 @@ type CloudFileJob = {
 function remoteNamesFor(
   job: CloudFileJob,
   vocabMap: ReturnType<typeof buildVocabMap>,
-  flatten: boolean,
+  layout: DestExportLayout,
   remotePath: string,
 ): { nestedName: string; gdriveFolderPath: string; gdriveFileName: string } {
-  const { stem, ext, relativeDir, nestedOverride } = job;
+  const { stem, ext, nestedOverride } = job;
+  const dir = jobDirFor(job, layout);
   const translated = nestedOverride
     ? nestedOverride.split('/').pop()!
     : translateExportName(stem, ext, vocabMap);
   const nestedName = nestedOverride
-    ?? (!flatten && relativeDir ? `${relativeDir}/${translated}` : translated);
+    ?? (dir ? `${dir}/${translated}` : translated);
   const base = remotePath.replace(/\/$/, '');
   const sub = nestedOverride
     ? nestedName.split('/').slice(0, -1).join('/')
-    : (!flatten ? relativeDir : '');
+    : dir;
   const gdriveFolderPath = nestedOverride || sub
     ? [base, sub].filter(Boolean).join('/')
     : remotePath;
@@ -267,13 +286,23 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
     outAssetPaths = kept;
     if (dropped.length) appendLog('skip', `  ⊘  dropped ${dropped.length} older version(s) from cloud export`);
   }
+  /* Both trees are derived here, once per file, and the destination picks between them: the run
+     may hold destinations on different layouts, and re-deriving per destination would be the same
+     work N times. `sourceDir` is empty without a source folder — there is nothing to be relative
+     to — which degrades a `source` destination to the destination root rather than guessing. */
   const outFiles = outAssetPaths.map(srcPath => {
     const fileName = srcPath.split('/').pop()!;
     const dotIdx   = fileName.lastIndexOf('.');
     const ext      = dotIdx > 0 ? fileName.slice(dotIdx) : '';
     const stem     = dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName;
     const { dir: relativeDir } = relativeUnderOut(srcPath, outFolder);
-    return { srcPath, stem, ext, fileName, relativeDir, nestedOverride: null as string | null };
+    const sourceDir = settings.sourceFolder
+      ? deliveredRelDir(settings.sourceFolder, srcPath, settings)
+      : relativeDir;
+    return {
+      srcPath, stem, ext, fileName, relativeDir, sourceDir,
+      nestedOverride: null as string | null,
+    };
   });
 
   /* THE EXPORT BOUNDARY. A client destination receives assets — never a thumbnail, a previews
@@ -321,7 +350,10 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
           stem: fileName.includes('.') ? fileName.slice(0, fileName.lastIndexOf('.')) : fileName,
           ext: fileName.includes('.') ? fileName.slice(fileName.lastIndexOf('.')) : '',
           fileName,
+          // A package job carries its full remote path in nestedOverride — already source-relative,
+          // so neither tree applies and the layout does not reach it.
           relativeDir: '',
+          sourceDir: '',
           nestedOverride: `${relPkg}/${destRel}`,
         });
       }
@@ -345,7 +377,7 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
     const flatten = layout === 'flat';
     let files: CloudFileJob[] = [...outFiles];
 
-    if (layout === 'folders' && includePackages) {
+    if (!flatten && includePackages) {
       const pkgJobs = await packageFileJobsNested();
       if (!pkgJobs.length) {
         appendLog('warn', `  ${dest.name}: no package folders — run Distribute packages first (OUT folders still export).`);
@@ -353,10 +385,16 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
         files = [...outFiles, ...pkgJobs];
         appendLog('dim', `  ${dest.name}: folders + nested packages (${outFiles.length} OUT · ${pkgJobs.length} package file(s))`);
       }
-    } else if (flatten) {
+    }
+
+    /* Named out loud every run: the two folder layouts differ only in what a file WITHOUT a
+       gallery gets, so the difference is invisible in the log unless it is stated. */
+    if (flatten) {
       appendLog('dim', `  ${dest.name}: flat export (folder structure ignored)`);
+    } else if (layout === 'source') {
+      appendLog('dim', `  ${dest.name}: source tree (same folders a local export delivers)`);
     } else {
-      appendLog('dim', `  ${dest.name}: full folders under OUT`);
+      appendLog('dim', `  ${dest.name}: OUT subtree only — folders above OUT are not sent`);
     }
 
     files = assetsOnly(files, dest.name);
@@ -408,7 +446,7 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
       try {
         const folderIds = await ensureGDriveFolderPaths(
           cfg.token!.accessToken,
-          files.map(job => remoteNamesFor(job, vocabMap, flatten, cfg.remotePath).gdriveFolderPath),
+          files.map(job => remoteNamesFor(job, vocabMap, layout, cfg.remotePath).gdriveFolderPath),
           cfg.sharedDriveId,
           dest.id,
         );
@@ -439,7 +477,7 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
     await asyncPool(UPLOAD_CONCURRENCY, files, async (job) => {
       const { srcPath, ext, nestedOverride } = job;
       const { nestedName, gdriveFolderPath, gdriveFileName } =
-        remoteNamesFor(job, vocabMap, flatten, cfg.remotePath);
+        remoteNamesFor(job, vocabMap, layout, cfg.remotePath);
 
       let url: string | null = null;
       try {

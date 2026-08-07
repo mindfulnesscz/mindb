@@ -26,6 +26,24 @@ describe('resolveExportShape', () => {
     expect(resolveExportShape({ exportLayout: 'flat' }).exportLayout).toBe('flat');
   });
 
+  it('honours an explicit source layout', () => {
+    expect(resolveExportShape({ exportLayout: 'source' }).exportLayout).toBe('source');
+  });
+
+  it('never PROMOTES a stored destination to source', () => {
+    // Every destination written before `source` existed carries `folders`, and the two produce
+    // different trees. Resolving an unknown value to `source` would restructure a client's whole
+    // delivery on the next run, with nobody having asked for it.
+    expect(resolveExportShape({}).exportLayout).toBe('folders');
+    expect(resolveExportShape({ exportLayout: 'Source' as never }).exportLayout).toBe('folders');
+  });
+
+  it('allows packages with the source layout too — they nest in either tree', () => {
+    expect(resolveExportShape({ exportLayout: 'source', includePackages: true })).toEqual({
+      exportLayout: 'source', includePackages: true,
+    });
+  });
+
   it('THE invariant: flat can never include packages', () => {
     // Packages nest inside the folder tree; there is nowhere to put them in a flat
     // dump. Allowing both would mirror package folders into the flat root.
