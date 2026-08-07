@@ -113,13 +113,22 @@ perm/status change            portal edit · gallery cascade · pipeline · hand
   bytes moved to the key the level requires
 ```
 
-### Page previews are moved by LISTING, and their source is deleted
+### Page previews are swept across every level, and their source is deleted
 
 Both movers — `cdn-reconcile` and `scripts/rekey-gated-objects.mjs` — find objects by reading the
 `thumbnail_url` and `download_url` **columns**. Page objects appear in no column, so they were
 invisible to both: narrowing a deck from `client` to `internal` moved its thumbnail and left its pages
-readable under the old `client/` prefix. Both now additionally LIST each of the four level prefixes for
-the asset's page directory.
+readable under the old `client/` prefix. Both now additionally look for pages under each of the four
+level prefixes.
+
+They look differently, and the difference matters. `rekey-gated-objects.mjs` LISTS the prefix, with
+the parent credential that permits it. `cdn-reconcile` computes the keys from the row's
+`preview_page_count` and attempts a copy from each level, because an earlier version of it listed
+with a temporary grant that returns 403 for ListObjects — every asset failed, the queue stopped
+draining, and video broke with it, since the same pass sets Stream's `requireSignedURLs`. The cost of
+computing instead of listing is that a page beyond the current count (an edited document, a lowered
+limit) is not addressable from the row; that residue is left to the desktop's own per-run sweep,
+which lists all four levels with credentials that allow it.
 
 **The page sweep only runs when the level actually moved.** Probing four levels for a page that did
 not move is three round trips per page that cannot succeed, and `cdn_move_queue` was seeded with the
@@ -284,6 +293,47 @@ The reason that most often surprises people is **`stream: stream token not confi
 environment`**: `CF_STREAM_TOKEN` is only needed once an environment has videos, so a project can run
 for months without it and then fail every video the first time one changes level. It is a per-project
 secret — check it on each Supabase project separately.
+
+### Is the queue healthy?
+
+An empty `cdn_move_queue` is the only proof that bytes and levels agree, but the shape of a non-empty
+one says more than its size. Run this **before and after a drain**, in Studio's SQL editor locally
+(`http://127.0.0.1:54323`) or the Supabase dashboard's SQL editor for a hosted project — it runs as
+service role, so the staff-only RLS on the table is not in the way. There is no portal UI for this
+table, deliberately.
+
+```sql
+select
+  count(*)                                                                   as queued,
+  count(*) filter (where q.was_level = a.effective_level and q.attempts = 0) as would_skip_sweep,
+  count(*) filter (where q.attempts > 0)                                     as previously_failed,
+  coalesce(sum(a.preview_page_count)
+    filter (where q.was_level is distinct from a.effective_level
+               or q.attempts > 0), 0) * 3                                    as probes_still_needed,
+  min(q.queued_at)                                                           as oldest
+from public.cdn_move_queue q
+join public.assets a on a.id = q.asset_id;
+```
+
+- **`would_skip_sweep`** — rows whose level never moved and whose last attempt did not fail. These
+  cost nothing beyond their column check; before the sweep rule they each cost three round trips per
+  page.
+- **`probes_still_needed`** — the page round trips the next drain will actually spend. This is the
+  number that should be small, and the one to watch if a drain is slow. A brand-new row contributes
+  to it (`was_level` is null, so nothing recorded where its bytes were) exactly once, then the row is
+  deleted and never swept again unless its level moves.
+- **`previously_failed`** — read this as an alert, not a statistic. Non-zero means some asset's bytes
+  and access level have disagreed since that attempt. Those rows sweep regardless, by design. Name the
+  cause with `select last_error, count(*) from public.cdn_move_queue where attempts > 0 group by 1
+  order by 2 desc;`.
+- **`queued` across runs** — is the queue draining or growing? Growing means something upstream is
+  churning `effective_level` every run, which is worth finding rather than out-draining.
+
+For scale: a library of 82 assets with 12 documents and 166 rendered pages costs **498 page probes**
+if every asset is queued at once — which is what the seeding insert in 20260802090000 did, and what a
+bulk `perm` edit still does. At most 166 of those can find anything; when no level actually moved, all
+498 miss. That was 20.5 s of a 23.7 s pipeline run before the sweep rule, and it is the reason the
+rule exists.
 
 ### Changing many at once
 

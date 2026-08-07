@@ -9,14 +9,21 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 **Deployment**
 
-- **One migration, and the `cdn-reconcile` function must be deployed with it.**
+- **One migration, and the `cdn-reconcile` function must be deployed with it — never before it.**
   `20260807120000_cdn_move_queue_keep_attempt_marker` stops the queue trigger clearing `attempts`
   and `last_error` on a re-queue; the reconcile's new "skip the page sweep when the level did not
-  move" rule reads that marker to decide when skipping is unsafe. Apply with `supabase migration up`
-  — pending migrations only, never a reset — then `supabase functions deploy cdn-reconcile`, local →
-  staging → production. **Deploying the function without the migration is the wrong order**: the
-  trigger would keep erasing the marker, and an asset whose earlier pass failed could have a page
-  left at a wider level than its row. The reverse order is harmless.
+  move" rule reads that marker to decide when skipping is unsafe. Function first would mean the
+  trigger keeps erasing it, and an asset whose earlier pass failed could keep a page readable at a
+  wider level than its row.
+
+  **Staging and production need no commands.** `db.yml` runs `supabase db push` and then
+  `supabase functions deploy` in that order in one job, on merge to `staging` and to `main` — so the
+  ordering above is already guaranteed by the pipeline. **Local is the one environment that is
+  manual**: `npx supabase migration up` (pending migrations only, never a reset).
+- **Check the move queue after the first drain on each environment**, with the query in
+  [Access levels → Is the queue healthy?](docs/pages/cloud-storage/access-levels.mdx). It is the
+  only place the change is visible as a number, and `previously_failed > 0` is worth reading as an
+  alert rather than a statistic.
 - No environment variables or secrets change. The one new file, `run-timings.jsonl`, is created in
   the app data directory on the first run after upgrading and is safe to delete at any time — it
   costs the timing history and nothing else.
