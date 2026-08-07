@@ -5,7 +5,7 @@ CONTEXT block from `DONE_01_security-hardening-S0-S7.md` to any prompt before ha
 `REF_` files are reference/strategy, not tasks. `DONE_` files are already implemented — kept for
 context, don't re-run.
 
-_Last updated 2026-08-07 (00a/00b/00c landed; `02` closed — the Drive duplicate-folder fix and its cleanup tool are in)._
+_Last updated 2026-08-07 (00a/00b/00c landed; `02` closed — the Drive duplicate-folder fix and its cleanup tool are in; `04a`–`04f` performance series added, evidence in `REF_performance-audit.md`)._
 
 ## 🚢 3.2.2 — code complete
 
@@ -28,7 +28,15 @@ throughput, which `00b` part A restored but which no automated test can observe.
 
 | # | File | What it does | Status |
 |---|---|---|---|
-| 03 | `03_asset-conversion-and-tag-inference.md` | The adoption feature: folder→asset conversion (drop/batch/right-click) + path/file-type tag inference. Prompts A–E, has its own dependency graph. | TODO (feature work — after the fixes) |
+| 04a | `04a_perf-timing-instrumentation.md` | Per-stage durations in the run log + RUN TOTAL. Zero behaviour change; every later 04x measures against it. | TODO (run FIRST of the 04 series) |
+| 04b | `04b_perf-supabase-write-concurrency.md` | Asset-row writes pooled 8-wide instead of one awaited HTTP call per row (~8× on the biggest silent gap). Builds the shared `asyncPool`. | TODO |
+| 04c | `04c_perf-readme-churn.md` | Stop rewriting every readme.md into the Dropbox source tree every run (timestamp removed, skip-if-unchanged). | TODO |
+| 04d | `04d_perf-worker-pools-and-ipc.md` | Chunked barriers → true worker pools; pure-string path joins (kill per-file IPC); log/progress batching. | TODO (after 04b for the pool helper) |
+| 04e | `04e_perf-cloud-export.md` | Drive folder-children sweep instead of per-file LIST; MD5 memo (stops cold-cache Dropbox downloads); OneDrive skip-if-unchanged; stretch: uploads in Rust. | TODO |
+| 04f | `04f_perf-stage-overlap.md` | Parallel pre-run fetches; early scanVersionMap; optional publish ∥ CDN overlap. Riskiest — run LAST. | TODO |
+| 05 | `05_asset-conversion-and-tag-inference.md` | The adoption feature: folder→asset conversion (drop/batch/right-click) + path/file-type tag inference. Prompts A–E, has its own dependency graph. | TODO (feature work — after the perf series) |
+
+The evidence behind the 04 series: `REF_performance-audit.md`.
 
 ## ✅ Done (implemented — don't re-run)
 
@@ -86,10 +94,11 @@ throughput, which `00b` part A restored but which no automated test can observe.
 
 ## 📎 Reference (not tasks)
 
+- `REF_performance-audit.md` — the 2026-08-07 run-speed audit behind the `04a`–`04f` series (ranked findings, gdrive review verdict, what NOT to "optimize").
 - `REF_audit-findings.md` — the full P0–P3 findings list with file:line.
 - `REF_audit-verification.md` — implemented-vs-checklist with evidence, plus the 2026-08-06 re-check.
 - `REF_onboarding-and-scaling.md` — the "acquirable by other agencies" analysis (identity model, custom domains, onboarding friction).
-- `REF_asset-mgmt-and-tag-inference-plan.md` — value/effort plan + the detailed tag-inference design that `03` implements.
+- `REF_asset-mgmt-and-tag-inference-plan.md` — value/effort plan + the detailed tag-inference design that `05` implements.
 - `docs/pages/ideas/slimming-the-bundled-libreoffice.mdx` — the ~800MB trim, relevant before auto-update is turned on.
 
 ## Known deliberate residual (not a task)
