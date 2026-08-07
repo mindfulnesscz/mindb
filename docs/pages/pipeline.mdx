@@ -15,9 +15,23 @@ but it does not render or copy files, update identity manifests or caches, uploa
 cloud objects, mutate Supabase rows/tags/version history, write DAM output, or start
 Stream uploads. Intended actions are written to the activity log with `[DRY]`.
 
-**Stop is cooperative.** An in-flight bounded batch is allowed to finish; the run halts at the next
-stage or batch checkpoint. Post-run Supabase, CDN reconcile, tag, version-history and
-Stream work use the same stop signal, so the run is not marked complete before that tail finishes.
+**Stop is cooperative.** Work already in flight is allowed to finish; **Stop** is checked before
+every new item is dispatched, so nothing further starts. Post-run Supabase, CDN reconcile, tag,
+version-history and Stream work use the same stop signal, so the run is not marked complete before
+that tail finishes.
+
+**Everything bounded runs through one worker pool.** Renders, CDN uploads, page previews, cloud
+uploads, Supabase row writes and the CDN prune/delete sweeps all dispatch through
+`services/pipeline/pool.ts`, which keeps a fixed number of items in flight and starts the next one
+the moment a slot frees. The widths are **8 for uploads and renders, 4 for deletes** — a delete
+destroys an object and the lists are short, so it gets the narrower lane.
+
+The width is not the interesting part; the *scheduling* is. These stages used to run as chunked
+barriers — eight started, then all eight waited for the slowest before the next eight began — so one
+500 MB video or one 400-page deck held seven slots empty for as long as it took. Page previews had a
+second version of the same problem: documents ran strictly one at a time with their pages eight-wide
+inside, so a two-page deck used two of eight slots. Nothing about **what** is uploaded, deleted or
+skipped changed with any of this, and no width was raised.
 
 | Step | What it does | |
 |---|---|---|

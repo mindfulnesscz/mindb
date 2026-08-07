@@ -23,6 +23,10 @@ import {
 import { findPackageFolders, syncPackageFromOut, keepOnlyHighestVersions } from './packages';
 import { nestedPublishRel } from './publishLocal';
 import { mimeFromExt } from './cdnUpload';
+import { asyncPool } from './pool';
+
+/** Unchanged from the chunked batches this replaced — the pipeline's standing upload width. */
+const UPLOAD_CONCURRENCY = 8;
 
 export interface CloudCacheEntry { mtimeMs: number; size: number; url?: string | null }
 type CloudCache = Record<string, CloudCacheEntry>
@@ -326,57 +330,40 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
       reportDuplicateFolders();
     }
 
-    // Match CDN: high concurrency; cache hits stay silent (summary only).
-    const CONCURRENCY = 8;
-    for (let i = 0; i < files.length; i += CONCURRENCY) {
-      if (ctx.isStopping?.()) return;
-      const batch = files.slice(i, i + CONCURRENCY);
-      await Promise.all(batch.map(async (job) => {
-        const { srcPath, ext, nestedOverride } = job;
-        const { nestedName, gdriveFolderPath, gdriveFileName } =
-          remoteNamesFor(job, vocabMap, flatten, cfg.remotePath);
+    /* Match CDN: eight at a time, cache hits silent (summary only). A pool rather than a chunked
+       barrier, because a destination's file sizes vary by orders of magnitude and one 500 MB video
+       in a batch of eight used to hold the other seven slots empty until it finished. */
+    await asyncPool(UPLOAD_CONCURRENCY, files, async (job) => {
+      const { srcPath, ext, nestedOverride } = job;
+      const { nestedName, gdriveFolderPath, gdriveFileName } =
+        remoteNamesFor(job, vocabMap, flatten, cfg.remotePath);
 
-        let url: string | null = null;
+      let url: string | null = null;
+      try {
+        let srcInfo: Awaited<ReturnType<typeof stat>>;
         try {
-          let srcInfo: Awaited<ReturnType<typeof stat>>;
-          try {
-            srcInfo = await stat(srcPath);
-          } catch (e) {
-            throw new Error(`Cannot stat ${srcPath}: ${e}`, { cause: e });
-          }
-          const mtimeMs = srcInfo.mtime?.getTime() ?? -1;
-          const cacheEntry = cloudCache[cloudCacheKey(dest.id, nestedName)];
-          if (cacheEntry && cacheEntry.size === srcInfo.size && cacheEntry.mtimeMs === mtimeMs) {
-            url = dest.generateLink ? (cacheEntry.url ?? null) : null;
-            cached += 1;
-            skipped += 1;
-            recordCloudUrl(srcPath, nestedOverride, dest, url);
-            return;
-          }
+          srcInfo = await stat(srcPath);
+        } catch (e) {
+          throw new Error(`Cannot stat ${srcPath}: ${e}`, { cause: e });
+        }
+        const mtimeMs = srcInfo.mtime?.getTime() ?? -1;
+        const cacheEntry = cloudCache[cloudCacheKey(dest.id, nestedName)];
+        if (cacheEntry && cacheEntry.size === srcInfo.size && cacheEntry.mtimeMs === mtimeMs) {
+          url = dest.generateLink ? (cacheEntry.url ?? null) : null;
+          cached += 1;
+          skipped += 1;
+          recordCloudUrl(srcPath, nestedOverride, dest, url);
+          return;
+        }
 
-          if (cfg.type === 'dropbox') {
-            const base   = cfg.remotePath.replace(/\/$/, '');
-            const remote = (base.startsWith('/') ? base : '/' + base) + '/' + nestedName;
-            const result = await uploadDropboxFile(cfg.token!.accessToken, srcPath, remote, dest.generateLink);
-            url = result.url;
-            if (result.skipped) {
-              skipped += 1;
-            } else {
-              if (uploadLogged < 3) {
-                appendLog('success', `  ✓  ${nestedName}`);
-                uploadLogged += 1;
-              } else if (uploadLogged === 3) {
-                appendLog('dim', `  … further uploads omitted from log`);
-                uploadLogged += 1;
-              }
-              uploaded += 1;
-              stats.published += 1;
-            }
-          } else if (cfg.type === 'onedrive') {
-            const bytes = await readFile(srcPath);
-            const base   = cfg.remotePath.replace(/^\//, '').replace(/\/$/, '');
-            const remote = base ? `${base}/${nestedName}` : nestedName;
-            url = await uploadOneDriveFile(cfg.token!.accessToken, bytes, remote, dest.generateLink, cfg.driveId);
+        if (cfg.type === 'dropbox') {
+          const base   = cfg.remotePath.replace(/\/$/, '');
+          const remote = (base.startsWith('/') ? base : '/' + base) + '/' + nestedName;
+          const result = await uploadDropboxFile(cfg.token!.accessToken, srcPath, remote, dest.generateLink);
+          url = result.url;
+          if (result.skipped) {
+            skipped += 1;
+          } else {
             if (uploadLogged < 3) {
               appendLog('success', `  ✓  ${nestedName}`);
               uploadLogged += 1;
@@ -386,46 +373,63 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
             }
             uploaded += 1;
             stats.published += 1;
-          } else if (cfg.type === 'gdrive') {
-            const result = await uploadGDriveFile(
-              cfg.token!.accessToken,
-              srcInfo.size,
-              () => readFile(srcPath),
-              () => invoke<string>('file_md5', { path: srcPath }),
-              mimeFromExt(ext),
-              gdriveFileName,
-              gdriveFolderPath,
-              dest.generateLink,
-              cfg.sharedDriveId,
-              dest.id,
-            );
-            url = result.url;
-            if (result.skipped) {
-              skipped += 1;
-            } else {
-              if (uploadLogged < 3) {
-                appendLog('success', `  ✓  ${nestedName}`);
-                uploadLogged += 1;
-              } else if (uploadLogged === 3) {
-                appendLog('dim', `  … further uploads omitted from log`);
-                uploadLogged += 1;
-              }
-              uploaded += 1;
-              stats.published += 1;
-            }
           }
-
-          rememberCloudUpload(cloudCache, dest.id, nestedName, mtimeMs, srcInfo.size, url);
-          cloudCacheDirty = true;
-
-          recordCloudUrl(srcPath, nestedOverride, dest, url);
-        } catch (e) {
-          appendLog('error', `  ✕  ${nestedName}: ${e}`);
-          errors += 1;
-          stats.errors += 1;
+        } else if (cfg.type === 'onedrive') {
+          const bytes = await readFile(srcPath);
+          const base   = cfg.remotePath.replace(/^\//, '').replace(/\/$/, '');
+          const remote = base ? `${base}/${nestedName}` : nestedName;
+          url = await uploadOneDriveFile(cfg.token!.accessToken, bytes, remote, dest.generateLink, cfg.driveId);
+          if (uploadLogged < 3) {
+            appendLog('success', `  ✓  ${nestedName}`);
+            uploadLogged += 1;
+          } else if (uploadLogged === 3) {
+            appendLog('dim', `  … further uploads omitted from log`);
+            uploadLogged += 1;
+          }
+          uploaded += 1;
+          stats.published += 1;
+        } else if (cfg.type === 'gdrive') {
+          const result = await uploadGDriveFile(
+            cfg.token!.accessToken,
+            srcInfo.size,
+            () => readFile(srcPath),
+            () => invoke<string>('file_md5', { path: srcPath }),
+            mimeFromExt(ext),
+            gdriveFileName,
+            gdriveFolderPath,
+            dest.generateLink,
+            cfg.sharedDriveId,
+            dest.id,
+          );
+          url = result.url;
+          if (result.skipped) {
+            skipped += 1;
+          } else {
+            if (uploadLogged < 3) {
+              appendLog('success', `  ✓  ${nestedName}`);
+              uploadLogged += 1;
+            } else if (uploadLogged === 3) {
+              appendLog('dim', `  … further uploads omitted from log`);
+              uploadLogged += 1;
+            }
+            uploaded += 1;
+            stats.published += 1;
+          }
         }
-      }));
-    }
+
+        rememberCloudUpload(cloudCache, dest.id, nestedName, mtimeMs, srcInfo.size, url);
+        cloudCacheDirty = true;
+
+        recordCloudUrl(srcPath, nestedOverride, dest, url);
+      } catch (e) {
+        appendLog('error', `  ✕  ${nestedName}: ${e}`);
+        errors += 1;
+        stats.errors += 1;
+      }
+    }, ctx.isStopping);
+    // A stopped run leaves without the per-destination DONE line, exactly as the chunked loop did.
+    if (ctx.isStopping?.()) return;
+
     if (cfg.type === 'gdrive') reportDuplicateFolders();
     appendLog(
       'section',

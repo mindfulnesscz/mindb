@@ -86,6 +86,32 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **Every batched stage now refills its slots instead of waiting for its slowest member.** Renders,
+  CDN thumbnail/page/original uploads, cloud uploads and the CDN prune and delete sweeps all ran as
+  chunked barriers: eight started, and then all eight waited for the slowest before the next eight
+  began. One 500 MB video, or one 400-page deck, held seven slots empty for as long as it took. They
+  now dispatch through the same worker pool the Supabase writes use, which starts the next item the
+  moment a slot frees.
+
+  **No width was raised.** Uploads and renders stay at eight, which is the measured sweet spot and,
+  for rendering, the number of one-shot PDFium workers the machine should be running. Deletes run
+  four at a time — narrower on purpose, because every request in a prune sweep destroys an object
+  and those lists are short.
+
+  **Page previews had a second version of the same problem.** Documents ran strictly one at a time
+  with their pages eight-wide inside, so a two-page deck used two of eight slots and a library of
+  short documents ran at a fraction of the width it was configured for. Pages now pool across
+  documents. Each document's stale-page sweep still runs strictly after that document's own pages
+  are all settled — it deletes everything under the asset's page prefixes that this run did not
+  claim, so starting it beside a sibling page's upload would race a delete against the write about
+  to claim that key.
+
+  **What is uploaded, deleted, skipped or kept is unchanged.** The still-referenced guard on a stale
+  object, the blast-radius verdict before a CDN delete, the per-key bucket routing, per-file error
+  accounting and the `[DRY]` previews all behave exactly as before; only the moment a request is
+  dispatched moved. **Stop** is still checked before every dispatch, and requests already in the air
+  still finish.
+
 - **The Supabase export writes rows eight at a time instead of one at a time.** It was issuing one
   awaited PostgREST round trip per asset row, in series, for parents and then for children. At the
   150–300 ms a round trip actually costs, a 300-asset library spent 45–90 seconds of every run doing

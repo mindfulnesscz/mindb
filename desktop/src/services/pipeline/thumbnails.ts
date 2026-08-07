@@ -18,6 +18,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { thumbPathFor, pagesDirFor } from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
 import { timePhase } from './timing';
+import { asyncPool } from './pool';
 import { THUMB_EXTS, PAGE_PREVIEW_EXTS, extensionOf, DEFAULT_PREVIEW_PAGE_LIMIT } from './naming';
 
 /* ── Thumbnail generation ───────────────────────────────────────────────── */
@@ -103,59 +104,56 @@ export async function runThumbnails(ctx: RunContext, stats: RunStats): Promise<v
   let done    = 0;
   ctx.setProgress(Math.round((done / total) * 100));
 
+  /* Eight at a time, and eight STAYS eight: each call spawns exactly one render worker, PDFium is
+     only safe one-per-process (see render.rs), and 8 is the measured sweet spot (DONE_00b). What
+     changed is the scheduling — a pool refills a slot the moment one frees, where the chunked
+     barrier this replaced made seven workers idle while the eighth finished a 400-page deck. */
   const CONCURRENCY = 8;
-  for (let i = 0; i < rasterJobs.length; i += CONCURRENCY) {
-    if (ctx.isStopping?.()) return;
-    const batch = rasterJobs.slice(i, i + CONCURRENCY);
-    await Promise.all(batch.map(async ({ srcFile, fileName, destFile }) => {
-      try {
-        const result = await invoke<boolean>('generate_thumbnail', { src: srcFile, dest: destFile, width, quality });
-        if (result) {
-          appendLog('success', `  ✓  ${fileName}`);
-          stats.thumbnails += 1;
-        } else {
-          appendLog('dim', `  ↷  thumbnail current: ${fileName}`);
-          stats.skipped += 1;
-        }
-      } catch (e) {
-        appendLog('error', `  ✕  ${fileName} — ${e}`);
-        stats.errors += 1;
+  await asyncPool(CONCURRENCY, rasterJobs, async ({ srcFile, fileName, destFile }) => {
+    try {
+      const result = await invoke<boolean>('generate_thumbnail', { src: srcFile, dest: destFile, width, quality });
+      if (result) {
+        appendLog('success', `  ✓  ${fileName}`);
+        stats.thumbnails += 1;
+      } else {
+        appendLog('dim', `  ↷  thumbnail current: ${fileName}`);
+        stats.skipped += 1;
       }
-      ctx.setProgress(Math.round((++done / total) * 100));
-    }));
-  }
+    } catch (e) {
+      appendLog('error', `  ✕  ${fileName} — ${e}`);
+      stats.errors += 1;
+    }
+    ctx.setProgress(Math.round((++done / total) * 100));
+  }, ctx.isStopping);
+  // A stopped run leaves the stage without its DONE banner, exactly as the chunked loop did.
+  if (ctx.isStopping?.()) return;
 
-  /* Documents: title thumbnail + page previews, one Rust call each. Concurrency stays at 8 to match
-     the rest of the pipeline — each call spawns exactly one render worker, and PDFium is only safe
-     one-per-process (see render.rs). */
-  for (let i = 0; i < docJobs.length; i += CONCURRENCY) {
-    if (ctx.isStopping?.()) return;
-    const batch = docJobs.slice(i, i + CONCURRENCY);
-    await Promise.all(batch.map(async ({ srcFile, fileName, destFile, pagesDir }) => {
-      try {
-        const r = await invoke<{ total: number; rendered: number; cached: boolean }>(
-          'generate_document_previews',
-          { src: srcFile, thumb: destFile, pagesDir, width, quality, limit: pageLimit },
-        );
-        if (r.cached) {
-          appendLog('dim', `  ↷  previews current: ${fileName} (${r.rendered}/${r.total})`);
-          stats.skipped += 1;
-        } else {
-          // `total` beyond `rendered` is not an error — it is what the portal turns into "download
-          // the asset to see the rest", so surface it rather than hiding the cap.
-          const capped = r.total > r.rendered ? ` of ${r.total}` : '';
-          appendLog('success', `  ✓  ${fileName} — ${r.rendered} page${r.rendered === 1 ? '' : 's'}${capped}`);
-          stats.thumbnails += 1;
-          stats.pagePreviews += r.rendered;
-        }
-        if (ctx.pageCounts) ctx.pageCounts.set(srcFile, { total: r.total, rendered: r.rendered });
-      } catch (e) {
-        appendLog('error', `  ✕  ${fileName} — ${e}`);
-        stats.errors += 1;
+  // Documents: title thumbnail + page previews, one Rust call each.
+  await asyncPool(CONCURRENCY, docJobs, async ({ srcFile, fileName, destFile, pagesDir }) => {
+    try {
+      const r = await invoke<{ total: number; rendered: number; cached: boolean }>(
+        'generate_document_previews',
+        { src: srcFile, thumb: destFile, pagesDir, width, quality, limit: pageLimit },
+      );
+      if (r.cached) {
+        appendLog('dim', `  ↷  previews current: ${fileName} (${r.rendered}/${r.total})`);
+        stats.skipped += 1;
+      } else {
+        // `total` beyond `rendered` is not an error — it is what the portal turns into "download
+        // the asset to see the rest", so surface it rather than hiding the cap.
+        const capped = r.total > r.rendered ? ` of ${r.total}` : '';
+        appendLog('success', `  ✓  ${fileName} — ${r.rendered} page${r.rendered === 1 ? '' : 's'}${capped}`);
+        stats.thumbnails += 1;
+        stats.pagePreviews += r.rendered;
       }
-      ctx.setProgress(Math.round((++done / total) * 100));
-    }));
-  }
+      if (ctx.pageCounts) ctx.pageCounts.set(srcFile, { total: r.total, rendered: r.rendered });
+    } catch (e) {
+      appendLog('error', `  ✕  ${fileName} — ${e}`);
+      stats.errors += 1;
+    }
+    ctx.setProgress(Math.round((++done / total) * 100));
+  }, ctx.isStopping);
+  if (ctx.isStopping?.()) return;
 
   appendLog('section',
     `━━━ THUMBNAILS DONE — ${stats.thumbnails} created · ${stats.pagePreviews} page preview(s) · ${stats.errors} errors ━━━ in ${phase.done()}`);
