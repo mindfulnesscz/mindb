@@ -33,6 +33,35 @@ Read it as follows.
 
 Durations are wall clock, not CPU time: a phase waiting on the network reports the wait. That is the intent — the operator is waiting too.
 
+## Comparing runs
+
+Every run is appended to `run-timings.jsonl` in the app data directory, and each new run is compared against the last comparable one:
+
+```
+━━━ RUN TOTAL — 2m 5s ━━━  (-1m 7s vs previous run)
+  1. THUMBNAILS         41.0s  (33%)        —
+  2. CLOUD EXPORT       33.5s  (27%)    +2.1s
+  3. CDN THUMBNAILS     12.4s  (10%)        —
+  4. PUBLISH             9.1s  ( 7%)     new
+  5. SUPABASE EXPORT     6.1s  ( 5%)   -42.1s
+  measured 1m 44s of 2m 5s
+  vs 07/08/2026 09:20 · 312 asset(s) · 3.2.2
+```
+
+- **`—` means unchanged.** Anything under 100 ms of movement is reported that way: below that the number is scheduler noise, and a column of `+11ms`/`-7ms` reads as signal when it is not.
+- **`new` means the baseline had no such phase** — a stage that was off last time, or one that did not exist in that build. It is not an infinite regression, so it is not reported as one.
+- **The last line is provenance, and you should read it.** Asset count is deliberately *not* part of what makes two runs comparable — it drifts a little every run and matching on it would reject nearly every comparison — so it is printed instead, for you to discount a comparison that is not fair.
+
+**What counts as comparable:** the same client, the same stages enabled, and the same dry-run flag. A run with thumbnails off is not faster than one with thumbnails on, and a dry run is not faster than a real one; matching on the stage set is what stops the log claiming either. A **stopped** run is excluded on both sides — it is a partial measurement, and comparing against one would report a large fictional regression on the next full run. When nothing comparable exists, the headline and the delta column are simply omitted rather than guessed at.
+
+The file itself is one JSON object per line — client, app version, stages, asset count, and every phase *and sub-step* with its milliseconds, not only the five that made the ranking. Reach it from **Settings → Diagnostics**, which opens or reveals it. It is capped at the most recent 500 runs.
+
+```bash
+# the five slowest phases across every run of the last week, worst first
+jq -r '.phases[] | @tsv' ~/Library/Application\ Support/*/run-timings.jsonl \
+  | sort -k2 -rn | head -5
+```
+
 Counters are shared across stages. `published` can include multiple destinations, so it is not a unique-asset count. `skipped` includes benign unchanged work and contributes to “completed with issues.” CDN thumbnail summary’s “no thumb” bucket means a missing local sidecar (not an inventory shortcut).
 
 For proof, inspect the target appropriate to the phase: local filesystem for generation, R2 metadata/object URL for CDN, provider UI/API for cloud export, and Supabase row for portal state.

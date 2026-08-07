@@ -6,6 +6,7 @@ import {
   formatDuration, startTimer, beginRunTimeline, endRunTimeline,
   timePhase, timeStep, runTimelineSummary, logRunTimeline,
 } from './timing';
+import type { TimelineBaseline } from './timing';
 
 describe('formatDuration', () => {
   it('reports sub-second work in whole milliseconds', () => {
@@ -130,6 +131,87 @@ describe('run timeline', () => {
     expect(lines[1]).toContain('1m 0s');
     expect(lines[1]).toContain('(60%)');
     expect(lines[2]).toBe('  measured 1m 0s of 1m 40s');
+    // Nothing to compare against, so nothing is claimed.
+    expect(lines.some(l => l.includes('vs previous'))).toBe(false);
+  });
+
+  it('reports the full timeline, not just the ranked five', () => {
+    for (let i = 0; i < 7; i++) { const p = timePhase(`P${i}`); advance(1_000); p.done(); }
+    const step = timeStep('P0 › inner');
+    advance(500);
+    step.done();
+
+    const summary = runTimelineSummary()!;
+    expect(summary.slowest).toHaveLength(5);
+    expect(summary.phases).toHaveLength(7);
+    expect(summary.steps).toEqual([{ label: 'P0 › inner', ms: 500 }]);
+  });
+});
+
+describe('comparing against a previous run', () => {
+  let nowSpy: ReturnType<typeof vi.spyOn>;
+  let clock = 0;
+  const advance = (ms: number) => { clock += ms; };
+
+  function render(baseline: TimelineBaseline) {
+    const lines: string[] = [];
+    logRunTimeline((_type, msg) => lines.push(msg), { baseline });
+    return lines;
+  }
+
+  beforeEach(() => {
+    clock = 0;
+    nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    beginRunTimeline();
+  });
+  afterEach(() => { endRunTimeline(); nowSpy.mockRestore(); });
+
+  const baseline = (phases: Record<string, number>, totalMs: number) =>
+    ({ totalMs, phases, describedAs: '07/08/2026 09:20 · 300 asset(s) · 3.2.2' });
+
+  it('puts the change on the headline and on each phase', () => {
+    const slow = timePhase('SUPABASE EXPORT');
+    advance(6_000);
+    slow.done();
+    const same = timePhase('THUMBNAILS');
+    advance(41_000);
+    same.done();
+
+    const lines = render(baseline({ 'SUPABASE EXPORT': 48_000, 'THUMBNAILS': 41_000 }, 120_000));
+
+    expect(lines[0]).toBe('━━━ RUN TOTAL — 47.0s ━━━  (-1m 13s vs previous run)');
+    expect(lines.find(l => l.includes('THUMBNAILS'))).toContain('—');       // unchanged
+    expect(lines.find(l => l.includes('SUPABASE EXPORT'))).toContain('-42.0s');
+    expect(lines.at(-1)).toBe('  vs 07/08/2026 09:20 · 300 asset(s) · 3.2.2');
+  });
+
+  it('calls a phase the baseline never had "new", not an infinite regression', () => {
+    const fresh = timePhase('CDN PAGES');
+    advance(9_000);
+    fresh.done();
+
+    const lines = render(baseline({ THUMBNAILS: 41_000 }, 9_000));
+    expect(lines.find(l => l.includes('CDN PAGES'))).toContain('new');
+  });
+
+  it('treats sub-100ms movement as unchanged, because that is scheduler noise', () => {
+    const phase = timePhase('PUBLISH');
+    advance(9_050);
+    phase.done();
+
+    const lines = render(baseline({ PUBLISH: 9_000 }, 9_000));
+    expect(lines.find(l => l.includes('PUBLISH'))).toContain('—');
+    expect(lines[0]).not.toContain('+');
+  });
+
+  it('shows a regression with a leading plus', () => {
+    const phase = timePhase('CLOUD EXPORT');
+    advance(50_000);
+    phase.done();
+
+    const lines = render(baseline({ 'CLOUD EXPORT': 33_500 }, 33_500));
+    expect(lines[0]).toContain('(+16.5s vs previous run)');
+    expect(lines.find(l => l.includes('CLOUD EXPORT'))).toContain('+16.5s');
   });
 });
 

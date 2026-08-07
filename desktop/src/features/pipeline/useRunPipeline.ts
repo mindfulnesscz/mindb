@@ -29,6 +29,13 @@ import { notifyRunComplete } from '../../services/notifyService';
 import { groupAssets, type VocabularyData } from '@sotto/domain';
 import { resolveRunPlan } from './runPlan';
 import { beginRunTimeline, endRunTimeline, logRunTimeline, timePhase } from '../../services/pipeline/timing';
+import {
+  buildRunRecord, findBaseline, loadRunTimings, appendRunTiming, toBaseline,
+} from '../../services/pipeline/runTimings';
+
+/* Stamped into each run record so a timing can be attributed to the build that produced it —
+   an "everything got slower" report is only actionable with the version attached. */
+const APP_VERSION = __APP_VERSION__;
 
 export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise<void> {
   const settings = useSettingsStore(s => s.settings);
@@ -191,8 +198,23 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
     }
 
     /* Last thing before the run is declared over, so the total covers the pre-run fetches and the
-       portal sync as well as the pipeline itself — the two places the silent gaps were found. */
-    logRunTimeline(appendLog);
+       portal sync as well as the pipeline itself — the two places the silent gaps were found.
+       The history read happens BEFORE the record is appended, or every run would compare
+       against itself. */
+    const record = buildRunRecord({
+      settings:   effectiveSettings,
+      clientId,
+      clientName: activeClient?.name ?? null,
+      appVersion: APP_VERSION,
+      assets:     collectedAssets.length,
+      errors:     stats.errors,
+      stopped:    usePipelineStore.getState().runStatus === 'stopping',
+    });
+    const baseline = record && !record.stopped
+      ? findBaseline(await loadRunTimings(), record)
+      : null;
+    logRunTimeline(appendLog, { baseline: baseline && toBaseline(baseline) });
+    if (record) await appendRunTiming(record);
     endRunTimeline();
 
     finishRun(stats, stats.errors > 0 || stats.skipped > 0);

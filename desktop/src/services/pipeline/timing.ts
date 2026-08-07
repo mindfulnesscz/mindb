@@ -102,42 +102,90 @@ export function timeStep(label: string): PhaseTimer {
   return track(label, false);
 }
 
+export interface LabelledDuration { label: string; ms: number }
+
 export interface RunTimelineSummary {
   /** Wall clock from `beginRunTimeline()` — not the sum of phases; see `measuredMs`. */
   totalMs: number;
   /** Summed top-level phases. Below `totalMs` by whatever the run does that nothing times. */
   measuredMs: number;
-  slowest: { label: string; ms: number }[];
+  /** Ranked phases, slowest first, capped at `topN`. */
+  slowest: LabelledDuration[];
+  /** EVERY ranked phase, in the order it completed. What the run record persists. */
+  phases: LabelledDuration[];
+  /** Every sub-step, in completion order. Persisted too — they are where 04b–04f will land. */
+  steps: LabelledDuration[];
 }
 
 export function runTimelineSummary(topN = 5): RunTimelineSummary | null {
   if (!timeline) return null;
   const ranked = timeline.phases.filter(p => p.ranked);
+  const bare = ({ label, ms }: PhaseRecord): LabelledDuration => ({ label, ms });
   return {
     totalMs: now() - timeline.started,
     measuredMs: ranked.reduce((sum, p) => sum + p.ms, 0),
-    slowest: [...ranked].sort((a, b) => b.ms - a.ms).slice(0, topN).map(({ label, ms }) => ({ label, ms })),
+    slowest: [...ranked].sort((a, b) => b.ms - a.ms).slice(0, topN).map(bare),
+    phases: ranked.map(bare),
+    steps: timeline.phases.filter(p => !p.ranked).map(bare),
   };
+}
+
+/**
+ * A previous run to measure this one against. Deliberately plain numbers rather than the persisted
+ * record type — this module stays free of the filesystem, and of any opinion about what makes two
+ * runs comparable. `runTimings.ts` decides that and hands the answer in.
+ */
+export interface TimelineBaseline {
+  totalMs: number;
+  /** Phase label → milliseconds, from the run being compared against. */
+  phases: Record<string, number>;
+  /** One line of provenance, so an unfair comparison can be recognised as one. */
+  describedAs: string;
+}
+
+/**
+ * A signed delta, or `—` when nothing moved. Sub-100ms differences are reported as unchanged:
+ * below that the number is scheduler noise, and a column of `+11ms`/`-7ms` reads as signal.
+ */
+function formatDelta(deltaMs: number): string {
+  if (Math.abs(deltaMs) < 100) return '—';
+  return `${deltaMs > 0 ? '+' : '-'}${formatDuration(Math.abs(deltaMs))}`;
 }
 
 /**
  * The closing block. Wall clock first, because that is the number the operator felt, then the
  * phases worth attacking. The measured-of-total line is the honest part: a large gap between them
  * is untimed work, and finding it is the whole point of this instrumentation.
+ *
+ * With a baseline, every line also carries its change since the comparable previous run — which is
+ * what makes a regression visible the moment it happens rather than at the next audit.
  */
 export function logRunTimeline(
   appendLog: (type: 'section' | 'dim', msg: string) => void,
-  topN = 5,
+  options: { baseline?: TimelineBaseline | null; topN?: number } = {},
 ): void {
+  const { baseline = null, topN = 5 } = options;
   const summary = runTimelineSummary(topN);
   if (!summary) return;
-  appendLog('section', `━━━ RUN TOTAL — ${formatDuration(summary.totalMs)} ━━━`);
+
+  const headline = baseline
+    ? `  (${formatDelta(summary.totalMs - baseline.totalMs)} vs previous run)`
+    : '';
+  appendLog('section', `━━━ RUN TOTAL — ${formatDuration(summary.totalMs)} ━━━${headline}`);
   if (!summary.slowest.length) return;
 
   const width = Math.max(...summary.slowest.map(p => p.label.length));
   summary.slowest.forEach((phase, i) => {
     const share = summary.totalMs > 0 ? Math.round((phase.ms / summary.totalMs) * 100) : 0;
-    appendLog('dim', `  ${i + 1}. ${phase.label.padEnd(width)}  ${formatDuration(phase.ms).padStart(7)}  (${share}%)`);
+    // A phase absent from the baseline is new, not infinitely slower — say so rather than
+    // reporting its whole duration as a regression.
+    const before = baseline?.phases[phase.label];
+    const delta = !baseline ? ''
+      : before === undefined ? '     new'
+      : `  ${formatDelta(phase.ms - before).padStart(7)}`;
+    appendLog('dim',
+      `  ${i + 1}. ${phase.label.padEnd(width)}  ${formatDuration(phase.ms).padStart(7)}  (${String(share).padStart(2)}%)${delta}`);
   });
   appendLog('dim', `  measured ${formatDuration(summary.measuredMs)} of ${formatDuration(summary.totalMs)}`);
+  if (baseline) appendLog('dim', `  vs ${baseline.describedAs}`);
 }

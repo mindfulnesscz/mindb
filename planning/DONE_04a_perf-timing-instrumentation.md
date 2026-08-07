@@ -4,7 +4,21 @@
 > every stage module, the Supabase/tag/stream/version-history sync modules, and `useRunPipeline`.
 > Green on `lint`, `typecheck`, `test:packages`, `test:desktop`, `build:docs`.
 >
-> **Two decisions worth knowing before touching it:**
+> **Extended beyond the prompt, on request:** runs are now PERSISTED and compared.
+> `services/pipeline/runTimings.ts` appends one JSON line per run to `run-timings.jsonl` in the app
+> data directory (capped at 500, reachable from Settings → Diagnostics), and the `RUN TOTAL` block
+> carries the change since the last comparable run, per phase and in total. This is what makes
+> "record before/after timings in each 04x commit" a copy-paste rather than a stopwatch exercise.
+>
+> **Comparability is the load-bearing part, not the storage.** Same client, same stages enabled,
+> same dry-run flag — a thumbnails-off run is not faster than a thumbnails-on one, and matching on
+> the stage set is what stops the log claiming it is. Stopped runs are excluded on both sides: a
+> partial measurement would report a large fictional regression on the next full run. Asset count
+> is deliberately NOT matched on (it drifts every run and would reject nearly every comparison) and
+> is printed in the provenance line instead. **If you add a stage flag to `AppSettings`, add it to
+> `STAGE_FLAGS` in `runTimings.ts`** — otherwise two genuinely different runs compare as equals.
+>
+> **Two more decisions worth knowing before touching it:**
 >
 > - **The timeline is module state, not a threaded collector.** A run's phases span `runPipeline`,
 >   the stage modules and the post-run sync in `useRunPipeline`, and the widest of them

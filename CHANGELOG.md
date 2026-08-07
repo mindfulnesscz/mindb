@@ -29,6 +29,28 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   do reorder things have a number to be measured against. See
   [Logs and diagnostics → Timings](docs/pages/desktop/logs.mdx).
 
+- **Runs are kept, and each one is compared against the last.** The run log is in-memory and dies
+  with the app, so a duration you could see but not keep answered "where does this run spend its
+  time" and not "is this slower than it used to be" — which is the question a regression is. Every
+  run now appends a line to `run-timings.jsonl` in the app data directory, and the `RUN TOTAL`
+  block carries the change since the last comparable run, per phase and in total.
+
+  **Comparable means the same client, the same stages enabled, and the same dry-run flag.** A run
+  with thumbnails off is not faster than one with thumbnails on, and matching on the stage set is
+  what stops the log claiming it is. Stopped runs are excluded on both sides — a partial
+  measurement would report a large fictional regression on the next full run. With nothing
+  comparable on file the deltas are omitted rather than guessed at. Asset count is deliberately not
+  part of the match, because it drifts every run and would reject nearly every comparison; it is
+  printed in the provenance line instead, so an unfair comparison can be recognised as one.
+
+  Sub-100ms movement reports as unchanged rather than as a signed number, and a phase the baseline
+  never had reports as `new` rather than as an infinite regression.
+
+  The file is one JSON object per line — every phase *and* sub-step, not only the five that made
+  the ranking — capped at 500 runs, and reachable from **Settings → Diagnostics**, which now lists
+  it alongside the error log. Reading and writing it is best effort: it is a measurement, and it
+  must never fail a run that otherwise succeeded.
+
 ---
 
 ## [3.2.2] — 2026-08-06

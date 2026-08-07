@@ -52,7 +52,14 @@ The evidence behind the 04 series: `REF_performance-audit.md`.
   text altered (durations are appended). Covered by `pipeline/timing.test.ts` (formatter boundaries,
   ranking, idempotent `done()`) and `pipelineTiming.integration.test.ts`, which drives a real run
   and fails if any section-DONE banner loses its duration.
-  **Record before/after numbers from this in every later 04x commit.**
+  **Runs are also persisted and compared** (`services/pipeline/runTimings.ts`): one JSON line per
+  run in `run-timings.jsonl` under app data, capped at 500 and reachable from Settings →
+  Diagnostics, with the `RUN TOTAL` block carrying the change since the last COMPARABLE run — same
+  client, same stages enabled, same dry-run flag, stopped runs excluded on both sides. Asset count
+  is not matched on (it drifts every run) but is printed, so an unfair comparison is visible. **Add
+  any new stage flag to `STAGE_FLAGS` there**, or two different runs will compare as equals.
+  **Record before/after numbers from this in every later 04x commit — the delta line gives them to
+  you directly.**
 
 - `DONE_02_gdrive-duplicate-folder-fix.md` — Drive's duplicate folders, both halves.
   **G1**: folder resolution is race-safe (one shared in-flight resolve per path segment, the
