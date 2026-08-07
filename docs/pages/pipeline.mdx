@@ -160,12 +160,14 @@ For each cloud destination with a valid OAuth token:
 **Why two folder layouts.** They are the two trees this stage and the publish stage each already
 produced, now named apart. `folders` was a cloud destination’s only meaning before 3.2.3 and stays
 the default for that reason: an unknown or absent value resolves to `folders`, never to `source`, so
-no stored destination restructures itself on upgrade. Switching a live destination to `source` moves
-every file into a new remote path on the next run — the cloud export never deletes, so the copies
-already at the destination root stay until they are cleared (on Drive, via
-[duplicate-folder cleanup](/operations/gdrive-dedupe) or by hand). The path rules for `source` are
-shared with the publish stage in `services/pipeline/deliveryLayout.ts`, and a test runs both stages
-over one library and compares what they deliver.
+no stored destination restructures itself on upgrade. The path rules for `source` are shared with the
+publish stage in `services/pipeline/deliveryLayout.ts`, and a test runs both stages over one library
+and compares what they deliver.
+
+**Changing a live destination's layout relocates every delivered file.** Left to the export that
+means re-uploading each one at its new path and leaving the old copy behind. On Google Drive, run
+[the layout mover](/operations/gdrive-relayout) instead — metadata-only re-parenting, no orphans, and
+sharing links survive. Dropbox and OneDrive have no mover yet.
 
 Sharing links (when `generateLink`) are keyed by `(stable_id, child_id)` and later written to
 Supabase for the portal. Equal filenames in separate packages cannot overwrite each other's links.

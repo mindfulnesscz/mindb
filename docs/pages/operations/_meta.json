@@ -7,5 +7,6 @@
   "error-reporting": "Error reporting",
   "gated-delivery-rollout": "Gated delivery rollout",
   "cdn-garbage-collection": "CDN garbage collection",
-  "gdrive-dedupe": "Google Drive duplicate folders"
+  "gdrive-dedupe": "Google Drive duplicate folders",
+  "gdrive-relayout": "Changing a Drive destination's layout"
 }

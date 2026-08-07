@@ -30,11 +30,14 @@ since it existed, and re-reading `folders` as "OUT subtree only" would restructu
 delivery to fix a naming inconsistency. On a **cloud** destination the two differ, and an unknown or
 absent value resolves to `folders` — never to `source` — so nothing moves on upgrade.
 
-**Switching a live destination to `source` is a migration, not a setting.** Every file uploads again
-under a new remote path, and because the cloud export never deletes, the copies already at the
-destination root stay there until they are removed (on Drive: preview-first
-[duplicate-folder cleanup](/operations/gdrive-dedupe), or by hand). Sharing links are re-collected
-against the new paths and rewritten in Supabase, so the portal follows automatically.
+**Switching a live destination's layout moves every delivered file.** On **Google Drive**, do it with
+the mover: **Settings → Cloud destinations → the destination → Export layout migration** re-parents
+each file in place — no bytes re-sent, no orphans, and sharing links survive because Drive's move
+keeps the file id. See
+[Changing a Drive destination's layout](/operations/gdrive-relayout).
+
+On **Dropbox and OneDrive** there is no mover yet: the next run uploads everything again under the new
+paths and the old copies stay until they are pruned by hand.
 
 ## How the bytes actually move
 
