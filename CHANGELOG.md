@@ -86,6 +86,32 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **The run no longer waits in series for four things that share nothing.** The vocabulary refresh,
+  the `r2-grant` request, the asset-level read and the page-preview limit were awaited one after
+  another before the run touched a file — four round trips, paid as a sum, when only the grant
+  needs anything the others produce (it needs nothing at all: the two database reads need the
+  environment configuration, never the grant). They are now fetched together, so the pre-run costs
+  the slowest read instead of all four, and the run log carries one `PRE-RUN READS` phase with each
+  read's own duration on its own line.
+
+  **What the log says, and what a failure falls back to, are unchanged** — deliberately, down to the
+  order. The lines are emitted after the join rather than as each read lands, so an operator reads
+  the same run they read before; a failed grant still disables the CDN steps with the same line, and
+  still discards the two reads that have already finished, because `preview_page_limit` decides how
+  many pages a degraded run renders **locally** and keeping a value the serial version never reached
+  would change what lands on disk. A read that throws behind a good grant still stops the ones after
+  it, which is what falling out of the old `try` block did.
+
+- **The version-history walk happens under the run instead of after it.** `scanVersionMap` is a
+  second full pass over the source tree — it reads the `versions/` subtrees the main scan skips — and
+  it ran after every network sync had finished, with the run doing nothing else while it did.
+  Nothing it reads is produced by the run (no stage writes into an `OUT` folder: readmes land in the
+  package root, renders land in `thumbnails/`, which the walk filters out), so it now starts right
+  after the source scan and is awaited where its result is consumed. `VERSION SCAN` in the timings
+  is therefore the *wait*, normally a few milliseconds, and the line reports the walk's own duration
+  next to it. It starts only for a run whose portal sync will read it, and only after the source scan
+  — two full walks racing on one disk would slow down the one every stage is waiting for.
+
 - **Every batched stage now refills its slots instead of waiting for its slowest member.** Renders,
   CDN thumbnail/page/original uploads, cloud uploads and the CDN prune and delete sweeps all ran as
   chunked barriers: eight started, and then all eight waited for the slowest before the next eight

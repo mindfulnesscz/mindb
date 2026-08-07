@@ -40,8 +40,9 @@ Every section-DONE banner ends with how long that section took — `━━━ TH
 
 Read it as follows.
 
-- **`RUN TOTAL` is wall clock**, measured from the moment the Run button is pressed. It covers the pre-run fetches (vocabulary, storage grant, asset levels, page-preview limit) and the post-run portal sync as well as the pipeline stages, because those are where the run's silent gaps have historically been.
-- **The ranking lists top-level phases only.** A step inside a phase — the Supabase export's `plan`/`writes`/`disconnect`, one cloud destination of several — reports its own duration on its own line where it happens, but stays out of the ranking so a parent and its child cannot take two slots to say one thing.
+- **`RUN TOTAL` is wall clock**, measured from the moment the Run button is pressed. It covers the pre-run reads (vocabulary, storage grant, asset levels, page-preview limit — one `PRE-RUN READS` phase, since they are fetched together) and the post-run portal sync as well as the pipeline stages, because those are where the run's silent gaps have historically been.
+- **The ranking lists top-level phases only.** A step inside a phase — the Supabase export's `plan`/`writes`/`disconnect`, one cloud destination of several, one of the four pre-run reads — reports its own duration on its own line where it happens, but stays out of the ranking so a parent and its child cannot take two slots to say one thing.
+- **Work that OVERLAPS the run is a step, for the same reason.** Anything measured concurrently would otherwise be counted twice, and `measured` would claim more time than the run took. So a phase always reports what the run *waited*: `VERSION SCAN` is now the wait for the version-history walk — normally a few milliseconds, because the walk started right after the source scan — and the walk's own duration is reported on the same line (`Version map ready in 3ms (walked in 6.1s alongside the run)`).
 - **`measured … of …` is the honest line.** The two numbers differ by whatever the run does that nothing times. A large and growing gap is the signal to instrument something new, not a rounding artefact.
 
 Durations are wall clock, not CPU time: a phase waiting on the network reports the wait. That is the intent — the operator is waiting too.

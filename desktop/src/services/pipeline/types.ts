@@ -77,7 +77,25 @@ export interface RunContext {
   pageCounts?:       Map<string, { total: number; rendered: number }>;
   /** Source directories the initial scan could not read; destructive reconciliation distrusts it. */
   sourceReadErrors?: Set<string>;
+  /** Start the version-history walk at the top of the run instead of leaving it to the consumer.
+   *  Set only by a run whose portal sync will actually read it — the walk is a second full pass
+   *  over the source tree, and a run without Supabase would throw the result away. */
+  earlyVersionScan?: boolean;
+  /** Filled in by `runPipeline` when `earlyVersionScan` is set; awaited by the portal sync. */
+  versionScan?:      Promise<VersionScanResult>;
 }
+
+/**
+ * The early version-history walk, settled into a value.
+ *
+ * A rejection is CARRIED rather than left on the promise: the await is minutes away (after the
+ * Supabase export), and an unhandled rejection in between would surface as a console error instead
+ * of the one log line the failure is supposed to produce. `took` is the walk's own duration, so the
+ * consumer can report it next to the near-zero wait it actually paid.
+ */
+export type VersionScanResult =
+  | { map:   Map<string, AssetVersions>; took: string }
+  | { error: unknown;                    took: string };
 
 
 export interface VersionEntry {

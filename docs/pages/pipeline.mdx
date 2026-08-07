@@ -33,6 +33,18 @@ second version of the same problem: documents ran strictly one at a time with th
 inside, so a two-page deck used two of eight slots. Nothing about **what** is uploaded, deleted or
 skipped changed with any of this, and no width was raised.
 
+**Two things outside the stages overlap as well.** The four pre-run reads — vocabulary, `r2-grant`,
+asset levels, page-preview limit — share no inputs (the two database reads need the environment
+configuration, not the grant), so they are fetched together and the run waits for the slowest rather
+than the sum of four round trips. Their *results* are still applied, logged and degraded in the old
+order: a failed grant disables the CDN steps exactly as before, and discards the other reads even
+though they finished, because `preview_page_limit` decides how many pages a degraded run renders
+locally. The **version-history walk** — a second full pass over the source tree, reading the
+`versions/` subtrees the scan skips — starts right after the scan and is awaited only where its
+result is consumed, after the portal sync, so it happens under the network stages instead of after
+them. Nothing the run writes changes what it sees, and a run with no Supabase session never starts
+it.
+
 | Step | What it does | |
 |---|---|---|
 | Scan | Walks the source folder for every file sitting in an `OUT` folder. | [→](#scan) |
@@ -208,6 +220,9 @@ desktop refreshes its vocabulary; existing filesystem names are not rewritten au
 ### Version history sync
 
 Scans each asset's `versions/` subfolder and upserts the `version_history` table: the current version is marked `Active`, older ones `History`; versions removed from disk are marked `Disconnected`; assets removed entirely are marked `Removed`.
+
+The scan half runs at the *top* of the run, concurrently with everything after it (see above); only
+the upsert waits for the portal sync, which is what it actually depends on.
 
 ## CDN URLs and spaces
 
