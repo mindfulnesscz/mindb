@@ -54,7 +54,15 @@ Every run is appended to `run-timings.jsonl` in the app data directory, and each
 
 **What counts as comparable:** the same client, the same stages enabled, and the same dry-run flag. A run with thumbnails off is not faster than one with thumbnails on, and a dry run is not faster than a real one; matching on the stage set is what stops the log claiming either. A **stopped** run is excluded on both sides — it is a partial measurement, and comparing against one would report a large fictional regression on the next full run. When nothing comparable exists, the headline and the delta column are simply omitted rather than guessed at.
 
-The file itself is one JSON object per line — client, app version, stages, asset count, and every phase *and sub-step* with its milliseconds, not only the five that made the ranking. Reach it from **Settings → Diagnostics**, which opens or reveals it. It is capped at the most recent 500 runs.
+The file itself is one JSON object per line — client, app version, stages, asset count, and every phase *and sub-step* with its milliseconds, not only the five that made the ranking. It is capped at the most recent 500 runs.
+
+## Reading the history without the file
+
+**Settings → Diagnostics** lists the last ten runs, newest first and the newest expanded. Each one shows its wall clock and its change against the comparable run before it; expanding a run gives **every** phase — not only the five the log ranks — slowest first, with its duration, its share of the run drawn as the row's fill, and its own delta. Under that sit the sub-steps and one line saying how much of the run no phase covers, or which run the deltas are against when there is one.
+
+The comparison rule is the same one the log uses, from the same code, so a delta here and the delta printed that day are the same number. The list is read when Settings opens.
+
+The **Open** and **Reveal** buttons stay for the whole 500-run history and for attaching the file to a bug report:
 
 ```bash
 # the five slowest phases across every run of the last week, worst first

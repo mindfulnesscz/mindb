@@ -7,14 +7,19 @@
  * Two actions rather than one, because they answer different questions: Open reads it, Reveal is what
  * you use to attach it to a bug report. Both are no-ops until the file exists, so each row says whether
  * it does and how big it is rather than opening an empty window.
+ *
+ * The run timings get a third thing: the last few runs, rendered. The file answers "where did the
+ * time go" only to someone willing to read JSONL, and that is the one diagnostic here an operator
+ * has a reason to consult when nothing is wrong.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener';
 import { appDataDir, join } from '@tauri-apps/api/path';
 import { exists, stat } from '@tauri-apps/plugin-fs';
 import { reportError, LOG_FILE } from '../../services/reportError';
 import { RUN_TIMINGS_FILE } from '../../services/pipeline/runTimings';
+import { RunTimingsTable } from './RunTimingsTable';
 import css from './SettingsView.module.css';
 
 interface DiagFile {
@@ -23,6 +28,8 @@ interface DiagFile {
   /** What to say when it does not exist yet — the absence is normal in both cases. */
   empty:   string;
   measure: (size: number) => string;
+  /** Rendered under the row's actions, for a file worth showing rather than only opening. */
+  detail?: () => ReactNode;
 }
 
 const FILES: DiagFile[] = [
@@ -40,6 +47,7 @@ const FILES: DiagFile[] = [
       + 'history behind that, for spotting drift over weeks.',
     empty: 'No runs recorded yet.',
     measure: size => `${(size / 1024).toFixed(1)} KB recorded.`,
+    detail: () => <RunTimingsTable />,
   },
 ];
 
@@ -90,6 +98,7 @@ export function DiagnosticsCard() {
                   Reveal in Finder
                 </button>
               </div>
+              {!empty && meta.detail?.()}
             </div>
           );
         })}

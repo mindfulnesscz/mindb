@@ -59,6 +59,16 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   it alongside the error log. Reading and writing it is best effort: it is a measurement, and it
   must never fail a run that otherwise succeeded.
 
+- **The last ten runs are readable in the app.** **Settings → Diagnostics** now renders the timing
+  history instead of only offering to open the file: each run with its wall clock and its change
+  since the comparable run before it, expanding to **every** phase — not just the five the log
+  ranks — slowest first, each with its duration, its share of the run drawn as the row's fill, and
+  its own delta. Sub-steps and the untimed remainder are shown underneath.
+
+  It reads the same file and uses the same comparability rule as the log, from the same code, so a
+  delta shown here and the one printed that day cannot disagree. Open and Reveal are unchanged, for
+  the full 500-run history and for attaching to a bug report.
+
 ### Changed
 
 - **The Supabase export writes rows eight at a time instead of one at a time.** It was issuing one
