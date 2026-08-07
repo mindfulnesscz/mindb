@@ -143,6 +143,13 @@ readme.md files alongside. The parent→child barrier is load-bearing; a child n
 resolved uuid. A failed row is logged and counted and does not stop its siblings, and **Stop** halts
 further dispatch while letting requests already in the air finish.
 
+**A package's `readme.md` is regenerated every run but written only when it changed.** Its content is
+a pure function of the row it describes — no timestamp — so a run over unchanged data writes nothing
+and reports `readme.md: 0 updated · N unchanged`. That matters because these notes live in the
+client's synced source folder, one per package: an unconditional write handed Dropbox the whole
+library to re-upload after every run. The comparison is against the file on disk rather than a record
+of what the last run wrote, so an edited or deleted readme is still healed by the next run.
+
 Because a long run can cross the one-hour access-token expiry, a `401` is retried once with a
 force-refreshed token. That refresh is **single-flight**: eight concurrent writes hitting `401`
 together trigger one `refreshSession()`, not eight. GoTrue rotates the refresh token on use, so

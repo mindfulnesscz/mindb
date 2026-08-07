@@ -81,6 +81,23 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   the moment a slot frees, rather than each group of eight waiting for its slowest member. It is
   shared, and the remaining stages move onto it next.
 
+- **`readme.md` is only written where it changed.** Every package folder gets one of these notes,
+  regenerated on every run — and each one carried a `_Last synced: <timestamp>_` line, so its
+  content differed from the copy on disk every single time. A run therefore rewrote every readme in
+  the library, inside the client's **synced Dropbox source tree**, which then spent the minutes
+  after each run re-uploading hundreds of tiny files that said the same thing as before.
+
+  The timestamp is gone and the content is now a pure function of the row it describes. Before
+  writing, the export reads the existing file and compares: identical means no write. A run over
+  unchanged data now writes **zero** readmes and reports `readme.md: 0 updated · N unchanged`.
+
+  **The notes are not stale as a result.** They are still regenerated in full every run — a changed
+  rating, view count, status or permission changes the content, and that file is written. The
+  comparison is against the file on disk rather than a record of what we wrote last time, so a
+  teammate's edit to a readme in the shared folder, or a deleted one, is still healed by the next
+  run. Nothing moved: same path, same name, same format minus one line, so Obsidian reads them
+  exactly as before.
+
 ### Fixed
 
 - **A token expiring mid-run could revoke the session instead of renewing it.** A `401` is retried

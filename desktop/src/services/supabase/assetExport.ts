@@ -205,8 +205,13 @@ export async function exportAssetsToSupabase(
 
     if (!dryRun && !shouldStop?.()) {
       const readmeStep = timeStep('SUPABASE EXPORT › readmes');
-      await writeReadmes(plan.readmeTargets, parentIdByKey, dbLevelById, vocab, config, appendLog);
-      if (plan.readmeTargets.length) appendLog('dim', `  ${plan.readmeTargets.length} readme.md written in ${readmeStep.done()}`);
+      const readmes = await writeReadmes(
+        plan.readmeTargets, parentIdByKey, dbLevelById, vocab, config, appendLog,
+      );
+      if (plan.readmeTargets.length) {
+        appendLog('dim',
+          `  readme.md: ${readmes.written} updated · ${readmes.unchanged} unchanged in ${readmeStep.done()}`);
+      }
     } else if (dryRun && plan.readmeTargets.length) {
       appendLog('dim', `  [DRY] would write ${plan.readmeTargets.length} readme.md file(s)`);
     }
@@ -237,6 +242,9 @@ export async function exportAssetsToSupabase(
  * (`published`/`public`), so the note claimed every asset was world-readable whatever the row
  * actually said. Since these notes are how the library gets read in Obsidian, that is the one
  * place a wrong access level is most likely to be believed.
+ *
+ * Regenerated every run, but WRITTEN only where the contents changed (see `writeReadme`) — a
+ * no-change run touches nothing in the client's synced source tree.
  */
 async function writeReadmes(
   targets: ReadmeTarget[],
@@ -245,8 +253,8 @@ async function writeReadmes(
   vocab: VocabularyData,
   config: SupabaseConfig,
   appendLog: (type: string, msg: string) => void,
-): Promise<void> {
-  if (!targets.length) return;
+): Promise<{ written: number; unchanged: number }> {
+  if (!targets.length) return { written: 0, unchanged: 0 };
 
   const primaryIds = targets
     .map(t => parentIdByKey.get(t.primaryKey))
@@ -265,7 +273,8 @@ async function writeReadmes(
     (byFolder.get(t.packageDir) ?? byFolder.set(t.packageDir, []).get(t.packageDir)!).push(t);
   }
 
-  let written = 0;
+  let written   = 0;
+  let unchanged = 0;
   await asyncPool(WRITE_CONCURRENCY, [...byFolder.values()], async (folderTargets) => {
     for (const t of folderTargets) {
       const primaryId = parentIdByKey.get(t.primaryKey);
@@ -274,17 +283,19 @@ async function writeReadmes(
         const parsed = parseFilename(t.stem, vocabCtx);
         const p      = parseAssetForSupabase(t.stem, vocab);
         const dbLevel = dbLevelById.get(primaryId);
-        await writeReadme(t.packageDir, {
+        const didWrite = await writeReadme(t.packageDir, {
           name: p.name, stableId: t.stableId, version: p.version,
           status: dbLevel?.status ?? t.status,
           perm:   dbLevel?.perm   ?? t.perm,
           tags: parsed.tags, stats: statsMap.get(primaryId) ?? null,
         });
-        written++;
+        if (didWrite) written++;
+        else unchanged++;
       } catch (e) {
         appendLog('error', `  ✕  readme.md write failed for "${t.packageDir}": ${e}`);
       }
     }
   });
-  appendLog('dim', `  readme.md written for ${written}/${targets.length} folder(s)`);
+  // Summarised, never per file: an unchanged run has one of these per package folder.
+  return { written, unchanged };
 }
