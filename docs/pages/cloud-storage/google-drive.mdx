@@ -19,17 +19,31 @@ path prefix, so they cannot race each other into creating duplicate same-named f
 queries include `corpora=drive`, `driveId`, `includeItemsFromAllDrives`, and `supportsAllDrives`.
 
 New files up to 5 MB upload as one multipart request (metadata + bytes); **larger files use a
-resumable session** (`uploadType=resumable`), so big assets upload past the multipart limit. Before
-uploading, Sotto looks up an existing same-name file in the target folder. It skips only when both
+resumable session** (`uploadType=resumable`) whose body is **streamed off disk natively** and never
+enters the webview — see [How the bytes actually move](/cloud-storage/overview#how-the-bytes-actually-move). Before
+uploading, Sotto checks for an existing same-name file in the target folder. It skips only when both
 size and Drive's `md5Checksum` match a native streaming checksum of the local file; equal-size
 changed content updates in place instead (media `PATCH`, or a resumable update when large). With link
 generation enabled, it adds an `anyone/reader` permission and returns `webViewLink`; the permission
 response is not checked before returning.
 
+**Existence is answered from one listing per folder, not one query per file.** After the destination
+tree is resolved, Sotto lists the children of every folder it is about to write into, once, and every
+upload in that run reads its answer from there — a destination with 300 assets across 12 folders used
+to spend 300 round trips learning what 12 could tell it. Two files of one name in a folder resolve to
+the **oldest**, the same rule folder resolution uses, so two runs cannot update different copies. A
+file created during the run is folded back into the listing, so a second file of the same name later
+in the same run updates it rather than adding a duplicate. **A failed listing falls back to a query
+per file**: a listing believed complete when it is not would read as "not uploaded yet" and put a
+second copy beside the client's file.
+
+The local checksum is also memoized — see
+[Cloud destination comparison](/cloud-storage/overview#what-a-run-costs-when-its-upload-cache-is-cold).
+
 ## Tradeoffs
 
 Shared Drives give organization ownership and consistent destination regardless of who connects.
 Folder creation is convenient. Costs are broad OAuth scope, a client secret stored in the
-workstation's OS keychain, full-file memory assembly for uploads, API quota usage from folder and
+workstation's OS keychain, API quota usage from folder and
 file searches, and potentially public sharing. Google-native anonymous sharing may be blocked by
 Workspace policy.

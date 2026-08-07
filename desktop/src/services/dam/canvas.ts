@@ -8,7 +8,7 @@
 import {
   writeTextFile, readTextFile, mkdir,
 } from '@tauri-apps/plugin-fs';
-import { join } from '@tauri-apps/api/path';
+import { joinPath } from '../pipeline/paths';
 import type { LogType } from '../../store/pipelineStore';
 import {
   relativeTo, pathParts, pathSortKey, compareSortKeys, stableId,
@@ -32,7 +32,7 @@ export async function updateDamCanvas(
   async function collectNotes(dir: string) {
     const es = await listDir(dir);
     for (const e of es) {
-      const childPath = await join(dir, e.name);
+      const childPath = joinPath(dir, e.name);
       if (e.isDirectory && !e.name.startsWith('.')) {
         await collectNotes(childPath);
       } else if (e.isFile && e.name.endsWith('.md') && !e.name.startsWith('🚫') && !e.name.startsWith('_X ')) {
@@ -56,9 +56,9 @@ export async function updateDamCanvas(
   if (existing) {
     const m = existing.name.match(/-c(\d+)/);
     if (m) cols = parseInt(m[1], 10);
-    canvasPath = await join(canvasDir, existing.name);
+    canvasPath = joinPath(canvasDir, existing.name);
   } else {
-    canvasPath = await join(canvasDir, `_X ${label} -c3.canvas`);
+    canvasPath = joinPath(canvasDir, `_X ${label} -c3.canvas`);
   }
 
   const noteFolderRel = relativeTo(noteFolder, vault);

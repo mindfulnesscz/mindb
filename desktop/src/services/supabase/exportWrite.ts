@@ -18,12 +18,23 @@
  * editor makes in the portal, so the pipeline supplies it once at INSERT and then has no opinion.
  * Sending it on every update would silently undo every promotion or lock-down between runs — and
  * because the access level is encoded in the R2 object key, it would drag the bytes back too.
+ *
+ * Each phase dispatches WRITE_CONCURRENCY rows at a time; the phases themselves stay strictly
+ * ordered, because a child cannot be written before its parent's uuid exists. It is one PATCH or
+ * POST per row either way — the per-row payloads are what PATCH semantics above depend on, so this
+ * parallelises the waiting and nothing else. Round-trip latency was the whole cost: a 300-asset
+ * library spent 45–90s doing nothing but awaiting one request after another.
  */
 
 import { sbFetch } from './rest';
+import { asyncPool } from '../pipeline/pool';
 import type { ChildWrite, ParentWrite, StableRow, SupabaseExportResult } from './exportTypes';
 
 type Log = (type: string, msg: string) => void;
+
+/** Rows in flight per phase. 8 matches every other pipeline stage; PostgREST/Supavisor is
+ *  untroubled by it, and the ceiling that matters here is politeness, not throughput. */
+export const WRITE_CONCURRENCY = 8;
 
 /** Collapse repeats by key, warning on each dropped duplicate. */
 export function dedupeByKey<T extends { key: string }>(items: T[], label: string, appendLog: Log): T[] {
@@ -66,6 +77,10 @@ export function stripPortalOwnedFields(record: Record<string, unknown>): Record<
  * Write parents/singles. Returns key → row uuid so children can be linked.
  * `existing` is updated as we go, so a key resolved more than once this run still lands as an
  * update rather than a duplicate insert.
+ *
+ * Safe to pool because `dedupeByKey` ran upstream: no two in-flight writes touch the same row, and
+ * each task's mutations (`result` counters, `parentIdByKey`, `existing`) happen in its own
+ * single-threaded stretch after its own await.
  */
 export async function writeParents(
   parents: ParentWrite[],
@@ -78,8 +93,7 @@ export async function writeParents(
 ): Promise<Map<string, string>> {
   const parentIdByKey = new Map<string, string>();
 
-  for (const { key, record: rawRecord } of parents) {
-    if (shouldStop?.()) break;
+  await asyncPool(WRITE_CONCURRENCY, parents, async ({ key, record: rawRecord }) => {
     // A primary/gallery parent is always top-of-hierarchy — clear BOTH relation fields
     // explicitly, or a stale value from an earlier build lingers (PATCH omits ⇒ untouched).
     const record = stripAbsentUrls({ ...rawRecord, parent_id: null, variant_of: null });
@@ -114,12 +128,17 @@ export async function writeParents(
         } else { appendLog('error', `  ✕  Stable insert failed for ${key}: ${await res.text()}`); result.errors++; }
       }
     } catch (e) { appendLog('error', `  ✕  Stable write error for ${key}: ${e}`); result.errors++; }
-  }
+  }, shouldStop);
 
   return parentIdByKey;
 }
 
-/** Write children, linking each to its parent by the relation the plan chose. */
+/**
+ * Write children, linking each to its parent by the relation the plan chose.
+ *
+ * Called only after `writeParents` has fully resolved — `parentIdByKey` is read-only here, and a
+ * child dispatched before its parent's uuid landed would be skipped for want of one.
+ */
 export async function writeChildren(
   children: ChildWrite[],
   parentIdByKey: Map<string, string>,
@@ -130,10 +149,9 @@ export async function writeChildren(
   appendLog: Log,
   shouldStop?: () => boolean,
 ): Promise<void> {
-  for (const { key, record, parentKey, relation } of children) {
-    if (shouldStop?.()) return;
+  await asyncPool(WRITE_CONCURRENCY, children, async ({ key, record, parentKey, relation }) => {
     const parentId = parentIdByKey.get(parentKey);
-    if (!parentId) { appendLog('error', `  ✕  No parent ID for ${key} — child skipped`); result.errors++; continue; }
+    if (!parentId) { appendLog('error', `  ✕  No parent ID for ${key} — child skipped`); result.errors++; return; }
     // Null the OTHER relation too: a row synced by an earlier build (before galleries and
     // variants were split apart) may still carry a stale value there.
     const otherRelation = relation === 'parent_id' ? 'variant_of' : 'parent_id';
@@ -167,5 +185,5 @@ export async function writeChildren(
         } else { appendLog('error', `  ✕  Stable child insert failed for ${key}: ${await res.text()}`); result.errors++; }
       }
     } catch (e) { appendLog('error', `  ✕  Stable child write error for ${key}: ${e}`); result.errors++; }
-  }
+  }, shouldStop);
 }

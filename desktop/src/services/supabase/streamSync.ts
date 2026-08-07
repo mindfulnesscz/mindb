@@ -14,6 +14,7 @@
 import { isVideoFile, stripVersion } from '@sotto/domain';
 import type { SupabaseConfig } from './rest';
 import { makeHeaders, fetchAllForClient } from './rest';
+import { timePhase } from '../pipeline/timing';
 import { requestStreamUpload } from './streamUpload';
 
 type Log = (type: string, msg: string) => void;
@@ -48,6 +49,7 @@ export async function syncStreamVideos(
   options: { dryRun?: boolean; shouldStop?: () => boolean } = {},
 ): Promise<{ uploaded: number; replaced: number; failed: number }> {
   const result = { uploaded: 0, replaced: 0, failed: 0 };
+  const phase = timePhase('STREAM SYNC');
 
   let rows: VideoRow[];
   try {
@@ -58,13 +60,14 @@ export async function syncStreamVideos(
     );
   } catch (e) {
     log('error', `  ✕  Could not check video state: ${e}`);
+    phase.done();
     return { ...result, failed: 1 };
   }
 
   /* Extension is read from the object KEY, not from `name` — a display name is editable in the
      portal and routinely has no extension at all, so trusting it would silently skip videos. */
   const videos = rows.filter(r => r.download_url && isVideoFile(stripVersion(r.download_url)));
-  if (!videos.length) return result;
+  if (!videos.length) { phase.done(); return result; }
 
   const needsUpload = videos.filter(v => !v.stream_uid);
   /* A master that changed content under a version-stable key. Without this check the portal keeps
@@ -119,6 +122,6 @@ export async function syncStreamVideos(
   /* Encoding continues after this returns. Statuses land as `queued`/`inprogress` and are flipped
      to `ready` by the portal's own poll — nothing here blocks a run waiting for a transcode. */
   log('section',
-    `━━━ STREAM DONE — ${result.uploaded} uploaded · ${result.replaced} replaced · ${result.failed} failed ━━━`);
+    `━━━ STREAM DONE — ${result.uploaded} uploaded · ${result.replaced} replaced · ${result.failed} failed ━━━ in ${phase.done()}`);
   return result;
 }

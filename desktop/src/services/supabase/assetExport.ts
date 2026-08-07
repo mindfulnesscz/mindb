@@ -25,8 +25,10 @@ import { parseAssetForSupabase } from './rowMapping';
 import type { StableRow, SupabaseExportResult, ReadmeTarget } from './exportTypes';
 import { identifyAssets } from './exportIdentify';
 import { planExport } from './exportPlan';
-import { dedupeByKey, writeParents, writeChildren } from './exportWrite';
+import { dedupeByKey, writeParents, writeChildren, WRITE_CONCURRENCY } from './exportWrite';
 import { disconnectStaleRows } from './exportDisconnect';
+import { timePhase, timeStep } from '../pipeline/timing';
+import { asyncPool } from '../pipeline/pool';
 
 export type { SupabaseExportResult } from './exportTypes';
 
@@ -68,6 +70,7 @@ export async function exportAssetsToSupabase(
   shouldStop?: () => boolean,
   sourceFresh = true,
 ): Promise<SupabaseExportResult> {
+  const phase = timePhase('SUPABASE EXPORT');
   const result: SupabaseExportResult = { created: 0, updated: 0, disconnected: 0, errors: 0, staleObjectKeys: [] };
   const base    = `${config.url}/rest/v1`;
   const headers = await makeHeaders(config.anonKey);
@@ -92,6 +95,7 @@ export async function exportAssetsToSupabase(
     // and optimistically select the count for disconnect cleanup, with a legacy-schema retry below.
     let pagePreviewColumns = pageCounts?.size ? await hasPagePreviewColumns(base, headers) : true;
     // Existing rows, keyed the same way the plan keys its writes.
+    const fetchStep = timeStep('SUPABASE EXPORT › fetch existing');
     const existing = new Map<string, StableRow>();
     try {
       // perm/status come along for readme.md only — the pipeline reports them, never rewrites
@@ -117,12 +121,13 @@ export async function exportAssetsToSupabase(
         );
       }
       for (const r of rows) existing.set(`${r.stable_id}:${r.child_id}`, r);
+      appendLog('dim', `  ${existing.size} existing row(s) fetched in ${fetchStep.done()}`);
     } catch (e) {
       appendLog('error', `  ✕  Could not fetch existing stable-identity records: ${e}`);
       appendLog('error', '  ✕  Supabase export aborted before planning or writes — existing identity state is unknown.');
       result.errors += 1;
       appendLog('section',
-        `━━━ SUPABASE DONE — ${result.created} new · ${result.updated} updated · ${result.disconnected} disconnected · ${result.errors} errors ━━━`,
+        `━━━ SUPABASE DONE — ${result.created} new · ${result.updated} updated · ${result.disconnected} disconnected · ${result.errors} errors ━━━ in ${phase.done()}`,
       );
       return result;
     }
@@ -147,10 +152,12 @@ export async function exportAssetsToSupabase(
     }
 
     /* ── 2. Plan ──────────────────────────────────────────────────────────── */
+    const planStep = timeStep('SUPABASE EXPORT › plan');
     const plan = await planExport({
       identified, clientId, vocab, existingByStableId, cdnUrls, originalUrls, cloudUrls,
       pageCounts: writablePageCounts, appendLog, dryRun,
     });
+    appendLog('dim', `  planned in ${planStep.done()}`);
 
     /* ── 3. Write — parents first; children need the resolved parent uuid ─── */
     const parents = dedupeByKey(plan.parentWrites, 'parent/single', appendLog);
@@ -163,6 +170,7 @@ export async function exportAssetsToSupabase(
       return false;
     });
 
+    const writeStep = timeStep('SUPABASE EXPORT › writes');
     let parentIdByKey: Map<string, string>;
     if (dryRun) {
       parentIdByKey = new Map(parents.map(parent => [
@@ -186,7 +194,8 @@ export async function exportAssetsToSupabase(
 
     appendLog(dryRun ? 'dim' : 'success',
       `  ${dryRun ? '[DRY] would sync' : '✓  Stable identity:'} ` +
-      `${plan.parentWrites.length} parent/single · ${plan.childWrites.length} child record(s)`,
+      `${plan.parentWrites.length} parent/single · ${plan.childWrites.length} child record(s)` +
+      ` in ${writeStep.done()}`,
     );
 
     // Access level as the DB has it, for readme.md. A row created this run isn't in here with a
@@ -195,22 +204,31 @@ export async function exportAssetsToSupabase(
     for (const row of existing.values()) dbLevelById.set(row.id, { perm: row.perm, status: row.status });
 
     if (!dryRun && !shouldStop?.()) {
-      await writeReadmes(plan.readmeTargets, parentIdByKey, dbLevelById, vocab, config, appendLog);
+      const readmeStep = timeStep('SUPABASE EXPORT › readmes');
+      const readmes = await writeReadmes(
+        plan.readmeTargets, parentIdByKey, dbLevelById, vocab, config, appendLog,
+      );
+      if (plan.readmeTargets.length) {
+        appendLog('dim',
+          `  readme.md: ${readmes.written} updated · ${readmes.unchanged} unchanged in ${readmeStep.done()}`);
+      }
     } else if (dryRun && plan.readmeTargets.length) {
       appendLog('dim', `  [DRY] would write ${plan.readmeTargets.length} readme.md file(s)`);
     }
 
     /* ── 4. Disconnect ────────────────────────────────────────────────────── */
     if (!shouldStop?.()) {
+      const disconnectStep = timeStep('SUPABASE EXPORT › disconnect');
       await disconnectStaleRows(
         existing, plan.currentStableKeys, clientId, base, headers, result, appendLog,
         allowLargeDeletions, dryRun, shouldStop, sourceFresh,
       );
+      appendLog('dim', `  disconnect pass in ${disconnectStep.done()}`);
     }
   }
 
   appendLog('section',
-    `━━━ SUPABASE DONE — ${result.created} new · ${result.updated} updated · ${result.disconnected} disconnected · ${result.errors} errors ━━━`,
+    `━━━ SUPABASE DONE — ${result.created} new · ${result.updated} updated · ${result.disconnected} disconnected · ${result.errors} errors ━━━ in ${phase.done()}`,
   );
   return result;
 }
@@ -224,6 +242,9 @@ export async function exportAssetsToSupabase(
  * (`published`/`public`), so the note claimed every asset was world-readable whatever the row
  * actually said. Since these notes are how the library gets read in Obsidian, that is the one
  * place a wrong access level is most likely to be believed.
+ *
+ * Regenerated every run, but WRITTEN only where the contents changed (see `writeReadme`) — a
+ * no-change run touches nothing in the client's synced source tree.
  */
 async function writeReadmes(
   targets: ReadmeTarget[],
@@ -232,8 +253,8 @@ async function writeReadmes(
   vocab: VocabularyData,
   config: SupabaseConfig,
   appendLog: (type: string, msg: string) => void,
-): Promise<void> {
-  if (!targets.length) return;
+): Promise<{ written: number; unchanged: number }> {
+  if (!targets.length) return { written: 0, unchanged: 0 };
 
   const primaryIds = targets
     .map(t => parentIdByKey.get(t.primaryKey))
@@ -241,24 +262,40 @@ async function writeReadmes(
   const statsMap = await fetchAssetStats(primaryIds, config);
   const vocabCtx = buildVocabMap(vocab);
 
-  let written = 0;
+  /* Pooled ACROSS folders, serial WITHIN one.
+     Targets are not one per folder: a package holding several galleries, or galleries alongside
+     flat singles, contributes one target each for the same `packageDir` — and every one of them
+     writes the same `readme.md` path. Serially the last write won; pooling them naively would put
+     two concurrent full-file overwrites on one path and let the winner vary run to run. Grouping by
+     folder keeps each file's write sequence, and its final contents, exactly what they were. */
+  const byFolder = new Map<string, ReadmeTarget[]>();
   for (const t of targets) {
-    const primaryId = parentIdByKey.get(t.primaryKey);
-    if (!primaryId) continue;
-    try {
-      const parsed = parseFilename(t.stem, vocabCtx);
-      const p      = parseAssetForSupabase(t.stem, vocab);
-      const dbLevel = dbLevelById.get(primaryId);
-      await writeReadme(t.packageDir, {
-        name: p.name, stableId: t.stableId, version: p.version,
-        status: dbLevel?.status ?? t.status,
-        perm:   dbLevel?.perm   ?? t.perm,
-        tags: parsed.tags, stats: statsMap.get(primaryId) ?? null,
-      });
-      written++;
-    } catch (e) {
-      appendLog('error', `  ✕  readme.md write failed for "${t.packageDir}": ${e}`);
-    }
+    (byFolder.get(t.packageDir) ?? byFolder.set(t.packageDir, []).get(t.packageDir)!).push(t);
   }
-  appendLog('dim', `  readme.md written for ${written}/${targets.length} folder(s)`);
+
+  let written   = 0;
+  let unchanged = 0;
+  await asyncPool(WRITE_CONCURRENCY, [...byFolder.values()], async (folderTargets) => {
+    for (const t of folderTargets) {
+      const primaryId = parentIdByKey.get(t.primaryKey);
+      if (!primaryId) continue;
+      try {
+        const parsed = parseFilename(t.stem, vocabCtx);
+        const p      = parseAssetForSupabase(t.stem, vocab);
+        const dbLevel = dbLevelById.get(primaryId);
+        const didWrite = await writeReadme(t.packageDir, {
+          name: p.name, stableId: t.stableId, version: p.version,
+          status: dbLevel?.status ?? t.status,
+          perm:   dbLevel?.perm   ?? t.perm,
+          tags: parsed.tags, stats: statsMap.get(primaryId) ?? null,
+        });
+        if (didWrite) written++;
+        else unchanged++;
+      } catch (e) {
+        appendLog('error', `  ✕  readme.md write failed for "${t.packageDir}": ${e}`);
+      }
+    }
+  });
+  // Summarised, never per file: an unchanged run has one of these per package folder.
+  return { written, unchanged };
 }

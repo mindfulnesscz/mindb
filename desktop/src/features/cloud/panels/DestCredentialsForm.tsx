@@ -15,8 +15,10 @@ import {
   type CloudDestination, type DestConfig,
   type LocalDestConfig, type DropboxDestConfig, type OneDriveDestConfig, type GDriveDestConfig,
 } from '../../../domain/client';
-import { typeLabel, statusClass, credHint } from '../destLabels';
+import { typeLabel, statusClass, credHint, layoutLabel } from '../destLabels';
 import { useDestAuth } from '../useDestAuth';
+import { GDriveDedupeCard } from './GDriveDedupeCard';
+import { GDriveRelayoutCard } from './GDriveRelayoutCard';
 import css from '../CloudDestinations.module.css';
 
 export function DestCredentialsForm({
@@ -74,7 +76,7 @@ export function DestCredentialsForm({
               <span className={css.fieldLabel}>Type / role / path</span>
               <input
                 className={`${css.input} ${css.inputMono}`}
-                value={`${typeLabel(cfg.type)} · ${form.role} · ${path || '—'} · ${form.exportLayout}${form.includePackages ? '+packages' : ''}`}
+                value={`${typeLabel(cfg.type)} · ${form.role} · ${path || '—'} · ${layoutLabel(form)}`}
                 disabled
               />
             </div>
@@ -261,6 +263,13 @@ export function DestCredentialsForm({
                 )}
               </div>
             </div>
+
+            {cfg.type === 'gdrive' && (
+              <>
+                <GDriveRelayoutCard dest={form} />
+                <GDriveDedupeCard cfg={cfg as GDriveDestConfig} destName={form.name || 'this destination'} />
+              </>
+            )}
           </>
         )}
       </div>

@@ -251,12 +251,53 @@ export async function listKeys(
   return (await listObjects(accountId, creds, bucket, prefix)).map(object => object.key);
 }
 
-/** Copy one object between buckets, carrying the metadata the pipeline recognises. */
+/** What the pipeline's own uploads write, and therefore what a moved object must still look like. */
+const OBJECT_CACHE_CONTROL = 'private, max-age=31536000, immutable';
+
+/* `x-amz-copy-source` is `/{bucket}/{key}`, encoded the same way the canonical URI is — the RFC 3986
+   set, not `encodeURIComponent`'s. Legacy filename-keyed objects are full of parentheses, and the
+   mismatch is an opaque 403 rather than a 404 (see the note on `rfc3986`). */
+const copySourceHeader = (bucket: string, key: string) =>
+  `/${bucket}/${key.split('/').map(rfc3986).join('/')}`;
+
+export interface CopyOptions {
+  /**
+   * Whether the caller needs the object's content hash back — it becomes the `?v=` stamp on a
+   * thumbnail or download URL. Pages do not have one (no URL column), so they never pay for it.
+   */
+  wantHash?: boolean;
+}
+
+/**
+ * Copy one object, carrying the metadata the pipeline recognises.
+ *
+ * **Within one bucket the bytes never enter this function.** It used to GET the whole object into
+ * the edge runtime, hash it, and PUT it back — two transfers of every byte for a move that R2 can
+ * do server-side, and a page probe that reads bytes it is about to discard. Same-bucket moves
+ * (which is every level change inside the gated tier — `client` → `internal` and its kin) are now
+ * one signed `x-amz-copy-source` request.
+ *
+ * Crossing the public/gated boundary still streams: the temporary credentials are minted per
+ * bucket, so no single signature can read one and write the other. That is a security property of
+ * the grant, not an oversight — do not widen the credentials to make this faster.
+ *
+ * `x-amz-meta-sha256` is how the desktop pipeline recognises an object it has already published;
+ * without it every moved file looks new and the next run re-uploads the whole library. The
+ * server-side path preserves or re-states it rather than dropping it.
+ */
 export async function copyObject(
   accountId: string,
   from: { creds: TempCreds; bucket: string; key: string },
   to: { creds: TempCreds; bucket: string; key: string },
-): Promise<{ ok: true; sha256: string } | { ok: false; reason: string }> {
+  options: CopyOptions = {},
+): Promise<{ ok: true; sha256: string | null } | { ok: false; reason: string }> {
+  if (from.bucket === to.bucket) {
+    const copied = await copyWithinBucket(accountId, from, to, options.wantHash === true);
+    // A source with no recorded hash and a caller that needs one falls through to the streaming
+    // path, which computes it — so a legacy object heals the first time it moves.
+    if (copied) return copied;
+  }
+
   const got = await s3(accountId, from.creds, from.bucket, 'GET', from.key);
   if (got.status === 404) return { ok: false, reason: 'source missing' };
   if (!got.ok) return { ok: false, reason: `GET ${got.status}` };
@@ -264,13 +305,63 @@ export async function copyObject(
   const body = new Uint8Array(await got.arrayBuffer());
   const hash = await sha256hex(body);
 
-  /* x-amz-meta-sha256 is how the desktop pipeline recognises an object it has already published;
-     without it every moved file looks new and the next run re-uploads the whole library. */
   const put = await s3(accountId, to.creds, to.bucket, 'PUT', to.key, body, {
     'content-type': got.headers.get('content-type') ?? 'application/octet-stream',
     'x-amz-meta-sha256': hash,
-    'cache-control': 'private, max-age=31536000, immutable',
+    'cache-control': OBJECT_CACHE_CONTROL,
   });
   if (!put.ok) return { ok: false, reason: `PUT ${put.status}` };
+  return { ok: true, sha256: hash };
+}
+
+/**
+ * The server-side path. Returns null when it cannot answer — the caller then streams.
+ *
+ * Without a hash to report this is ONE request: the copy itself, whose 404 is the same
+ * source-missing answer a GET would have given, at no bytes. With one, a HEAD first reads the
+ * source's recorded hash and content type so the destination can be written with exactly the
+ * metadata the streaming path would have written — still no bytes.
+ */
+async function copyWithinBucket(
+  accountId: string,
+  from: { creds: TempCreds; bucket: string; key: string },
+  to: { creds: TempCreds; bucket: string; key: string },
+  wantHash: boolean,
+): Promise<{ ok: true; sha256: string | null } | { ok: false; reason: string } | null> {
+  const copySource = copySourceHeader(from.bucket, from.key);
+
+  if (!wantHash) {
+    // METADATA COPY, not REPLACE: the bytes are identical, so the source's own recorded hash and
+    // cache-control remain correct for the destination. Restating them would be the same values.
+    const copied = await s3(accountId, to.creds, to.bucket, 'PUT', to.key, undefined, {
+      'x-amz-copy-source': copySource,
+      'x-amz-metadata-directive': 'COPY',
+    });
+    if (copied.status === 404) return { ok: false, reason: 'source missing' };
+    if (!copied.ok) return { ok: false, reason: `COPY ${copied.status}` };
+    /* S3 can report a failure inside a 200 body on this call. Treat a body that does not carry a
+       CopyObjectResult as a failure rather than a silent no-move. */
+    const body = await copied.text().catch(() => '');
+    if (body && !body.includes('CopyObjectResult')) return { ok: false, reason: 'COPY reported no result' };
+    return { ok: true, sha256: null };
+  }
+
+  const head = await s3(accountId, from.creds, from.bucket, 'HEAD', from.key);
+  if (head.status === 404) return { ok: false, reason: 'source missing' };
+  if (!head.ok) return null;
+  const hash = head.headers.get('x-amz-meta-sha256');
+  if (!hash) return null;
+
+  const copied = await s3(accountId, to.creds, to.bucket, 'PUT', to.key, undefined, {
+    'x-amz-copy-source': copySource,
+    'x-amz-metadata-directive': 'REPLACE',
+    'content-type': head.headers.get('content-type') ?? 'application/octet-stream',
+    'x-amz-meta-sha256': hash,
+    'cache-control': OBJECT_CACHE_CONTROL,
+  });
+  if (copied.status === 404) return { ok: false, reason: 'source missing' };
+  if (!copied.ok) return { ok: false, reason: `COPY ${copied.status}` };
+  const body = await copied.text().catch(() => '');
+  if (body && !body.includes('CopyObjectResult')) return { ok: false, reason: 'COPY reported no result' };
   return { ok: true, sha256: hash };
 }

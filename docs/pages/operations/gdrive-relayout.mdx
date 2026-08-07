@@ -1,0 +1,94 @@
+# Changing a Google Drive destination's export layout
+
+A destination's [export layout](/cloud-storage/overview#which-folders-a-destination-receives) decides
+which folders the client receives. Changing it changes where **every** delivered file belongs — and
+the cloud export on its own would resolve that the expensive way: upload each file again under its
+new path, and leave the old copy exactly where it is, because the export never deletes. On a real
+library that is minutes of re-sent bytes and a client folder holding two of everything.
+
+Drive's move is a **parent swap**: one metadata request, no bytes, and the file keeps its id. This
+tool plans those moves so a layout change costs seconds and orphans nothing.
+
+**Dropbox and OneDrive have no mover yet.** Switching their layout re-uploads under the new paths and
+leaves the old copies behind; both providers do have a metadata-only move, so the same tool is
+possible — it has not been built. Prune the old paths by hand until it is.
+
+## When to run it
+
+After changing **Export layout** on a Google Drive destination in the portal and syncing the desktop
+— before the next pipeline run, so the run finds every file already in place and skips it.
+
+Running it is safe at any other time too: with nothing out of place it reports that and does nothing.
+
+## Running it
+
+The Drive OAuth token lives in this machine's keychain, so the tool is in the desktop app rather than
+a script:
+
+**Settings → Cloud destinations → the Google Drive destination → Export layout migration.**
+
+1. **Preview the moves.** Read-only. It reads the source library, asks this machine's upload cache
+   where each file was delivered, resolves the destination's remote path, walks that subtree, and
+   produces a plan.
+2. Review the report: every `from → to` pair, how many files are already in place, how many folders
+   the moves would empty, and everything skipped with its reason.
+3. **Download report** for the operational record. It holds the full plan and, after a move, the
+   audit log.
+4. **Move files…**, then type `move`. The tool re-walks and re-plans, and refuses to run if the fresh
+   plan differs from the one on screen — preview again and confirm.
+
+## How it decides what to move
+
+**From the delivery records, not from a name search.** Every export writes an entry to
+`cloud-upload-cache.json` keyed by destination id and remote path, so the cache is a precise record
+of what this machine put where. For each file in the library the tool computes the path the *current*
+layout gives it; if a record already exists there, the file is in place. Otherwise it computes that
+file's path under each *other* layout, and the one with a delivery record is where the file is now.
+
+Two consequences worth knowing:
+
+- **You never have to tell it the old layout.** A destination left half-migrated by an interrupted
+  run is planned correctly file by file.
+- **No record means no move.** A file delivered from a different workstation, or one whose cache was
+  cleared, is reported as "not delivered from here" and left alone — the next run will upload it to
+  the new path, and the old copy stays until it is pruned by hand. This is deliberate: the record is
+  the only evidence that the remote file is ours rather than something the client put there.
+
+After a successful move the records are re-keyed to the new paths, so the following run stays warm
+instead of paying a full cold export to rediscover files that never changed.
+
+## What it does not touch
+
+- **Sharing links.** Drive's move preserves the file id, and a `webViewLink` is built from that id —
+  so links already stored in Supabase and shown in the portal keep working, and no re-collection pass
+  is needed. (Renaming a file would be a different matter; nothing here renames.)
+- **Anything outside the destination's `remotePath`.** A destination with no remote path is refused
+  outright rather than sweeping the whole of My Drive.
+- **Files the client added.** Without a delivery record for its exact path, a file is invisible to the
+  planner.
+
+## Safety rails
+
+- **Nothing is deleted.** Emptied source folders are *trashed*, recoverable from Drive's trash for 30
+  days. Files are only ever moved.
+- **An occupied destination path is never overwritten.** The move is skipped and reported.
+- **A folder is trashed only after a fresh listing shows it empty**, checked against Drive at
+  execution time rather than against the plan — so a move that failed leaves its folder in place.
+- **The destination's own folder is never trashed**, however empty it ends up. It is the folder the
+  operator configured, not one the export created.
+- **A failed listing aborts the scan.** A partial view of a folder reads as "already empty", so it is
+  never treated as data.
+- **The plan is confirmed by fingerprint.** Another machine's export landing a file between the
+  preview and the click changes the plan, and the tool refuses rather than applying a stale one.
+- Target folders are created once, sequentially, before any move — the same rule the export follows,
+  because concurrent creation is how a Drive destination grows
+  [duplicate folders](/operations/gdrive-dedupe).
+- Rate-limited and transient failures are retried with backoff. The tool is resumable: a run that
+  stops half way leaves a consistent tree, and the next preview plans what is left.
+
+## Related
+
+- [Which folders a destination receives](/cloud-storage/overview#which-folders-a-destination-receives)
+- [Pipeline — cloud export](/pipeline#4--cloud-export)
+- [Google Drive duplicate folders](/operations/gdrive-dedupe) — the same preview-then-confirm shape,
+  for a different problem on the same destination.

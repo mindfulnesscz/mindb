@@ -1,8 +1,17 @@
 /* Provider and token-status presentation, shared by the list and the form. */
 
-import { tokenStatus } from '../../domain/client';
-import type { DestType, CloudToken } from '../../domain/client';
+import { tokenStatus, resolveExportShape } from '../../domain/client';
+import type { DestType, CloudToken, CloudDestination } from '../../domain/client';
 import css from './CloudDestinations.module.css';
+
+/** The destination's export layout in one phrase. `source` and `folders` differ only in what a
+ *  file WITHOUT a gallery gets, so "folders" alone would read the same for both. */
+export function layoutLabel(dest: Partial<CloudDestination>): string {
+  const { exportLayout, includePackages } = resolveExportShape(dest);
+  if (exportLayout === 'flat') return 'flat';
+  const base = exportLayout === 'source' ? 'source tree' : 'OUT folders';
+  return includePackages ? `${base} + packages` : base;
+}
 
 export function typeLabel(t: DestType): string {
   return t === 'local' ? 'Local' : t === 'dropbox' ? 'Dropbox' : t === 'onedrive' ? 'OneDrive' : 'Google Drive';

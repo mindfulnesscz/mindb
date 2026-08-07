@@ -28,6 +28,7 @@ import {
 } from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
 import { listDir } from './fs';
+import { timePhase } from './timing';
 
 /** The asset folders this run actually saw — artifacts only ever belong beside real assets. */
 function assetDirsOf(assets: readonly string[]): string[] {
@@ -43,6 +44,7 @@ export async function runArtifactMigration(ctx: RunContext, stats: RunStats): Pr
   const { appendLog, settings } = ctx;
   const dirs = assetDirsOf(ctx.collectedAssets ?? []);
   if (!dirs.length) return;
+  const phase = timePhase('ARTIFACT MIGRATION');
 
   let moved = 0;
   let kept = 0;
@@ -98,10 +100,13 @@ export async function runArtifactMigration(ctx: RunContext, stats: RunStats): Pr
     }
   }
 
-  if (!moved && !kept && !errors) return;
+  /* An already-migrated library reports nothing, as before — but the sweep still listed every
+     asset folder, so the timeline records what that cost even when there is no line to attach it to. */
+  if (!moved && !kept && !errors) { phase.done(); return; }
 
   stats.errors += errors;
   appendLog('info',
     `  ⇄  artifact layout: ${moved} moved into thumbnails/`
-    + `${kept ? ` · ${kept} already migrated` : ''}${errors ? ` · ${errors} error(s)` : ''}`);
+    + `${kept ? ` · ${kept} already migrated` : ''}${errors ? ` · ${errors} error(s)` : ''}`
+    + ` in ${phase.done()}`);
 }

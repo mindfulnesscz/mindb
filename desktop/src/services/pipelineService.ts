@@ -25,20 +25,21 @@ import { resolveCdnIdentity } from './supabaseService';
 import { runObsidian } from './damService';
 
 import type { RunContext } from './pipeline/types';
-import { scanAllAssets } from './pipeline/scan';
+import { scanAllAssets, scanVersionMap } from './pipeline/scan';
 import { runDistribute } from './pipeline/collect';
 import { runPublish } from './pipeline/publishLocal';
 import { runArtifactMigration } from './pipeline/artifactMigration';
 import { runThumbnails } from './pipeline/thumbnails';
 import { runCdnUpload, runPagesUpload, runOriginalUpload } from './pipeline/cdnUpload';
 import { runCloudExport } from './pipeline/cloudExport';
+import { timePhase, timeStep } from './pipeline/timing';
 
 /* ── Public surface ───────────────────────────────────────────────────────────
    Consumers import from here, not from ./pipeline/*, so the internal layout stays free to
    move. Types come from ./pipeline/types — importing them from this module would put
    damService and supabaseService back in a cycle with the orchestrator. */
 export type {
-  RunContext, CloudUrlEntry, R2Config, VersionEntry, AssetVersions,
+  RunContext, CloudUrlEntry, R2Config, VersionEntry, AssetVersions, VersionScanResult,
 } from './pipeline/types';
 export { scanVersionMap } from './pipeline/scan';
 export { deleteCdnObjects } from './pipeline/cdnCleanup';
@@ -70,11 +71,29 @@ export async function runPipeline(ctx: RunContext): Promise<RunStats> {
     // Single scan — shared by thumbnails (filtered) and Supabase sync (all stems)
     if (settings.sourceFolder) {
       ctx.sourceReadErrors ??= new Set<string>();
+      const scanPhase = timePhase('SOURCE SCAN');
       const scanned = await scanAllAssets(settings.sourceFolder, settings, (path, error) => {
         ctx.sourceReadErrors?.add(path);
         appendLog('error', `  ✕  Cannot read source directory: ${path}\n     ${error}`);
       });
       ctx.collectedAssets?.push(...scanned);
+      // The scan has no banner of its own, and it feeds every stage below — give it one line.
+      appendLog('dim', `  Scanned ${scanned.length} asset file(s) in ${scanPhase.done()}`);
+
+      /* The version-history walk reads the `versions/` subtrees the scan above deliberately skips —
+         a second full pass over the source tree, which used to run AFTER every network sync had
+         finished. Nothing the run does changes what it sees: no stage writes into an OUT folder
+         (readmes land in the package root, renders land in `thumbnails/`, which the walk filters
+         out), so it can start here and be paid for by the network stages that follow.
+         Started AFTER the source scan on purpose — two full walks racing each other on the same
+         disk would slow down the one every stage below is waiting for. */
+      if (ctx.earlyVersionScan) {
+        const walk = timeStep('version history walk');
+        ctx.versionScan = scanVersionMap(settings.sourceFolder, ctx.vocab, settings).then(
+          map   => ({ map,   took: walk.done() }),
+          error => ({ error, took: walk.done() }),
+        );
+      }
     }
 
     // Resolve folder identity before anything stores an asset URL. CDN objects and cloud sharing
@@ -83,9 +102,12 @@ export async function runPipeline(ctx: RunContext): Promise<RunStats> {
     const needsAssetIdentity = (ctx.r2 && (settings.doThumbnails || settings.doCdnOriginals))
       || settings.doFlatExport;
     if (!settings.dryRun && !stopping('asset identity resolution') && needsAssetIdentity) {
+      const identityPhase = timePhase('ASSET IDENTITY');
       try {
         ctx.cdnIdentity = await resolveCdnIdentity(ctx.collectedAssets ?? [], settings.outFolder || 'OUT');
+        appendLog('dim', `  Asset identity resolved in ${identityPhase.done()}`);
       } catch (e) {
+        identityPhase.done();
         appendLog('error', `  ✕  Asset identity resolution failed — uploads cannot attach URLs to affected assets: ${e}`);
       }
     }

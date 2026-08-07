@@ -7,6 +7,7 @@
 import type { VocabularyData } from '@sotto/domain';
 import type { SupabaseConfig } from './rest';
 import { makeHeaders, sbFetch, fetchAllForClient } from './rest';
+import { timePhase } from '../pipeline/timing';
 import { slugifyKeyPart, parentKeyForLeaf } from './taxonomyKeys';
 import { assessFreshDestruction } from '../guardrail';
 
@@ -48,6 +49,7 @@ export async function syncTagsFromVocabulary(
     allowLargeDeletions = false,
     shouldStop,
   } = options;
+  const phase = timePhase('TAG SYNC');
   appendLog('section', '━━━ TAG SYNC (local → portal) ━━━');
   const base    = `${config.url.replace(/\/+$/, '')}/rest/v1`;
   const headers = await makeHeaders(config.anonKey);
@@ -264,6 +266,6 @@ export async function syncTagsFromVocabulary(
   }
 
   appendLog('dim', `  ${created} created · ${updated} updated · ${deleted} deleted`);
-  appendLog('section', '━━━ TAG SYNC DONE ━━━');
+  appendLog('section', `━━━ TAG SYNC DONE ━━━ in ${phase.done()}`);
   return { created, updated, deleted, deletionRefused };
 }

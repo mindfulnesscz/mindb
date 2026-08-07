@@ -26,11 +26,15 @@ export {
 export {
   startOneDriveDeviceCode, pollOneDriveToken, refreshOneDriveToken, checkOneDriveConnection,
   resolveSharePointDrive, uploadOneDriveFile, graphDriveBase,
-  type DeviceCodeInfo,
+  oneDriveRemoteItem, oneDriveShareLink,
+  type DeviceCodeInfo, type OneDriveRemoteItem,
 } from './cloud/onedrive';
 
 export {
   connectGDrive, refreshGDriveToken, checkGDriveConnection, uploadGDriveFile,
+  ensureGDriveFolderPaths, sweepGDriveFolderFiles, drainGDriveDuplicateFolders,
+  pickCanonicalGDriveFolder,
+  type GDriveDuplicateFolderNotice, type GDriveRemoteFile,
 } from './cloud/gdrive';
 
 export async function refreshCloudToken(

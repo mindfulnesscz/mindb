@@ -1,5 +1,22 @@
 # Sotto — Google Drive Duplicate-Folder Fix (prompts, 2026-08-05)
 
+> **CLOSED 2026-08-07** on `fix/gdrive-duplicate-folders`. Both halves are in and green.
+>
+> **G1** — the in-flight per-segment memo and the md5 skip were already in; this run added the
+> deterministic **oldest-wins** pick (`pickCanonicalGDriveFolder`, `orderBy=createdTime`), the
+> duplicate-set warning drained into the run log, and a pre-resolve of the destination tree before
+> the 8-wide batch (`ensureGDriveFolderPaths`). Regression tests: 8 concurrent uploads issue one
+> create per segment; two same-named folders resolve to the oldest; a transient failure does not
+> poison the folder cache.
+>
+> **G2** — `desktop/src/services/cloud/gdriveDedupe.ts` (walk → pure planner → `planId`-guarded
+> execute) plus the Drive REST helpers in `gdrive.ts`, and **Settings → Cloud destinations → a Drive
+> destination → Maintenance** in `features/cloud/panels/GDriveDedupeCard.tsx`. Removals are
+> **trashed**, never deleted; a duplicate folder is trashed only after a fresh listing shows it
+> empty. Docs: `docs/pages/operations/gdrive-dedupe.mdx`.
+>
+> Not yet done: a run against a real client Drive. The tests cover a mocked tree only.
+
 Two matched prompts for the Drive duplicate-folder mess (audit item "Google Drive duplicate-folder
 race + weak skip", P2 — verification confirmed **still open**). Both use the **same SHARED CONTEXT
 block** as `SOTTO_SECURITY_AGENT_PROMPTS.md` — prepend it (identity non-negotiable, never

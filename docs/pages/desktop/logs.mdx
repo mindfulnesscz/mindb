@@ -11,6 +11,79 @@ Always read the section header before interpreting a symbol.
 | `CLOUD EXPORT` green `✓` | Provider call succeeded; Dropbox separately logs existing paths as dim skips |
 | red `✕` | That file/operation failed; sibling jobs usually continue |
 
+**The log arrives in batches, and that is deliberate.** A run emits a line per file, and each line
+used to be its own store update and its own React render — thousands of them, on the same main
+thread the run is using. Ordinary lines are now buffered for up to 100 ms; **section banners flush
+immediately**, taking everything buffered before them along, so the stage structure of a tail is
+always current and the order of lines is never affected. Progress is throttled to about ten updates
+a second, with the final value always delivered. Nothing is dropped: the buffer is flushed when the
+run ends.
+
+The panel **renders the most recent 1,500 lines** and reports how many earlier ones are hidden. The
+cap bounds what is in the DOM, not what is kept — the full log stays in memory for the session. It
+is not persisted either way, so anything that has to survive the app belongs in the error log or in
+`run-timings.jsonl` (both reachable from **Settings → Diagnostics**).
+
+## Timings
+
+Every section-DONE banner ends with how long that section took — `━━━ THUMBNAILS DONE — 42 created · 0 errors ━━━ in 41.0s` — and the run closes with a `RUN TOTAL` block:
+
+```
+━━━ RUN TOTAL — 3m 12s ━━━
+  1. SUPABASE EXPORT   48.2s  (25%)
+  2. THUMBNAILS        41.0s  (21%)
+  3. CLOUD EXPORT      33.5s  (17%)
+  4. CDN THUMBNAILS    12.4s   (6%)
+  5. PUBLISH            9.1s   (4%)
+  measured 2m 24s of 3m 12s
+```
+
+Read it as follows.
+
+- **`RUN TOTAL` is wall clock**, measured from the moment the Run button is pressed. It covers the pre-run reads (vocabulary, storage grant, asset levels, page-preview limit — one `PRE-RUN READS` phase, since they are fetched together) and the post-run portal sync as well as the pipeline stages, because those are where the run's silent gaps have historically been.
+- **The ranking lists top-level phases only.** A step inside a phase — the Supabase export's `plan`/`writes`/`disconnect`, one cloud destination of several, one of the four pre-run reads — reports its own duration on its own line where it happens, but stays out of the ranking so a parent and its child cannot take two slots to say one thing.
+- **Work that OVERLAPS the run is a step, for the same reason.** Anything measured concurrently would otherwise be counted twice, and `measured` would claim more time than the run took. So a phase always reports what the run *waited*: `VERSION SCAN` is now the wait for the version-history walk — normally a few milliseconds, because the walk started right after the source scan — and the walk's own duration is reported on the same line (`Version map ready in 3ms (walked in 6.1s alongside the run)`).
+- **`measured … of …` is the honest line.** The two numbers differ by whatever the run does that nothing times. A large and growing gap is the signal to instrument something new, not a rounding artefact.
+
+Durations are wall clock, not CPU time: a phase waiting on the network reports the wait. That is the intent — the operator is waiting too.
+
+## Comparing runs
+
+Every run is appended to `run-timings.jsonl` in the app data directory, and each new run is compared against the last comparable one:
+
+```
+━━━ RUN TOTAL — 2m 5s ━━━  (-1m 7s vs previous run)
+  1. THUMBNAILS         41.0s  (33%)        —
+  2. CLOUD EXPORT       33.5s  (27%)    +2.1s
+  3. CDN THUMBNAILS     12.4s  (10%)        —
+  4. PUBLISH             9.1s  ( 7%)     new
+  5. SUPABASE EXPORT     6.1s  ( 5%)   -42.1s
+  measured 1m 44s of 2m 5s
+  vs 07/08/2026 09:20 · 312 asset(s) · 3.2.2
+```
+
+- **`—` means unchanged.** Anything under 100 ms of movement is reported that way: below that the number is scheduler noise, and a column of `+11ms`/`-7ms` reads as signal when it is not.
+- **`new` means the baseline had no such phase** — a stage that was off last time, or one that did not exist in that build. It is not an infinite regression, so it is not reported as one.
+- **The last line is provenance, and you should read it.** Asset count is deliberately *not* part of what makes two runs comparable — it drifts a little every run and matching on it would reject nearly every comparison — so it is printed instead, for you to discount a comparison that is not fair.
+
+**What counts as comparable:** the same client, the same stages enabled, and the same dry-run flag. A run with thumbnails off is not faster than one with thumbnails on, and a dry run is not faster than a real one; matching on the stage set is what stops the log claiming either. A **stopped** run is excluded on both sides — it is a partial measurement, and comparing against one would report a large fictional regression on the next full run. When nothing comparable exists, the headline and the delta column are simply omitted rather than guessed at.
+
+The file itself is one JSON object per line — client, app version, stages, asset count, and every phase *and sub-step* with its milliseconds, not only the five that made the ranking. It is capped at the most recent 500 runs.
+
+## Reading the history without the file
+
+**Settings → Diagnostics** lists the last ten runs, newest first and the newest expanded. Each one shows its wall clock and its change against the comparable run before it; expanding a run gives **every** phase — not only the five the log ranks — slowest first, with its duration, its share of the run drawn as the row's fill, and its own delta. Under that sit the sub-steps and one line saying how much of the run no phase covers, or which run the deltas are against when there is one.
+
+The comparison rule is the same one the log uses, from the same code, so a delta here and the delta printed that day are the same number. The list is read when Settings opens.
+
+The **Open** and **Reveal** buttons stay for the whole 500-run history and for attaching the file to a bug report:
+
+```bash
+# the five slowest phases across every run of the last week, worst first
+jq -r '.phases[] | @tsv' ~/Library/Application\ Support/*/run-timings.jsonl \
+  | sort -k2 -rn | head -5
+```
+
 Counters are shared across stages. `published` can include multiple destinations, so it is not a unique-asset count. `skipped` includes benign unchanged work and contributes to “completed with issues.” CDN thumbnail summary’s “no thumb” bucket means a missing local sidecar (not an inventory shortcut).
 
 For proof, inspect the target appropriate to the phase: local filesystem for generation, R2 metadata/object URL for CDN, provider UI/API for cloud export, and Supabase row for portal state.

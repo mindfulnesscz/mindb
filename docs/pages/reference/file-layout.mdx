@@ -57,8 +57,21 @@ Everything both applications must agree about lives here, at the repository root
 ## Not in git
 
 Machine-local desktop files under the app data directory: `environments.json`, secret-free
-`client-local.json`, and `errors.log`. Provider OAuth tokens and the Google client secret persist in
-the operating system's credential store rather than as files in this directory.
+`client-local.json`, `errors.log`, `run-timings.jsonl` (one line per pipeline run, see
+[Logs](/desktop/logs)), and `cloud-upload-cache.json`. Provider OAuth tokens and the Google client
+secret persist in the operating system's credential store rather than as files in this directory.
+
+`errors.log`, `run-timings.jsonl` and `cloud-upload-cache.json` are safe to delete — they cost a
+diagnostic tail, a timing history, and one slow re-upload pass respectively. `environments.json` and
+`client-local.json` are hand-entered configuration that nothing regenerates.
+
+`cloud-upload-cache.json` holds two sections: `uploads`, keyed by destination id and remote name,
+recording the mtime+size last delivered there; and `hashes`, keyed by SOURCE path, recording that
+file's provider content hashes at a known mtime+size. The second is keyed by source rather than by
+destination on purpose — it is a property of the bytes, so a second destination or a later run reuses
+it instead of re-reading the file. Older builds wrote the flat `uploads` map alone and are still read
+correctly. Deleting the file re-hashes and re-checks everything; it re-uploads only what actually
+differs.
 
 Generated directories (`node_modules`, `dist`, `.next`, `coverage`, `test-results`,
 `desktop/src-tauri/target`) are ignored and should not be reviewed as source.

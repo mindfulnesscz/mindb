@@ -7,7 +7,7 @@
 import { Pencil, RefreshCcw } from 'lucide-react';
 import { tokenStatus, cloudToken } from '../../../domain/client';
 import type { CloudDestination } from '../../../domain/client';
-import { typeLabel, typeClass, statusClass, statusTitle } from '../destLabels';
+import { typeLabel, typeClass, statusClass, statusTitle, layoutLabel } from '../destLabels';
 import css from '../CloudDestinations.module.css';
 
 export function DestList({
@@ -57,7 +57,7 @@ export function DestList({
                   <span className={css.destName}>{dest.name || 'Unnamed'}</span>
                   <span className={css.destPath}>
                     {path || (dest.config.type === 'local' ? 'Set path…' : '—')}
-                    {` · ${dest.exportLayout === 'flat' ? 'flat' : dest.includePackages ? 'folders+packages' : 'folders'}`}
+                    {` · ${layoutLabel(dest)}`}
                   </span>
                   <span className={css.roleBadge}>{dest.role}</span>
                   <span className={`${css.statusDot} ${statusClass(status)}`} title={statusTitle(status, token)} />

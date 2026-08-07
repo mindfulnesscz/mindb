@@ -1,7 +1,15 @@
 /* PUBLISH stage (runPublish) — mirror OUT into the client-visible target, then reconcile.
  *
- * Two layouts: `folders` preserves the OUT tree (stable-id suffixes stripped from folder names,
- * since identity is internal); `flat` dumps everything into the target root.
+ * Layouts: `source` and `folders` both mirror the SOURCE tree (stable-id suffixes stripped from
+ * folder names, since identity is internal, and the OUT segment dropped); `flat` dumps everything
+ * into the target root.
+ *
+ * The two folder layouts are deliberately NOT distinguished here, where they are in the cloud
+ * export. A local destination has mirrored the source tree since it existed, and `folders` is what
+ * every stored destination carries — reading it as "OUT subtree only" to match the cloud would
+ * restructure every local delivery on the next run to fix a naming inconsistency nobody asked
+ * about. `source` is the value that means this unambiguously; `folders` on a local destination
+ * keeps meaning what it always did.
  * 
  * Reconciliation is deliberately asymmetric, and both halves are characterized:
  *   - OUTSIDE a package folder, a file no longer in source is RENAMED with a 🚫 prefix. Nothing
@@ -12,8 +20,9 @@
  */
 
 import { copyFile, mkdir, rename, remove } from '@tauri-apps/plugin-fs';
-import { join, dirname } from '@tauri-apps/api/path';
+import { joinPath, parentPath } from './paths';
 import type { AppSettings } from '../../store/settingsStore';
+import { timePhase } from './timing';
 import type { LogType } from '../../store/pipelineStore';
 import { buildVocabMap, translateExportName, stripStableId, isPreviewArtifact } from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
@@ -21,6 +30,7 @@ import type { DestExportLayout } from '../../domain/client';
 import { shouldSkip, isPackageFolder, isOutFolder, isPublishableFile } from './naming';
 import { listDirResult, isUnchanged } from './fs';
 import { findPackageFolders, syncPackageFromOut, keepOnlyHighestVersions, purgePackageMirror } from './packages';
+import { nestedPublishRel } from './deliveryLayout';
 import { scanAllAssets } from './scan';
 import { assessReconciliationRead, assessTargetReconciliationRead } from '../guardrail';
 
@@ -48,7 +58,7 @@ export async function flagDisconnected(
     const entries = read.entries;
     for (const e of entries) {
       if (e.name.startsWith('.')) continue;
-      const childPath = await join(dir, e.name);
+      const childPath = joinPath(dir, e.name);
       acc.push({ path: childPath, isDir: !!e.isDirectory });
       if (e.isDirectory) await collectAll(childPath, acc);
     }
@@ -125,7 +135,7 @@ export async function flagDisconnected(
     }
 
     if (name.startsWith('🚫')) continue;
-    const flagged = await join(existingPath.substring(0, existingPath.lastIndexOf('/')), `🚫 ${name}`);
+    const flagged = joinPath(existingPath.substring(0, existingPath.lastIndexOf('/')), `🚫 ${name}`);
     try {
       await rename(existingPath, flagged);
       appendLog('disconnected', `  🚫 DISCONNECTED: ${rel}`);
@@ -137,25 +147,9 @@ export async function flagDisconnected(
   }
 }
 
-/** Relative path from source root → target, stripping stable-id suffixes on ancestors. */
-export function nestedPublishRel(sourceRoot: string, absPath: string): string {
-  const root = sourceRoot.replace(/\\/g, '/').replace(/\/+$/, '');
-  const abs  = absPath.replace(/\\/g, '/').replace(/\/+$/, '');
-  let rel: string;
-  if (abs === root) {
-    rel = '';
-  } else if (abs.startsWith(root + '/')) {
-    rel = abs.slice(root.length + 1);
-  } else {
-    // Fallback: find root as a path prefix (handles mild join/realpath drift).
-    const idx = abs.toLowerCase().indexOf(root.toLowerCase() + '/');
-    rel = idx >= 0 ? abs.slice(idx + root.length + 1) : (abs.split('/').pop() ?? '');
-  }
-  const parts = rel.split('/').filter(Boolean);
-  return parts
-    .map(seg => stripStableId(seg))
-    .join('/');
-}
+/* The source→delivered path rules live in ./deliveryLayout, where the cloud export reads the same
+   ones. Re-exported because this module is where callers have always looked for them. */
+export { nestedPublishRel };
 
 /* ── Publish operation ──────────────────────────────────────────────────── */
 
@@ -169,8 +163,9 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
   }
 
   const layout: DestExportLayout = ctx.localExportLayout ?? 'folders';
-  const includePackages = layout === 'folders' && !!ctx.localIncludePackages;
+  const includePackages = layout !== 'flat' && !!ctx.localIncludePackages;
 
+  const phase = timePhase('PUBLISH');
   appendLog('section', `━━━ ${dryRun ? 'DRY RUN' : 'PUBLISHING'} ━━━`);
   appendLog('dim', `  → ${targetFolder}`);
   appendLog('dim', `  Layout: ${layout}${includePackages ? ' + nested packages' : ''} · always highest version only`);
@@ -209,7 +204,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
 
     if (livePub.has(fileDest)) { stats.skipped += 1; return; }
     livePub.add(fileDest);
-    const destParent = await dirname(fileDest);
+    const destParent = parentPath(fileDest);
     livePub.add(destParent);
 
     if (dryRun) {
@@ -247,7 +242,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
     for (const pkg of packages) {
       if (ctx.isStopping?.()) return;
       const rel = nestedPublishRel(sourceFolder, pkg);
-      const destPkg = await join(targetFolder, rel);
+      const destPkg = joinPath(targetFolder, rel);
       stats.pubFolders += 1;
       livePub.add(destPkg);
       appendLog('section', `📦  ${rel}`);
@@ -274,7 +269,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
         const stem = ext ? rawName.slice(0, -ext.length) : rawName;
         const translated = translateExportName(stem, ext, vocabMap);
         liveNames.add(translated);
-        await copyOne(srcPath, await join(destPkg, translated), `${rel}/${translated}`);
+        await copyOne(srcPath, joinPath(destPkg, translated), `${rel}/${translated}`);
       }
 
       // Target 📦 = exact live mirror — wipe older versions / renamed tags (no 🚫).
@@ -310,10 +305,10 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
       const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
       const stem = ext ? rawName.slice(0, -ext.length) : rawName;
       const translated = translateExportName(stem, ext, vocabMap);
-      await copyOne(srcPath, await join(targetFolder, translated), translated);
+      await copyOne(srcPath, joinPath(targetFolder, translated), translated);
     }
   } else {
-    appendLog('dim', '  Mode: full folders (OUT tree)');
+    appendLog('dim', '  Mode: full folders (source tree, OUT contents in place)');
 
     async function publishDir(dirPath: string, targetDir: string) {
       if (ctx.isStopping?.()) return;
@@ -322,7 +317,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
         item => item.isFile && !shouldSkip(item.name, settings)
           && isPublishableFile(item.name) && !isPreviewArtifact(item.name),
       );
-      const paths = await Promise.all(fileItems.map(f => join(dirPath, f.name)));
+      const paths = fileItems.map(f => joinPath(dirPath, f.name));
       const { kept, dropped } = keepOnlyHighestVersions(paths);
       if (dropped.length) {
         appendLog('skip', `  ⊘  dropped ${dropped.map(p => p.split('/').pop()).join(', ')}`);
@@ -337,7 +332,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
         const ext = name.includes('.') ? '.' + name.split('.').pop()! : '';
         const stem = ext ? name.slice(0, -ext.length) : name;
         const translated = translateExportName(stem, ext, vocabMap);
-        await copyOne(fileSrc, await join(targetDir, translated), `${name} → ${translated}`);
+        await copyOne(fileSrc, joinPath(targetDir, translated), `${name} → ${translated}`);
       }
       for (const item of items) {
         if (ctx.isStopping?.()) return;
@@ -346,8 +341,8 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
            names (`001.webp`), so a filter applied to files alone would let a document's page
            previews through into a client's folder as assets. */
         if (isPreviewArtifact(item.name)) continue;
-        const subSrc    = await join(dirPath, item.name);
-        const subTarget = await join(targetDir, item.name);
+        const subSrc    = joinPath(dirPath, item.name);
+        const subTarget = joinPath(targetDir, item.name);
         livePub.add(subTarget);
         await publishDir(subSrc, subTarget);
       }
@@ -363,7 +358,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
         if (isPreviewArtifact(e.name)) continue;
         // Package dirs next to OUT are handled by publishNestedPackages when enabled.
         if (isPackageFolder(e.name, settings)) continue;
-        const childSrc = await join(src, e.name);
+        const childSrc = joinPath(src, e.name);
 
         if (isOutFolder(e.name, settings)) {
           stats.pubFolders += 1;
@@ -371,7 +366,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
         } else {
           const hasSiblingOut = entries.some(sib => sib.isDirectory && isOutFolder(sib.name, settings));
           if (hasSiblingOut) continue;
-          await publishFolder(childSrc, await join(target, stripStableId(e.name)));
+          await publishFolder(childSrc, joinPath(target, stripStableId(e.name)));
         }
       }
     }
@@ -395,6 +390,6 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
 
   appendLog('section',
     `━━━ PUBLISH DONE — ${stats.published} published · ${stats.skipped} unchanged · ` +
-    `${stats.disconnected} disconnected · ${stats.errors} errors ━━━`
+    `${stats.disconnected} disconnected · ${stats.errors} errors ━━━ in ${phase.done()}`
   );
 }

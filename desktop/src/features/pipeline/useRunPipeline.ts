@@ -10,6 +10,13 @@
  *
  * A failed grant DEGRADES the run — the CDN stages are skipped and logged — rather than aborting it,
  * because the local and cloud exports are still useful to the operator.
+ *
+ * Two things here are deliberately NOT in the order they read in:
+ *   - the four pre-run reads are dispatched together (see ./preRun.ts) — they share nothing, so the
+ *     run waits for the slowest instead of the sum, while still applying and logging them in order;
+ *   - the version-history walk that feeds `syncVersionHistory` is started by `runPipeline` right
+ *     after the source scan and merely AWAITED down here, so a full second pass over the source
+ *     tree happens under the network stages instead of after them.
  */
 
 import { useSettingsStore } from '../../store/settingsStore';
@@ -19,25 +26,43 @@ import { useClientStore } from '../../store/clientStore';
 import { resolveExportShape } from '../../domain/client';
 import type { CloudDestination } from '../../domain/client';
 import { runPipeline, scanVersionMap, deleteCdnObjects, type RunContext } from '../../services/pipelineService';
-import type { CloudUrlEntry } from '../../services/pipelineService';
+import type { CloudUrlEntry, VersionScanResult } from '../../services/pipelineService';
 import {
-  exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary, requestR2Grant,
-  fetchAssetStorageState, fetchPreviewPageLimit, reconcileCdnObjects, syncStreamVideos,
+  exportAssetsToSupabase, syncVersionHistory, syncTagsFromVocabulary,
+  reconcileCdnObjects, syncStreamVideos,
 } from '../../services/supabaseService';
-import { loadVocabulary } from '../../services/vocabService';
 import { notifyRunComplete } from '../../services/notifyService';
 import { groupAssets, type VocabularyData } from '@sotto/domain';
 import { resolveRunPlan } from './runPlan';
+import { refreshRunVocabulary, loadCdnPrerequisites } from './preRun';
+import { beginRunTimeline, endRunTimeline, logRunTimeline, timePhase } from '../../services/pipeline/timing';
+import {
+  buildRunRecord, findBaseline, loadRunTimings, appendRunTiming, toBaseline,
+} from '../../services/pipeline/runTimings';
+
+/* Stamped into each run record so a timing can be attributed to the build that produced it —
+   an "everything got slower" report is only actionable with the version attached. */
+const APP_VERSION = __APP_VERSION__;
 
 export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise<void> {
   const settings = useSettingsStore(s => s.settings);
   const vocab    = useVocabularyStore(s => s.data);
-  const { startRun, appendLog, addIssue, finishRun, setProgress, setSupabaseSync } = usePipelineStore();
+  /* One selector per action, not `usePipelineStore()`. Subscribing to the whole store made the
+     component holding this hook re-render on every log line the run appended — thousands of
+     renders of the pipeline view, caused by the run and competing with it. Actions are stable
+     references, so these subscriptions never fire. */
+  const startRun        = usePipelineStore(s => s.startRun);
+  const appendLog       = usePipelineStore(s => s.appendLog);
+  const addIssue        = usePipelineStore(s => s.addIssue);
+  const finishRun       = usePipelineStore(s => s.finishRun);
+  const setProgress     = usePipelineStore(s => s.setProgress);
+  const setSupabaseSync = usePipelineStore(s => s.setSupabaseSync);
   const { clients, activeClientId } = useClientStore();
   const activeClient = clients.find(c => c.id === activeClientId) ?? null;
 
   return async function handleRun() {
     startRun();
+    beginRunTimeline();
     const { effectiveSettings, localDest: runLocalDest, cloudDests } = resolveRunPlan(settings, selectedDests);
 
     const collectedAssets: string[] = [];
@@ -49,7 +74,7 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
        pages it can show and how many the document actually has. */
     const pageCounts   = new Map<string, { total: number; rendered: number }>();
 
-    /* ── Pre-run: vocabulary, then the storage grant ─────────────────────────── */
+    /* ── Pre-run: the portal reads, all at once ──────────────────────────────── */
     // The client IS a DB row — its id is the identity, no name resolution. Sync runs as the
     // signed-in user under the RLS staff policies; no service key is present.
     const sbEnabled = !!(activeClient?.supabaseUrl && activeClient?.supabaseAnonKey);
@@ -67,21 +92,7 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
       useVocabularyStore.getState().dirty || !!useVocabularyStore.getState().data?._unpublished;
     let vocabData = vocab ?? { _schema_version: '2.1.0', _comment: '', tags: [] };
     let vocabFresh = false;
-    if (clientId && !vocabDirty) {
-      try {
-        const fresh = await loadVocabulary(clientId, {
-          forceFromDb: true,
-          persistCache: !effectiveSettings.dryRun,
-          requireDb: true,
-        });
-        vocabData = fresh;
-        vocabFresh = true;
-        useVocabularyStore.getState().setData(fresh, { dirty: false });
-        log('dim', '  Vocabulary refreshed from portal');
-      } catch (e) {
-        log('warn', `  Vocabulary refresh skipped — using cached labels (${e})`);
-      }
-    } else if (vocabDirty) {
+    if (vocabDirty) {
       log('dim', '  Using local unpublished vocabulary (will publish leaves after sync)');
     }
 
@@ -89,62 +100,46 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
     let assetLevels: Map<string, string> | undefined;
     let cdnKeyReferences: Map<string, Set<string>> | undefined;
     let previewPageLimit: number | undefined;
-    if (sbConfig && clientId && !effectiveSettings.dryRun
-        && (effectiveSettings.doThumbnails || effectiveSettings.doCdnOriginals)) {
-      try {
-        const grant = await requestR2Grant(sbConfig, clientId);
-        // A pipeline grant without the gated half means the environment is half-provisioned.
-        // Refusing here is the point: uploading anyway would put client and internal assets on
-        // the public domain, and the run would report success.
-        if (!grant.gatedBucket || !grant.gatedDomain || !grant.gatedAccessKeyId) {
-          throw new Error(
-            'storage grant has no gated tier — set R2_GATED_BUCKET and R2_GATED_DOMAIN function '
-            + 'secrets for this environment. Refusing to publish to the public bucket.',
-          );
-        }
-        r2Config = {
-          endpoint:     grant.endpoint,
-          accessKeyId:  grant.accessKeyId,
-          secretKey:    grant.secretAccessKey,
-          sessionToken: grant.sessionToken,
-          bucket:       grant.bucket,
-          publicDomain: grant.publicDomain,
-          keyPrefix:    grant.keyPrefix,
-          clientId:     grant.clientId ?? clientId,
-          gatedBucket:       grant.gatedBucket,
-          gatedDomain:       grant.gatedDomain,
-          gatedAccessKeyId:  grant.gatedAccessKeyId,
-          gatedSecretKey:    grant.gatedSecretAccessKey!,
-          gatedSessionToken: grant.gatedSessionToken!,
-        };
-        log('dim', `  Storage grant issued for "${activeClient!.name}" (public ${grant.bucket} · gated ${grant.gatedBucket}, expires ${new Date(grant.expiresAt).toLocaleTimeString()})`);
 
-        /* Object keys carry the access level, so the upload stages need each asset's CURRENT level
-           before they write. The same read indexes live URL/key references for safe pruning. A
-           failed read routes assets at the restrictive create-time default and disables pruning,
-           because the pipeline cannot prove a stale key is unshared. */
-        const storageState = await fetchAssetStorageState(clientId, sbConfig);
-        assetLevels = storageState?.levels ?? new Map<string, string>();
-        cdnKeyReferences = storageState?.references ?? undefined;
-        log('dim', `  ${assetLevels.size} known asset level(s) loaded for key routing`);
-        if (!cdnKeyReferences) {
-          log('warn', '  CDN row references unavailable — stale thumbnail/original pruning disabled for safety');
-        }
+    /* Four round trips that share nothing, so the run waits for the slowest instead of the sum.
+       The RESULTS are applied in the old order, and the lines they log are emitted after the join
+       rather than as each read lands — see ./preRun.ts for why that order is load-bearing. */
+    const wantsVocabRefresh = !!clientId && !vocabDirty;
+    const wantsCdnPrereqs   = !!(sbConfig && clientId && !effectiveSettings.dryRun
+      && (effectiveSettings.doThumbnails || effectiveSettings.doCdnOriginals));
+    if (wantsVocabRefresh || wantsCdnPrereqs) {
+      const prePhase = timePhase('PRE-RUN READS');
+      const [vocabRead, cdn] = await Promise.all([
+        wantsVocabRefresh
+          ? refreshRunVocabulary(clientId!, { persistCache: !effectiveSettings.dryRun })
+          : null,
+        wantsCdnPrereqs
+          ? loadCdnPrerequisites({
+              sbConfig:   sbConfig!,
+              clientId:   clientId!,
+              clientName: activeClient!.name,
+            })
+          : null,
+      ]);
+      const preElapsed = prePhase.done();
 
-        /* How many pages of a document get previewed is an admin setting on the client row, so it
-           comes from the same place `perm` does. A failed read leaves it undefined and the pipeline
-           uses the documented default rather than an unbounded render. */
-        previewPageLimit = await fetchPreviewPageLimit(clientId, sbConfig) ?? undefined;
-        if (previewPageLimit !== undefined) {
-          log('dim', `  Page-preview limit for this client: ${previewPageLimit}`);
-        }
-      } catch (e) {
-        log('error', `  ✕  CDN steps disabled — ${e}`);
+      if (vocabRead?.data) {
+        vocabData  = vocabRead.data;
+        vocabFresh = vocabRead.fresh;
+        useVocabularyStore.getState().setData(vocabRead.data, { dirty: false });
       }
+      if (cdn) {
+        r2Config         = cdn.r2;
+        assetLevels      = cdn.assetLevels;
+        cdnKeyReferences = cdn.cdnKeyReferences;
+        previewPageLimit = cdn.previewPageLimit;
+      }
+      for (const line of [...(vocabRead?.lines ?? []), ...(cdn?.lines ?? [])]) log(line.type, line.msg);
+      log('dim', `  Portal pre-run reads finished in ${preElapsed}`);
     }
 
     /* ── The pipeline ────────────────────────────────────────────────────────── */
-    const stats = await runPipeline({
+    const runCtx: RunContext = {
       settings: effectiveSettings,
       vocab:    vocabData,
       appendLog, addIssue, setProgress, finishRun,
@@ -163,7 +158,11 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
       r2: r2Config,
       isStopping: () => usePipelineStore.getState().runStatus === 'stopping',
       deferFinish: true,
-    });
+      /* Only a portal run consumes the version-history walk, and it is a second full pass over the
+         source tree — a run without Supabase must not pay for one it throws away. */
+      earlyVersionScan: !!(sbConfig && clientId),
+    };
+    const stats = await runPipeline(runCtx);
 
     /* ── Post-run: Supabase sync, targeted CDN cleanup, version history ──────── */
     try {
@@ -173,6 +172,7 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
           cdnUrls, cloudUrls, originalUrls, pageCounts, r2Config, log, appendLog, setSupabaseSync,
           isStopping: () => usePipelineStore.getState().runStatus === 'stopping',
           sourceFresh: sourceReadErrors.size === 0,
+          versionScan: runCtx.versionScan,
         });
       } else if (usePipelineStore.getState().runStatus === 'stopping') {
         log('warn', '  ⏹  Stop requested — portal sync skipped.');
@@ -181,6 +181,26 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
       log('error', `  ✕  Post-run sync failed: ${e}`);
       stats.errors += 1;
     }
+
+    /* Last thing before the run is declared over, so the total covers the pre-run fetches and the
+       portal sync as well as the pipeline itself — the two places the silent gaps were found.
+       The history read happens BEFORE the record is appended, or every run would compare
+       against itself. */
+    const record = buildRunRecord({
+      settings:   effectiveSettings,
+      clientId,
+      clientName: activeClient?.name ?? null,
+      appVersion: APP_VERSION,
+      assets:     collectedAssets.length,
+      errors:     stats.errors,
+      stopped:    usePipelineStore.getState().runStatus === 'stopping',
+    });
+    const baseline = record && !record.stopped
+      ? findBaseline(await loadRunTimings(), record)
+      : null;
+    logRunTimeline(appendLog, { baseline: baseline && toBaseline(baseline) });
+    if (record) await appendRunTiming(record);
+    endRunTimeline();
 
     finishRun(stats, stats.errors > 0 || stats.skipped > 0);
     notifyRunComplete(stats, stats.errors > 0 || stats.skipped > 0);
@@ -207,6 +227,8 @@ async function syncRunToPortal(a: {
   setSupabaseSync: ReturnType<typeof usePipelineStore.getState>['setSupabaseSync'];
   isStopping: () => boolean;
   sourceFresh: boolean;
+  /** The version-history walk, started at the top of the run. Absent ⇒ walk it here, as before. */
+  versionScan?: Promise<VersionScanResult>;
 }): Promise<void> {
   const outFolder = a.effectiveSettings.outFolder ?? 'OUT';
   const { singles, galleries, unpackaged } = groupAssets(a.collectedAssets, outFolder);
@@ -246,10 +268,25 @@ async function syncRunToPortal(a: {
 
     /* This run changed `status` — new rows published, absent files disconnected — and status is
        half of the access level, so some objects now belong at a different key. The trigger queued
-       them; drain it here rather than leaving it for whoever next opens the portal. */
+       them; drain it here rather than leaving it for whoever next opens the portal.
+
+       SCOPED TO THIS CLIENT, and the run waits for it: the Stream sync below reads each master off
+       `download_url`, so those rows must already point at the key their level requires. What the run
+       does NOT wait for is everyone else's backlog — that is drained by a follow-up pass that
+       outlives this line. The queue is durable, so a follow-up that never lands delays the move
+       rather than losing it. */
     if (!a.isStopping()) {
       if (a.effectiveSettings.dryRun) a.log('dim', '  [DRY] would drain CDN reconcile tasks');
-      else await reconcileCdnObjects(a.sbConfig, a.log);
+      else {
+        const reconcilePhase = timePhase('CDN RECONCILE');
+        const outcome = await reconcileCdnObjects(a.sbConfig, a.log, { clientId: a.clientId });
+        a.log('dim', `  CDN reconcile drained in ${reconcilePhase.done()}`);
+        if (outcome && outcome.remaining > 0) {
+          a.log('dim',
+            `  ⟳  ${outcome.remaining} asset(s) queued elsewhere — draining after the run`);
+          void reconcileCdnObjects(a.sbConfig, a.log, { background: true });
+        }
+      }
     }
 
     /* Videos onto Stream. AFTER the export, because a video is attached to an asset row and a
@@ -283,7 +320,17 @@ async function syncRunToPortal(a: {
   }
 
   if (a.effectiveSettings.sourceFolder && !a.isStopping()) {
-    const versionMap = await scanVersionMap(a.effectiveSettings.sourceFolder, a.vocabData, a.effectiveSettings);
+    /* The walk normally finished during the run, so this phase now measures the WAIT — which is what
+       the run actually spends on it. The fallback is not dead code: the pipeline never reaches the
+       kick-off if the source scan itself throws. */
+    const scanPhase = timePhase('VERSION SCAN');
+    const early = a.versionScan ? await a.versionScan : null;
+    if (early && 'error' in early) throw early.error;
+    const versionMap = early?.map
+      ?? await scanVersionMap(a.effectiveSettings.sourceFolder, a.vocabData, a.effectiveSettings);
+    a.log('dim', early
+      ? `  Version map ready in ${scanPhase.done()} (walked in ${early.took} alongside the run)`
+      : `  Version map scanned in ${scanPhase.done()}`);
     await syncVersionHistory(versionMap, a.clientId, a.vocabData, a.sbConfig, a.log, {
       dryRun: a.effectiveSettings.dryRun,
       shouldStop: a.isStopping,

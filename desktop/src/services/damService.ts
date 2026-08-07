@@ -15,7 +15,8 @@
  */
 
 import { writeTextFile, readTextFile, copyFile, mkdir, rename, remove } from '@tauri-apps/plugin-fs';
-import { join } from '@tauri-apps/api/path';
+import { joinPath } from './pipeline/paths';
+import { timePhase } from './pipeline/timing';
 import type { RunStats } from '../store/pipelineStore';
 import type { RunContext } from './pipeline/types';
 import {
@@ -42,6 +43,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
     return;
   }
 
+  const phase = timePhase('OBSIDIAN');
   appendLog('section', '━━━ DAM / OBSIDIAN ━━━');
   appendLog('dim', `  → ${settings.vaultFolder}`);
 
@@ -51,10 +53,10 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
   }
 
   const vocabMap = buildVocabMap(vocab);
-  const damFolder = await join(settings.vaultFolder, '05 DAM');
-  const damRoot   = await join(damFolder, '01 EXPORTS');
+  const damFolder = joinPath(settings.vaultFolder, '05 DAM');
+  const damRoot   = joinPath(damFolder, '01 EXPORTS');
   const canvasDir = damFolder; // flat _X canvases at DAM root for easy access
-  const attRoot   = await join(settings.vaultFolder, '10 ATTACHMENTS');
+  const attRoot   = joinPath(settings.vaultFolder, '10 ATTACHMENTS');
   const width     = parseInt(String(settings.thumbWidth),  10) || 320;
   const quality   = parseInt(String(settings.thumbQuality), 10) || 70;
 
@@ -68,7 +70,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
 
   if (!outDirs.length) {
     appendLog('dim', `  No "${settings.outFolder}" folders found — check source folder and out-folder name in Settings.`);
-    appendLog('section', '━━━ OBSIDIAN DONE — 0 notes ━━━');
+    appendLog('section', `━━━ OBSIDIAN DONE — 0 notes ━━━ in ${phase.done()}`);
     return;
   }
 
@@ -91,26 +93,26 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
     const galleryNames = new Set<string>();
     for (const e of entries) {
       if (e.isDirectory && !e.name.startsWith('.') && !shouldSkip(e.name, settings)) {
-        if (await isGalleryFolder(await join(outPath, e.name), vocabMap)) galleryNames.add(e.name);
+        if (await isGalleryFolder(joinPath(outPath, e.name), vocabMap)) galleryNames.add(e.name);
       }
     }
 
     const relParts = pathParts(projRel);
     const noteDir  = relParts.length
-      ? await join(noteBase, ...relParts)
+      ? joinPath(noteBase, ...relParts)
       : noteBase;
     await mkdir(noteDir, { recursive: true }).catch(() => {});
 
     // ── Gallery notes ─────────────────────────────────────────────────────
     for (const gName of galleryNames) {
       if (ctx.isStopping?.()) return;
-      const gPath      = await join(outPath, gName);
+      const gPath      = joinPath(outPath, gName);
       const gParsed    = parseFilename(gName, vocabMap);
       const title      = buildNoteName(gParsed);
       const safe       = safeName(title);
       const icon       = gParsed.tags.find(t => t.icon)?.icon || '';
       const noteFileName = `${icon ? icon + ' ' : ''}${safe}.md`;
-      const notePath     = await join(noteDir, noteFileName);
+      const notePath     = joinPath(noteDir, noteFileName);
       const exportName   = translateExportName(gName, '', vocabMap);
 
       liveNotePaths.add(notePath);
@@ -162,7 +164,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
       const parentName  = projRel.split('/').pop() || '';
       const cleanName   = parentName.replace(/^\[\d+\]\s*/, '') || parentName;
       const wipFileName = `⏳ ${safeName(cleanName)}.md`;
-      const wipPath     = await join(noteDir, wipFileName);
+      const wipPath     = joinPath(noteDir, wipFileName);
       liveNotePaths.add(wipPath);
       noteSourceMap.set(wipPath, [clusterKey, sortKey]);
       if (!await fileExists(wipPath)) {
@@ -182,9 +184,9 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
       const safe       = safeName(title);
       const icon       = parsed.tags.find(t => t.icon)?.icon || '';
       const noteFileName = `${icon ? icon + ' ' : ''}${safe}.md`;
-      const notePath     = await join(noteDir, noteFileName);
+      const notePath     = joinPath(noteDir, noteFileName);
       const exportName   = translateExportName(stem, ext, vocabMap);
-      const assetPath    = await join(outPath, file.name);
+      const assetPath    = joinPath(outPath, file.name);
       const identity     = ctx.cdnIdentity?.get(assetPath);
       const assetCloudUrls = identity
         ? ctx.cloudUrls?.get(assetIdentityKey(identity.stableId, identity.childId))
@@ -198,7 +200,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
       const preExistingThumb = thumbPathFor(outPath, stem);
       if (await fileExists(preExistingThumb)) {
         const thumbDestName = `${safe}-thumb.webp`;
-        const thumbDest     = await join(attRoot, thumbDestName);
+        const thumbDest     = joinPath(attRoot, thumbDestName);
         try {
           await mkdir(attRoot, { recursive: true });
           if (!await isUnchanged(preExistingThumb, thumbDest)) await copyFile(preExistingThumb, thumbDest);
@@ -238,7 +240,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
   }
 
   // ── Shared trash helpers ──────────────────────────────────────────────
-  const trashDir = await join(settings.vaultFolder, '05 DAM', '🗑 Trash');
+  const trashDir = joinPath(settings.vaultFolder, '05 DAM', '🗑 Trash');
   let trashCreated = false;
   let disconnectedCount = 0;
 
@@ -249,7 +251,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
   async function trashItem(absPath: string, reason: string) {
     const name = absPath.split('/').pop()!;
     await ensureTrash();
-    const destPath = await join(trashDir, `🚫 ${name}`);
+    const destPath = joinPath(trashDir, `🚫 ${name}`);
     await rename(absPath, destPath);
     const rel = absPath.replace(damRoot, '').replace(/^\//, '');
     appendLog('disconnected', `  🚫 DISCONNECTED: ${rel}`);
@@ -263,7 +265,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
   if (await fileExists(damRoot)) {
     async function walkOrphanNotes(dir: string) {
       for (const e of await listDir(dir)) {
-        const childPath = await join(dir, e.name);
+        const childPath = joinPath(dir, e.name);
         if (e.isDirectory) {
           await walkOrphanNotes(childPath);
         } else if (e.isFile && e.name.endsWith('.md') && !e.name.startsWith('🚫')) {
@@ -307,7 +309,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
     async function walkOrphanCanvases(dir: string, recurse: boolean) {
       for (const e of await listDir(dir)) {
         if (e.name.startsWith('🗑')) continue; // never touch Trash
-        const childPath = await join(dir, e.name);
+        const childPath = joinPath(dir, e.name);
         if (e.isDirectory) {
           if (recurse) await walkOrphanCanvases(childPath, true);
         } else if (e.isFile && e.name.endsWith('.canvas') && e.name.startsWith('_X ') && !e.name.startsWith('🚫')) {
@@ -325,7 +327,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
       let hasContent = false;
       for (const e of entries) {
         if (e.isDirectory) {
-          const childPath = await join(dir, e.name);
+          const childPath = joinPath(dir, e.name);
           const childEmpty = await pruneEmptyDirs(childPath);
           if (!childEmpty) hasContent = true;
         } else {
@@ -355,6 +357,6 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
   }
 
   appendLog('section',
-    `━━━ OBSIDIAN DONE — ${stats.notes} notes · ${stats.disconnected} disconnected · ${stats.errors} errors ━━━`
+    `━━━ OBSIDIAN DONE — ${stats.notes} notes · ${stats.disconnected} disconnected · ${stats.errors} errors ━━━ in ${phase.done()}`
   );
 }

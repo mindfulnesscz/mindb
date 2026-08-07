@@ -6,13 +6,84 @@ A destination has a provider, name, pipeline role (`internal` / `client`), porta
 
 | Provider | Sign-in | Existing-name behavior | Structure | Best fit | Main weakness |
 |---|---|---|---|---|---|
-| Local | None | mtime/size skip in local publishing | Can mirror folders | Synced enterprise folder, inspectable output | Depends on another sync client; local disk coupling |
-| Dropbox | Browser PKCE | **Skips if path exists**, regardless of changed content | Cloud stage is flat into remote path | Simple delivery, stable shared links | Existing remote file can become stale |
-| OneDrive | Device code | PUT overwrites same path | Cloud stage is flat | Microsoft 365 users | Conditional Access; simple upload is memory/CORS-sensitive |
-| Google Drive | Browser PKCE plus client secret | Skip same-name+size; update in place when changed | Lazily creates remote folders | Workspace/Shared Drive collaboration | Full-file memory upload; public permission creation |
+| Local | None | mtime/size skip in local publishing | Mirrors the source tree | Synced enterprise folder, inspectable output | Depends on another sync client; local disk coupling |
+| Dropbox | Browser PKCE | **Skips if path exists**, regardless of changed content | Remote path per file; folders created implicitly | Simple delivery, stable shared links | Existing remote file can become stale |
+| OneDrive | Device code | Skip only when size **and** QuickXorHash match; PUT overwrites otherwise | Remote path per file; folders created implicitly | Microsoft 365 users | Conditional Access; personal drives publish no QuickXorHash |
+| Google Drive | Browser PKCE plus client secret | Skip only when size **and** MD5 match; update in place when changed | Resolves remote folders by id, listing each once per run | Workspace/Shared Drive collaboration | Broad OAuth scope; public permission creation |
 
-All three provider uploads are one API operation per file, not a zip or transactional batch. OneDrive and Google Drive read the complete file into the webview’s memory. Dropbox uses native Rust to avoid webview binary limits.
+All three provider uploads are one API operation per file, not a zip or transactional batch.
+
+## Which folders a destination receives
+
+`exportLayout` is portal-owned and required, one of three values. The two folder layouts are not a
+preference — they are two genuinely different trees, and a destination used to have no way to say
+which one it meant:
+
+| Layout | What arrives | Delivered by |
+|---|---|---|
+| `source` | The source tree: package and category folders (identity suffixes stripped), the `OUT` segment dropped, galleries kept | Local destinations always; cloud destinations since 3.2.3 |
+| `folders` *(default)* | The `OUT` subtree only — a gallery keeps its folder, anything else lands in the destination root | Cloud destinations, and the value every stored destination carries |
+| `flat` | Everything in one folder, no nesting | Any destination |
+
+A local destination reads `source` and `folders` as the same thing: it has mirrored the source tree
+since it existed, and re-reading `folders` as "OUT subtree only" would restructure every local
+delivery to fix a naming inconsistency. On a **cloud** destination the two differ, and an unknown or
+absent value resolves to `folders` — never to `source` — so nothing moves on upgrade.
+
+**Switching a live destination's layout moves every delivered file.** On **Google Drive**, do it with
+the mover: **Settings → Cloud destinations → the destination → Export layout migration** re-parents
+each file in place — no bytes re-sent, no orphans, and sharing links survive because Drive's move
+keeps the file id. See
+[Changing a Drive destination's layout](/operations/gdrive-relayout).
+
+On **Dropbox and OneDrive** there is no mover yet: the next run uploads everything again under the new
+paths and the old copies stay until they are pruned by hand.
+
+## How the bytes actually move
+
+**Every provider streams a large file from disk.** One native command (`cloud_upload_stream`) reads
+the file — or one byte range of it, for a chunked session — straight into the request body, so peak
+memory is a read buffer regardless of the file's size. Auth, folder resolution, the skip decision
+and the choice of upload shape all stay in TypeScript, per provider; only the transfer is shared.
+
+This used to differ per provider for no reason anyone had written down. Drive and OneDrive pulled
+the whole file across the IPC bridge into the webview and posted it from there — twice-copied and
+resident for the length of the transfer. Dropbox looked like the exception and was not: it ran
+natively, but read the file into a `Vec<u8>` and then copied each 48 MB chunk again, so "native" was
+buying a smaller copy rather than none.
+
+**Small files deliberately still go through memory**, because for them it is simpler and the limit
+is the provider's own: Drive's multipart create (≤5 MiB) interleaves metadata with the bytes in one
+body, and OneDrive's simple PUT (≤4 MiB) is a single request. The threshold each provider already
+had is the threshold for streaming.
+
+The destination host is checked against an allowlist in Rust before a byte is read — see
+[Desktop native security](/desktop/native-security#cloud-upload-stream).
+
+## What a run costs when its upload cache is cold
+
+Each destination keeps an mtime+size record per delivered file in `cloud-upload-cache.json`, and a
+match there skips the file with no network call at all. That cache is **empty on a first run, after
+reconnecting a destination (it is keyed by destination id), and after clearing the app data folder**
+— and a sync client that rewrites mtimes can invalidate it wholesale. The cold path is therefore the
+one that decides how long an export takes, and three things bound it:
+
+- **Content is hashed at most once per file, ever.** The hash a skip decision needs (Drive's MD5,
+  OneDrive's QuickXorHash) is computed natively and stored beside the upload records, keyed by
+  source path and fingerprinted on mtime+size. Two destinations, a reconnected destination, or a
+  later run reuse it. This matters beyond CPU: hashing **reads** the file, and reading an
+  online-only file in a synced source tree downloads it.
+- **Drive lists each destination folder once**, not once per file, and answers every existence
+  question for that run from the listing. A failed listing falls back to a lookup per file rather
+  than assuming a folder is empty — assuming would put a second copy beside the client's file.
+- **A stopped export keeps what it learned.** The cache is written on the way out of a stopped run,
+  so resuming does not start cold against a destination that is already half up to date.
 
 Only generated links from destinations with role `client` are written to `download_urls`. The portal then role-gates those links with `minRole` / `showInPortal`. R2 `download_url` remains the primary Download button — see [CDN and cloud URLs](/data-model/cloud-links).
 
 Provider-specific setup (Azure tenant, Shared Drive id, redirect URI `http://localhost:7623/callback`) lives under this section’s provider pages and in `desktop/CLOUD_DESTINATIONS.md`.
+
+Google Drive alone has no paths — it addresses folders by id and allows several folders with one name
+in the same parent, which older releases created under concurrent upload. Prevention is automatic;
+merging the copies already in a client's Drive is a preview-first action on the destination, see
+[Google Drive duplicate folders](/operations/gdrive-dedupe).

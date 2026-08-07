@@ -64,6 +64,29 @@ The Tauri CSP explicitly allows app scripts and the network origins used by Supa
 Google Drive, Microsoft Graph/OneDrive, and local development. Add a provider endpoint narrowly to
 `connect-src` when introducing a new integration; do not disable CSP.
 
+## Cloud upload stream
+
+`cloud_upload_stream` sends a local file — or one byte range of it — to a provider upload endpoint
+without loading it into the webview. It is the second native proxy, and it is bound the same way the
+first one is, for the same reason: it can read any path-policy-allowed file and send it, with
+caller-supplied headers, to a caller-supplied URL. Unbound, that is an exfiltration primitive with
+an `Authorization` header attached.
+
+Two checks run before a byte is read:
+
+- The URL must be **HTTPS** and its host must match `UPLOAD_HOSTS` in `upload_stream.rs` — exactly,
+  or as a dot-suffix, so `googleapis.com.attacker.example` does not pass a check that
+  `www.googleapis.com` does. The list mirrors `connect-src`, with `content.dropboxapi.com` added
+  because Dropbox uploads have never gone through the webview.
+- The path goes through `path_policy::require_allowed_file`, like every other path-taking command.
+
+The range is also validated against the file's real length. That is not a security check but a
+correctness one: a body shorter than its declared `Content-Length` does not fail against these
+providers, it stalls the connection.
+
+Widening `UPLOAD_HOSTS` is a deliberate act with a reason recorded, and it needs the matching
+`connect-src` entry only if the webview also has to reach that host.
+
 ## Reveal bridge
 
 The localhost bridge at `127.0.0.1:7624` supports:
