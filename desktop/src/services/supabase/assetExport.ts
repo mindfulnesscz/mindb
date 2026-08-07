@@ -25,9 +25,10 @@ import { parseAssetForSupabase } from './rowMapping';
 import type { StableRow, SupabaseExportResult, ReadmeTarget } from './exportTypes';
 import { identifyAssets } from './exportIdentify';
 import { planExport } from './exportPlan';
-import { dedupeByKey, writeParents, writeChildren } from './exportWrite';
+import { dedupeByKey, writeParents, writeChildren, WRITE_CONCURRENCY } from './exportWrite';
 import { disconnectStaleRows } from './exportDisconnect';
 import { timePhase, timeStep } from '../pipeline/timing';
+import { asyncPool } from '../pipeline/pool';
 
 export type { SupabaseExportResult } from './exportTypes';
 
@@ -253,24 +254,37 @@ async function writeReadmes(
   const statsMap = await fetchAssetStats(primaryIds, config);
   const vocabCtx = buildVocabMap(vocab);
 
-  let written = 0;
+  /* Pooled ACROSS folders, serial WITHIN one.
+     Targets are not one per folder: a package holding several galleries, or galleries alongside
+     flat singles, contributes one target each for the same `packageDir` — and every one of them
+     writes the same `readme.md` path. Serially the last write won; pooling them naively would put
+     two concurrent full-file overwrites on one path and let the winner vary run to run. Grouping by
+     folder keeps each file's write sequence, and its final contents, exactly what they were. */
+  const byFolder = new Map<string, ReadmeTarget[]>();
   for (const t of targets) {
-    const primaryId = parentIdByKey.get(t.primaryKey);
-    if (!primaryId) continue;
-    try {
-      const parsed = parseFilename(t.stem, vocabCtx);
-      const p      = parseAssetForSupabase(t.stem, vocab);
-      const dbLevel = dbLevelById.get(primaryId);
-      await writeReadme(t.packageDir, {
-        name: p.name, stableId: t.stableId, version: p.version,
-        status: dbLevel?.status ?? t.status,
-        perm:   dbLevel?.perm   ?? t.perm,
-        tags: parsed.tags, stats: statsMap.get(primaryId) ?? null,
-      });
-      written++;
-    } catch (e) {
-      appendLog('error', `  ✕  readme.md write failed for "${t.packageDir}": ${e}`);
-    }
+    (byFolder.get(t.packageDir) ?? byFolder.set(t.packageDir, []).get(t.packageDir)!).push(t);
   }
+
+  let written = 0;
+  await asyncPool(WRITE_CONCURRENCY, [...byFolder.values()], async (folderTargets) => {
+    for (const t of folderTargets) {
+      const primaryId = parentIdByKey.get(t.primaryKey);
+      if (!primaryId) continue;
+      try {
+        const parsed = parseFilename(t.stem, vocabCtx);
+        const p      = parseAssetForSupabase(t.stem, vocab);
+        const dbLevel = dbLevelById.get(primaryId);
+        await writeReadme(t.packageDir, {
+          name: p.name, stableId: t.stableId, version: p.version,
+          status: dbLevel?.status ?? t.status,
+          perm:   dbLevel?.perm   ?? t.perm,
+          tags: parsed.tags, stats: statsMap.get(primaryId) ?? null,
+        });
+        written++;
+      } catch (e) {
+        appendLog('error', `  ✕  readme.md write failed for "${t.packageDir}": ${e}`);
+      }
+    }
+  });
   appendLog('dim', `  readme.md written for ${written}/${targets.length} folder(s)`);
 }

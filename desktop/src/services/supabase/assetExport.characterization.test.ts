@@ -412,6 +412,35 @@ describe('assetExport — galleries (a folder of related files)', () => {
     const stableIds = new Set(restStub.inserted().map(r => r.stable_id));
     expect(stableIds).toEqual(new Set(['a4000002', 'a4000003']));
   });
+
+  it('never writes one package folder\'s readme.md concurrently with itself', async () => {
+    /* Several galleries in ONE package, plus a flat single, all resolve to the same `packageDir`
+       and therefore to the same readme.md path — one target each. The writes are pooled across
+       folders, so this pins the other half: within a folder they stay strictly sequential, or two
+       full-file overwrites would race and the winner would vary between runs. */
+    const paths = [
+      `${SRC}/Shoot __a4000004/OUT/(PRD)(Gll) Studios/01.jpg`,
+      `${SRC}/Shoot __a4000004/OUT/(PRD)(Gll) Offices/01.jpg`,
+      `${SRC}/Shoot __a4000004/OUT/(PRD)(SlD) Deck.pdf`,
+    ];
+    paths.forEach(p => vfs.put(p, p));
+
+    let live = 0;
+    let peak = 0;
+    readmeStubs.writeReadme.mockImplementation(async () => {
+      live++;
+      peak = Math.max(peak, live);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      live--;
+    });
+
+    await sync(paths);
+
+    const folders = readmeStubs.writeReadme.mock.calls.map(([dir]) => dir);
+    expect(folders.length).toBeGreaterThan(1);
+    expect(new Set(folders)).toEqual(new Set([`${SRC}/Shoot __a4000004`]));
+    expect(peak).toBe(1);
+  });
 });
 
 describe('assetExport — disconnecting what is gone', () => {

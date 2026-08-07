@@ -53,6 +53,32 @@ let client: SottoClient | null = null;
 let clientKey = '';
 let authSubscription: { unsubscribe: () => void } | null = null;
 let currentAccessToken: string | null = null;
+let inFlightRefresh: Promise<string | null> | null = null;
+
+/**
+ * One refresh at a time, however many callers ask.
+ *
+ * `sbFetch` retries a 401 with `forceRefresh: true`, and the pipeline now writes rows 8-wide — so
+ * the moment a token expires mid-run, eight requests hit 401 within milliseconds of each other and
+ * every one of them would call `refreshSession()`. GoTrue rotates the refresh token on use, so the
+ * second and later calls present one that has just been spent: N-1 of them fail, and with refresh
+ * token reuse detection they can invalidate the whole session the first call just renewed. The
+ * in-flight promise is shared and cleared on settle, so the NEXT expiry refreshes again.
+ */
+function refreshOnce(active: SottoClient): Promise<string | null> {
+  if (inFlightRefresh) return inFlightRefresh;
+  // Clear only if this is still THE in-flight refresh: a teardown mid-flight (environment switch,
+  // sign-out) drops it, and a late settle must not then unmemoize the successor's refresh.
+  const shared: Promise<string | null> = (async () => {
+    const { data, error } = await withTimeout(
+      active.auth.refreshSession(), AUTH_TIMEOUT_MS, 'Session refresh',
+    );
+    if (!error && data.session) currentAccessToken = data.session.access_token;
+    return currentAccessToken;
+  })().finally(() => { if (inFlightRefresh === shared) inFlightRefresh = null; });
+  inFlightRefresh = shared;
+  return shared;
+}
 
 /**
  * A token that is valid *now*.
@@ -68,13 +94,7 @@ let currentAccessToken: string | null = null;
 export async function getAccessToken(opts: { forceRefresh?: boolean } = {}): Promise<string | null> {
   if (!client) return null;
   try {
-    if (opts.forceRefresh) {
-      const { data, error } = await withTimeout(
-        client.auth.refreshSession(), AUTH_TIMEOUT_MS, 'Session refresh',
-      );
-      if (!error && data.session) currentAccessToken = data.session.access_token;
-      return currentAccessToken;
-    }
+    if (opts.forceRefresh) return await refreshOnce(client);
     const { data, error } = await withTimeout(
       client.auth.getSession(), AUTH_TIMEOUT_MS, 'Session lookup',
     );
@@ -117,6 +137,9 @@ function teardownAuthClient(): void {
   authSubscription?.unsubscribe();
   authSubscription = null;
   currentAccessToken = null;
+  // A refresh still in flight belongs to the client being torn down — its result must not be
+  // handed to a caller asking the NEXT environment for a token.
+  inFlightRefresh = null;
   if (client) {
     try { client.auth.stopAutoRefresh(); } catch { /* already stopped */ }
   }

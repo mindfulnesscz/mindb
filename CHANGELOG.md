@@ -59,6 +59,39 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   it alongside the error log. Reading and writing it is best effort: it is a measurement, and it
   must never fail a run that otherwise succeeded.
 
+### Changed
+
+- **The Supabase export writes rows eight at a time instead of one at a time.** It was issuing one
+  awaited PostgREST round trip per asset row, in series, for parents and then for children. At the
+  150–300 ms a round trip actually costs, a 300-asset library spent 45–90 seconds of every run doing
+  nothing but waiting — the largest single gap the run-timing work exposed, and one that was
+  invisible until durations were in the log.
+
+  **What each request sends is unchanged.** Every row is still its own `PATCH` or `POST`, never a
+  bulk upsert: `PATCH` leaves omitted columns untouched, which is precisely what keeps a run from
+  overwriting `perm` or blanking a `thumbnail_url` it has no opinion about this time. Only the
+  dispatch is concurrent. Parents still complete before any child starts — a child needs its
+  parent's resolved uuid — and readme.md files are written the same eight-wide way.
+
+  Per-row error accounting is unchanged (one log line, one counted error, siblings unaffected), and
+  **Stop** still halts dispatch immediately while letting requests already in the air finish, the
+  same cooperative checkpoint every other stage uses.
+
+  The scheduler behind it is a real worker pool (`services/pipeline/pool.ts`): the next row starts
+  the moment a slot frees, rather than each group of eight waiting for its slowest member. It is
+  shared, and the remaining stages move onto it next.
+
+### Fixed
+
+- **A token expiring mid-run could revoke the session instead of renewing it.** A `401` is retried
+  once with a force-refreshed token, which was correct while requests went out one at a time. With
+  eight in flight, expiry makes eight of them `401` within milliseconds and every one of them asked
+  for its own refresh — but GoTrue rotates the refresh token on use, so all but the first present a
+  token that has just been spent. Best case seven refreshes fail and those rows error; worst case
+  refresh-token reuse detection revokes the session the first call had just renewed, and the rest of
+  the run fails as "not signed in". The refresh is now single-flight: N concurrent `401`s share one
+  `refreshSession()` and all receive its result.
+
 ---
 
 ## [3.2.2] — 2026-08-06

@@ -135,6 +135,20 @@ Always runs after the steps above, if a Supabase config is present for the activ
 
 An asset in a folder with no hash suffix has no identity to sync by: it is reported as an error and skipped. Create packages through the Vocabulary screen so they are born with one.
 
+**Rows are written one request each, eight at a time.** Every row is its own `PATCH` (existing) or
+`POST` (new) — never a bulk upsert, because `PATCH` leaves omitted columns untouched and that is what
+keeps the pipeline from overwriting portal-owned values like `perm`. What is concurrent is only the
+waiting: parents and singles are written first, then children once every parent uuid is known, and
+readme.md files alongside. The parent→child barrier is load-bearing; a child needs its parent's
+resolved uuid. A failed row is logged and counted and does not stop its siblings, and **Stop** halts
+further dispatch while letting requests already in the air finish.
+
+Because a long run can cross the one-hour access-token expiry, a `401` is retried once with a
+force-refreshed token. That refresh is **single-flight**: eight concurrent writes hitting `401`
+together trigger one `refreshSession()`, not eight. GoTrue rotates the refresh token on use, so
+concurrent refreshes would present an already-spent token and can trip reuse detection — revoking the
+session that had just been renewed.
+
 This step also cleans up R2 thumbnails, originals, and known page-preview objects for assets no longer present on disk. Exact keys are rebuilt from `(stable_id, child_id)`, the row's effective access level, and the shared `@sotto/domain/assetStorage` rules, so public and gated buckets use the same addresses as upload. Any key still referenced by an active record is protected (including a gallery parent's shared thumbnail). Only rows successfully marked `disconnected` contribute deletion keys. Row disconnects and object deletes pass a blast-radius check: above the small-deletion floor, removals cannot exceed rows written unless the operator selected **Allow large deletions**.
 If any source subtree failed to scan, row disconnects are refused outright; a partial source view is
 not evidence that the absent identities left disk.

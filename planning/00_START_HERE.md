@@ -5,7 +5,7 @@ CONTEXT block from `DONE_01_security-hardening-S0-S7.md` to any prompt before ha
 `REF_` files are reference/strategy, not tasks. `DONE_` files are already implemented — kept for
 context, don't re-run.
 
-_Last updated 2026-08-07 (00a/00b/00c landed; `02` closed; `04a`–`04f` performance series filed, evidence in `REF_performance-audit.md`; **`04a` landed** — the run log now carries per-phase durations, so `04b` onwards has a baseline)._
+_Last updated 2026-08-07 (00a/00b/00c landed; `02` closed; `04a`–`04f` performance series filed, evidence in `REF_performance-audit.md`; **`04a` and `04b` landed** — the run log carries per-phase durations, and the Supabase row writes are pooled 8-wide on the shared `asyncPool` that `04d` reuses)._
 
 ## 🚢 3.2.2 — code complete
 
@@ -28,9 +28,8 @@ throughput, which `00b` part A restored but which no automated test can observe.
 
 | # | File | What it does | Status |
 |---|---|---|---|
-| 04b | `04b_perf-supabase-write-concurrency.md` | Asset-row writes pooled 8-wide instead of one awaited HTTP call per row (~8× on the biggest silent gap). Builds the shared `asyncPool`. | TODO |
 | 04c | `04c_perf-readme-churn.md` | Stop rewriting every readme.md into the Dropbox source tree every run (timestamp removed, skip-if-unchanged). | TODO |
-| 04d | `04d_perf-worker-pools-and-ipc.md` | Chunked barriers → true worker pools; pure-string path joins (kill per-file IPC); log/progress batching. | TODO (after 04b for the pool helper) |
+| 04d | `04d_perf-worker-pools-and-ipc.md` | Chunked barriers → true worker pools; pure-string path joins (kill per-file IPC); log/progress batching. | TODO — `asyncPool` is built and shipped, so Part A is a mechanical swap |
 | 04e | `04e_perf-cloud-export.md` | Drive folder-children sweep instead of per-file LIST; MD5 memo (stops cold-cache Dropbox downloads); OneDrive skip-if-unchanged; stretch: uploads in Rust. | TODO |
 | 04f | `04f_perf-stage-overlap.md` | Parallel pre-run fetches; early scanVersionMap; optional publish ∥ CDN overlap. Riskiest — run LAST. | TODO |
 | 05 | `05_asset-conversion-and-tag-inference.md` | The adoption feature: folder→asset conversion (drop/batch/right-click) + path/file-type tag inference. Prompts A–E, has its own dependency graph. | TODO (feature work — after the perf series) |
@@ -38,6 +37,30 @@ throughput, which `00b` part A restored but which no automated test can observe.
 The evidence behind the 04 series: `REF_performance-audit.md`.
 
 ## ✅ Done (implemented — don't re-run)
+
+- `DONE_04b_perf-supabase-write-concurrency.md` — the biggest silent gap, closed. The Supabase
+  export was issuing **one awaited PostgREST round trip per asset row**, in series, for parents and
+  then children; at 150–300ms a trip a 300-asset library spent 45–90s of every run waiting. Both
+  phases now dispatch `WRITE_CONCURRENCY = 8` at a time through the new
+  **`services/pipeline/pool.ts` `asyncPool`** — a real worker pool (next item starts the moment a
+  slot frees), which is the helper `04d` Part A reuses. **What each request sends is untouched**:
+  still one `PATCH`/`POST` per row, never a bulk upsert, because that is what `stripPortalOwnedFields`
+  and `stripAbsentUrls` depend on. The **parent→child barrier survives** (a child needs its parent's
+  uuid), per-row error accounting is identical, and `shouldStop` halts dispatch while in-flight
+  requests finish. `writeReadmes` is pooled too, but **grouped by `packageDir` and serial within a
+  group** — a package holding several galleries contributes one target each for the same
+  `readme.md` path, and naive pooling would race two full-file overwrites (test is red without the
+  grouping). Also fixed a real bug the concurrency exposed: `getAccessToken({ forceRefresh: true })`
+  is now **single-flight**, because GoTrue rotates the refresh token on use and eight simultaneous
+  401s each calling `refreshSession()` can trip reuse detection and revoke the session the first
+  call just renewed. New tests: `pipeline/pool.test.ts`, `supabase/exportWrite.test.ts` (20 rows
+  through a stub that settles out of order — same tallies, same `parentIdByKey`), `authService.test.ts`.
+  **Still owed: the timed before/after run.** It needs a signed-in session against a real project
+  and ≥50 assets, so no automated test can produce it — take the numbers from the `RUN TOTAL` delta
+  line on `SUPABASE EXPORT › writes`. What _was_ measured is the mechanism, on a throwaway harness
+  with a 200ms stubbed round trip: 60 rows took **1.6s pooled against 12.0s serial (7.4×)**, which
+  is the ceiling for 60 rows at width 8 (⌈60/8⌉ = 8 waves). Real latency varies per row, where the
+  pool's slot refill should do slightly better than a chunked barrier would.
 
 - `DONE_04a_perf-timing-instrumentation.md` — run time is observable. Every section-DONE banner
   carries its own duration, the source scan got the line it never had, and the run closes with a
