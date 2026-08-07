@@ -15,7 +15,10 @@ import {
 } from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
 import { resolveExportShape } from '../../domain/client';
-import { uploadDropboxFile, uploadOneDriveFile, uploadGDriveFile } from '../cloudService';
+import {
+  uploadDropboxFile, uploadOneDriveFile, uploadGDriveFile,
+  ensureGDriveFolderPaths, drainGDriveDuplicateFolders,
+} from '../cloudService';
 import { findPackageFolders, syncPackageFromOut, keepOnlyHighestVersions } from './packages';
 import { nestedPublishRel } from './publishLocal';
 import { mimeFromExt } from './cdnUpload';
@@ -65,6 +68,44 @@ function rememberCloudUpload(
    Existence can then be decided locally — without it, every cache miss pays a
    per-file HEAD and every upload a per-file LIST for the sibling cleanup.
    `null` means the list failed; callers fall back to per-file checks. */
+
+type CloudFileJob = {
+  srcPath: string;
+  stem: string;
+  ext: string;
+  fileName: string;
+  relativeDir: string;
+  /** When set, used as the full remote relative path (package mode). */
+  nestedOverride: string | null;
+}
+
+/** Where one job lands remotely. Shared so the Drive folder pre-resolve targets exactly the folders
+ *  the upload loop will ask for — two copies of these rules would pre-warm the wrong tree. */
+function remoteNamesFor(
+  job: CloudFileJob,
+  vocabMap: ReturnType<typeof buildVocabMap>,
+  flatten: boolean,
+  remotePath: string,
+): { nestedName: string; gdriveFolderPath: string; gdriveFileName: string } {
+  const { stem, ext, relativeDir, nestedOverride } = job;
+  const translated = nestedOverride
+    ? nestedOverride.split('/').pop()!
+    : translateExportName(stem, ext, vocabMap);
+  const nestedName = nestedOverride
+    ?? (!flatten && relativeDir ? `${relativeDir}/${translated}` : translated);
+  const base = remotePath.replace(/\/$/, '');
+  const sub = nestedOverride
+    ? nestedName.split('/').slice(0, -1).join('/')
+    : (!flatten ? relativeDir : '');
+  const gdriveFolderPath = nestedOverride || sub
+    ? [base, sub].filter(Boolean).join('/')
+    : remotePath;
+  return {
+    nestedName,
+    gdriveFolderPath,
+    gdriveFileName: nestedOverride ? nestedName.split('/').pop()! : translated,
+  };
+}
 
 function relativeUnderOut(srcPath: string, outFolderName: string): { dir: string; fileName: string } {
   const parts = srcPath.replace(/\\/g, '/').split('/');
@@ -146,16 +187,6 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
     const { dir: relativeDir } = relativeUnderOut(srcPath, outFolder);
     return { srcPath, stem, ext, fileName, relativeDir, nestedOverride: null as string | null };
   });
-
-  type CloudFileJob = {
-    srcPath: string;
-    stem: string;
-    ext: string;
-    fileName: string;
-    relativeDir: string;
-    /** When set, used as the full remote relative path (package mode). */
-    nestedOverride: string | null;
-  };
 
   /* THE EXPORT BOUNDARY. A client destination receives assets — never a thumbnail, a previews
      folder or a render cache.
@@ -264,31 +295,43 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
     let errors   = 0;
     let uploadLogged = 0;
 
+    /* Drive has no paths, so a folder is resolved by listing for its name and creating it when
+       absent — and Drive accepts a second folder of the same name in the same parent. Resolving the
+       whole destination tree here, sequentially, means the concurrent batch below never asks for a
+       folder that does not exist yet. (`gdrive.ts` also memoizes the in-flight resolve per segment;
+       this is the outer belt.) */
+    const reportDuplicateFolders = (): void => {
+      for (const dup of drainGDriveDuplicateFolders()) {
+        appendLog('warn',
+          `  ${dest.name}: ${dup.count} folders named "${dup.path}" — using the oldest (${dup.chosenId}). ` +
+          `Run Settings → Cloud destinations → ${dest.name} → Clean up duplicate folders.`);
+      }
+    };
+
+    if (cfg.type === 'gdrive') {
+      try {
+        await ensureGDriveFolderPaths(
+          cfg.token!.accessToken,
+          files.map(job => remoteNamesFor(job, vocabMap, flatten, cfg.remotePath).gdriveFolderPath),
+          cfg.sharedDriveId,
+          dest.id,
+        );
+      } catch (e) {
+        // Not fatal: each upload resolves its own folder anyway. The uploads report their own errors.
+        appendLog('warn', `  ${dest.name}: could not pre-resolve Drive folders (${e})`);
+      }
+      reportDuplicateFolders();
+    }
+
     // Match CDN: high concurrency; cache hits stay silent (summary only).
     const CONCURRENCY = 8;
     for (let i = 0; i < files.length; i += CONCURRENCY) {
       if (ctx.isStopping?.()) return;
       const batch = files.slice(i, i + CONCURRENCY);
-      await Promise.all(batch.map(async ({ srcPath, stem, ext, relativeDir, nestedOverride }) => {
-        const translated = nestedOverride
-          ? nestedOverride.split('/').pop()!
-          : translateExportName(stem, ext, vocabMap);
-        const nestedName = nestedOverride
-          ?? (!flatten && relativeDir ? `${relativeDir}/${translated}` : translated);
-        const gdriveFolderPath = (() => {
-          if (nestedOverride) {
-            const parts = nestedName.split('/');
-            parts.pop();
-            const sub = parts.join('/');
-            return [cfg.remotePath.replace(/\/$/, ''), sub].filter(Boolean).join('/');
-          }
-          return !flatten && relativeDir
-            ? [cfg.remotePath.replace(/\/$/, ''), relativeDir].filter(Boolean).join('/')
-            : cfg.remotePath;
-        })();
-        const gdriveFileName = nestedOverride
-          ? nestedName.split('/').pop()!
-          : translated;
+      await Promise.all(batch.map(async (job) => {
+        const { srcPath, ext, nestedOverride } = job;
+        const { nestedName, gdriveFolderPath, gdriveFileName } =
+          remoteNamesFor(job, vocabMap, flatten, cfg.remotePath);
 
         let url: string | null = null;
         try {
@@ -380,6 +423,7 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
         }
       }));
     }
+    if (cfg.type === 'gdrive') reportDuplicateFolders();
     appendLog(
       'section',
       `  ${dest.name} DONE — ${uploaded} uploaded · ${cached} cached · ${skipped - cached} remote-skip · ${errors} errors`,

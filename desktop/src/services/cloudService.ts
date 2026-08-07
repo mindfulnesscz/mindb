@@ -31,6 +31,8 @@ export {
 
 export {
   connectGDrive, refreshGDriveToken, checkGDriveConnection, uploadGDriveFile,
+  ensureGDriveFolderPaths, drainGDriveDuplicateFolders, pickCanonicalGDriveFolder,
+  type GDriveDuplicateFolderNotice,
 } from './cloud/gdrive';
 
 export async function refreshCloudToken(

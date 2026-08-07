@@ -22,7 +22,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: (cmd: string, args: Record<stri
 vi.mock('@tauri-apps/plugin-shell', () => ({ open: vi.fn() }));
 
 const { graphDriveBase, uploadOneDriveFile } = await import('./onedrive');
-const { uploadGDriveFile } = await import('./gdrive');
+const { uploadGDriveFile, drainGDriveDuplicateFolders, pickCanonicalGDriveFolder } = await import('./gdrive');
 const { uploadDropboxFile } = await import('./dropbox');
 
 const MIB = 1024 * 1024;
@@ -231,6 +231,30 @@ const upload = (over: Partial<{
   over.driveId ?? '',
 );
 
+describe('pickCanonicalGDriveFolder', () => {
+  it('is oldest-wins, so the uploader and the dedupe tool agree on one folder', () => {
+    expect(pickCanonicalGDriveFolder([
+      { id: 'b', createdTime: '2026-03-02T00:00:00Z' },
+      { id: 'a', createdTime: '2026-01-09T00:00:00Z' },
+    ])?.id).toBe('a');
+  });
+
+  it('falls back to the id so the pick is stable when timestamps tie or are missing', () => {
+    const tied = [{ id: 'z', createdTime: 'T' }, { id: 'a', createdTime: 'T' }];
+    expect(pickCanonicalGDriveFolder(tied)?.id).toBe('a');
+    expect(pickCanonicalGDriveFolder([{ id: 'y' }, { id: 'x' }])?.id).toBe('x');
+  });
+
+  it('prefers a folder of KNOWN age over one of unknown age', () => {
+    expect(pickCanonicalGDriveFolder([{ id: 'unknown' }, { id: 'dated', createdTime: '2026-05-05T00:00:00Z' }])?.id)
+      .toBe('dated');
+  });
+
+  it('returns null for an empty set rather than throwing at the call site', () => {
+    expect(pickCanonicalGDriveFolder([])).toBeNull();
+  });
+});
+
 describe('uploadGDriveFile — the same-size skip', () => {
   it('SKIPS the upload when a same-name file has the same size and MD5', async () => {
     routeDrive({ existing: {
@@ -406,6 +430,67 @@ describe('uploadGDriveFile — folder resolution', () => {
     await upload({ folder: "quote/Bob's Files" });
     const q = stub.matching(DRIVE_LIST).map(c => new URL(c.url).searchParams.get('q') ?? '');
     expect(q.some(s => s.includes("Bob\\'s Files"))).toBe(true);
+  });
+
+  it('issues ONE create per segment when a whole batch starts on a missing folder', async () => {
+    /* The duplicate-folder bug in one test. `cloudExport` uploads 8-wide, and Drive — unlike a
+       filesystem — accepts eight folders of the same name in the same parent. Without the in-flight
+       memo every member of the batch lists empty and creates its own, and Google Drive for Desktop
+       then mirrors them locally as " (1)", " (2)"… with the files scattered between them. */
+    stub.route(DRIVE_LIST, { json: { files: [] } });
+    let nextFolder = 0;
+    stub.route(DRIVE_CREATE, c => c.method === 'POST'
+      ? { json: { id: `made-${++nextFolder}` } }
+      : { json: { files: [] } });
+    stub.route(DRIVE_MULTIPART, { json: { id: 'f' } });
+
+    await Promise.all(Array.from({ length: 8 }, (_, i) =>
+      upload({ folder: 'batch8/Deliverables', name: `file-${i}.pdf` })));
+
+    const created = stub.matching(DRIVE_CREATE)
+      .filter(c => c.method === 'POST')
+      .map(c => (c.json() as { name: string }).name);
+    expect(created).toEqual(['batch8', 'Deliverables']);   // one each, not eight
+  });
+
+  it('picks the OLDEST of same-named folders, so every run converges on one', async () => {
+    // Drive returns duplicates in no guaranteed order; files[0] scatters a client's deliverables
+    // across whichever copy came back first. Oldest-wins is the same rule the dedupe tool merges by.
+    stub.route(DRIVE_LIST, c => {
+      const q = new URL(c.url).searchParams.get('q') ?? '';
+      if (!FOLDER_Q.test(q)) return { json: { files: [] } };
+      return { json: { files: [
+        { id: 'newer', name: 'dupes', createdTime: '2026-08-01T10:00:00.000Z' },
+        { id: 'oldest', name: 'dupes', createdTime: '2026-07-04T09:00:00.000Z' },
+      ] } };
+    });
+    stub.route(DRIVE_MULTIPART, { json: { id: 'f' } });
+    drainGDriveDuplicateFolders();
+
+    await upload({ folder: 'dupes', name: 'deck.pdf' });
+
+    const body = new TextDecoder().decode(stub.one(DRIVE_MULTIPART).body as Uint8Array);
+    expect(body).toContain('"parents":["oldest"]');
+    // Asked of Drive as well as sorted locally — the list may be paged.
+    expect(new URL(stub.matching(DRIVE_LIST)[0].url).searchParams.get('orderBy')).toBe('createdTime');
+    expect(drainGDriveDuplicateFolders()).toEqual([{ path: 'dupes', count: 2, chosenId: 'oldest' }]);
+  });
+
+  it('does not poison the folder id when a resolve fails transiently', async () => {
+    let attempt = 0;
+    stub.route(DRIVE_LIST, c => {
+      if (!FOLDER_Q.test(new URL(c.url).searchParams.get('q') ?? '')) return { json: { files: [] } };
+      return ++attempt === 1
+        ? { status: 503, text: 'backendError' }
+        : { json: { files: [{ id: 'recovered', createdTime: '2026-01-01T00:00:00.000Z' }] } };
+    });
+    stub.route(DRIVE_MULTIPART, { json: { id: 'f' } });
+
+    await expect(upload({ folder: 'transient', name: 'a.pdf' })).rejects.toThrow(/folder list failed \(503\)/);
+    await upload({ folder: 'transient', name: 'b.pdf' });
+
+    const body = new TextDecoder().decode(stub.one(DRIVE_MULTIPART).body as Uint8Array);
+    expect(body).toContain('"parents":["recovered"]');
   });
 
   it('CACHES a resolved folder path — a 200-asset run resolves it once', async () => {

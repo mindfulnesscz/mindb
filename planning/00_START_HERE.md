@@ -5,7 +5,7 @@ CONTEXT block from `DONE_01_security-hardening-S0-S7.md` to any prompt before ha
 `REF_` files are reference/strategy, not tasks. `DONE_` files are already implemented — kept for
 context, don't re-run.
 
-_Last updated 2026-08-07 (00a/00b/00c all landed — 3.2.2's code work is complete)._
+_Last updated 2026-08-07 (00a/00b/00c landed; `02` closed — the Drive duplicate-folder fix and its cleanup tool are in)._
 
 ## 🚢 3.2.2 — code complete
 
@@ -28,10 +28,19 @@ throughput, which `00b` part A restored but which no automated test can observe.
 
 | # | File | What it does | Status |
 |---|---|---|---|
-| 02 | `02_gdrive-duplicate-folder-fix.md` | **G1 (prevent the race) is DONE** — in-flight folder dedup + md5 skip are in. Only **G2 remains**: the manual tool to merge the duplicate folders that already exist (+ optional `orderBy: createdTime` oldest-pick so runs converge). | PARTIAL — do G2 |
 | 03 | `03_asset-conversion-and-tag-inference.md` | The adoption feature: folder→asset conversion (drop/batch/right-click) + path/file-type tag inference. Prompts A–E, has its own dependency graph. | TODO (feature work — after the fixes) |
 
 ## ✅ Done (implemented — don't re-run)
+
+- `DONE_02_gdrive-duplicate-folder-fix.md` — Drive's duplicate folders, both halves.
+  **G1**: folder resolution is race-safe (one shared in-flight resolve per path segment, the
+  destination tree pre-resolved before the 8-wide batch) and converges — several same-named folders
+  resolve to the **oldest**, deterministically, with the duplicate set reported in the run log.
+  **G2**: `services/cloud/gdriveDedupe.ts` plus **Settings → Cloud destinations → a Drive
+  destination → Maintenance** merges the copies already out there: read-only preview, `planId`
+  re-check before anything moves, trash rather than delete, and a fresh emptiness check on every
+  folder before it goes. Docs: `operations/gdrive-dedupe.mdx`. **Still worth doing by hand: one run
+  against a real client Drive** — the tests use a mocked Drive tree.
 
 - `DONE_00a_auth-oauth-identity-bugs.md` — a failed OAuth/magic-link return silently restored the
   **previous** user's session. **A1**: the return is resolved once, at app level

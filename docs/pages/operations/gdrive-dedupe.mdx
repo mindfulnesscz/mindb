@@ -1,0 +1,81 @@
+# Google Drive duplicate folders
+
+Google Drive addresses folders by **id**, not by path, and it accepts any number of folders with the
+same name inside one parent. Until v3.2.3 the cloud export resolved a destination path by listing for
+each segment and creating it when absent — with eight uploads running concurrently, every member of
+the first batch listed the same empty result and every one of them created the folder. The result is
+up to eight copies of each folder level with the files scattered between them, which Google Drive for
+Desktop then mirrors onto the client's laptop as `Deliverables`, `Deliverables (1)`, `Deliverables
+(2)`…
+
+Two separate things fix this:
+
+- **Prevention** (automatic). The uploader resolves each path segment once per run — concurrent
+  callers await one shared find-or-create — and when it does find several same-named folders it takes
+  the **oldest** one, deterministically, so every future run converges on the same folder. Nothing to
+  operate; the cloud export logs a warning naming this page when it sees a duplicate set.
+- **Cleanup** (this page). A manual, per-destination merge for the duplicates already in the client's
+  Drive.
+
+Dropbox and OneDrive are unaffected — both upload by path and create parents idempotently.
+
+## Running the cleanup
+
+The Drive OAuth token lives in this machine's keychain, so the tool is in the desktop app rather than
+a script:
+
+**Settings → Cloud destinations → the Google Drive destination → Maintenance.**
+
+1. **Preview duplicate folders.** Read-only. It resolves the destination's remote path, walks that
+   subtree, and produces a plan.
+2. Review the report: every duplicate set with its path, the number of copies, which folder is being
+   kept (id and creation date), how many files move, and how many nodes are trashed. Files that share
+   a name but not their contents are listed separately — nothing about them is dropped.
+3. **Download report** for the operational record. It contains the plan and, after a merge, the full
+   audit log.
+4. **Merge duplicates…**, then type `merge`. The tool re-walks and re-plans, and refuses to run if
+   the fresh plan differs from the one on screen — download the new preview and confirm again.
+
+## Reading the report
+
+| Field | Meaning |
+| --- | --- |
+| Folder | Path of the duplicate set, relative to the drive |
+| Copies | How many folders share that name in that parent |
+| Keeping | The canonical folder: the **oldest** by `createdTime`, id as a tiebreak |
+| Files moved | Files re-parented into the canonical folder |
+| Trashed | Byte-identical file copies plus emptied duplicate folders |
+
+A collision is a file name that exists in both the duplicate and the canonical folder:
+
+- **identical** (same MD5, or same size when Drive reports no MD5) — one copy is kept, the other is
+  trashed;
+- **different** — **both are kept** and the pair is reported. Drive allows two files with one name;
+  deciding between two different versions of a client's deliverable is not this tool's call. Google
+  Docs, Sheets and Slides have neither MD5 nor size, so they always take this branch.
+
+## Safety rails
+
+- **Nothing is deleted.** Every removal is a *trash*, recoverable from Drive's trash for 30 days.
+- **A duplicate folder is trashed only after a fresh listing shows it empty**, checked against Drive
+  at execution time rather than against the plan. A move that fails therefore leaves its folder in
+  place — and the refusal cascades to the parent, which still holds that folder.
+- **A failed listing aborts the whole scan.** A partial view of a folder reads as "empty enough to
+  delete", so it is never treated as data.
+- **The walk stays inside the destination.** It covers the folder at `remotePath` *and its own
+  same-named copies* — the top segment races like every other — and nothing else in that parent. A
+  destination with no remote path is refused outright rather than sweeping the whole of My Drive.
+- **Ancestors of the remote path are left alone.** If `Clients` itself is duplicated above the
+  destination folder, the scan reports it as a warning and works inside the oldest copy; merging a
+  folder above the destination is a manual job in Drive.
+- Shared Drive semantics are preserved throughout (`supportsAllDrives`, `corpora=drive`, `driveId`).
+- Rate-limited and transient failures are retried with backoff. The tool is resumable: a run that
+  stops half way leaves a consistent tree, and the next preview simply plans what is left.
+- Ids are stable across a move (Drive's move is a parent swap), so sharing links and portal
+  references survive the merge.
+
+## Related
+
+- [Pipeline — cloud export](/pipeline#4--cloud-export)
+- [CDN garbage collection](/operations/cdn-garbage-collection) — the same preview-then-confirm shape
+  for R2 objects.

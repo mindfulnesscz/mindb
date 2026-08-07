@@ -122,9 +122,11 @@ the 2026-07-24 `REFACTOR_PLAN.md` — items that plan already fixed are noted at
 - [x] **Admin UI fails open when Supabase env is absent.** Fixed: missing configuration now renders
   a locked state and role defaults fail closed.
 
-- [ ] **Google Drive duplicate-folder race + weak skip.** `desktop/src/services/cloud/gdrive.ts:108-148,267`.
-  Concurrent uploads (CONCURRENCY=8) into a new path each miss the cache and CREATE → up to 8
-  duplicate same-named Drive folders; remote skip is name+byte-size only (no hash/mtime).
+- [x] **Google Drive duplicate-folder race + weak skip.** Fixed (`DONE_02`): concurrent callers share
+  one in-flight resolve per path segment, the destination tree is pre-resolved before the batch, an
+  existing duplicate set resolves to the oldest folder deterministically, and the skip compares the
+  Drive MD5 rather than byte size alone. The duplicates already in a client's Drive are merged by
+  **Settings → Cloud destinations → a Drive destination → Maintenance**.
 
 - [ ] **cloudUrls keyed by bare `stem` fallback (F-5-class collision).**
   `desktop/src/services/pipeline/cloudExport.ts:329-335` vs the `destId:stem` contract in

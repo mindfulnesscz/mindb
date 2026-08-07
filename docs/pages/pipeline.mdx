@@ -113,8 +113,17 @@ For each cloud destination with a valid OAuth token:
 
 Sharing links (when `generateLink`) are keyed by `(stable_id, child_id)` and later written to
 Supabase for the portal. Equal filenames in separate packages cannot overwrite each other's links.
-Google Drive folder creation is coalesced within a run, and an existing same-name file is skipped
-only when both its size and Drive MD5 checksum match the local file.
+An existing same-name file is skipped only when both its size and Drive MD5 checksum match the local
+file.
+
+**Google Drive folder resolution is race-safe.** Drive addresses folders by id, not path, and accepts
+several folders with one name in the same parent — so uploading 8-wide into a tree that does not
+exist yet used to create up to eight copies of every level. The destination tree is now resolved once
+before the concurrent batch starts, concurrent callers for one path segment await a single shared
+find-or-create, and when several same-named folders already exist the **oldest** is chosen
+deterministically so every run converges on the same folder. Duplicates that are found are reported
+in the run log; merging the ones already in a client's Drive is a manual, preview-first action on the
+destination — see [Google Drive duplicate folders](/operations/gdrive-dedupe).
 
 ### 5 — Publish to DAM
 
