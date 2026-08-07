@@ -7,6 +7,14 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+**Deployment**
+
+- No migration, no environment variables, no operator action. The one new file,
+  `run-timings.jsonl`, is created in the app data directory on the first run after upgrading and is
+  safe to delete at any time — it costs the timing history and nothing else.
+- **The first run after upgrading has nothing to compare against.** Deltas appear from the second
+  comparable run onwards; until then the `RUN TOTAL` block prints without them.
+
 ### Added
 
 - **The run log now says how long everything took.** Every section-DONE banner ends with its own
