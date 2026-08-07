@@ -41,11 +41,12 @@ const RASTER_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff
  * different hat. The trivial commands — keychain, reveal — stay sync on purpose.
  */
 
-/// Exact, streaming content comparison for local publish/cache decisions.
-///
-/// Size + mtime is the cheap gate in TypeScript; this closes the restored-backup case where the
-/// source is older than the destination but its bytes changed without changing length. Streaming
-/// avoids loading two large creative files into the webview at once.
+/// Exact, streaming content comparison. NO LONGER called by the pipeline's unchanged check:
+/// reading a Dropbox online-only file forces macOS File Provider to download it, so the
+/// byte-compare made every no-change export materialize the whole library on disk
+/// (`isUnchanged` in pipeline/fs.ts is metadata-only now — see the comment there).
+/// Kept for a future explicit "deep compare / verify" action, where downloading is the point.
+/// Streaming avoids loading two large creative files into the webview at once.
 #[tauri::command(async)]
 fn files_equal(
     app: tauri::AppHandle,

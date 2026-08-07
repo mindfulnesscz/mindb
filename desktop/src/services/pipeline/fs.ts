@@ -6,10 +6,10 @@
  * 
  * isUnchanged is the copy/skip decision for every stage. It compares size as well as mtimes and
  * treats a missing destination as "changed", so a failed read always errs toward copying.
+ * It is metadata-only BY DESIGN — see the comment on the function before adding any content read.
  */
 
 import { readDir, stat, type DirEntry } from '@tauri-apps/plugin-fs';
-import { invoke } from '@tauri-apps/api/core';
 import { join } from '@tauri-apps/api/path';
 import type { AppSettings } from '../../store/settingsStore';
 import { shouldSkip, isPackageFolder, isPublishableFile } from './naming';
@@ -61,18 +61,27 @@ export async function collectFiles(dir: string, s: AppSettings, directOnly = fal
   return results;
 }
 
-/* ── Unchanged check (size + mtime fast gate, exact byte comparison before skipping) ── */
+/* ── Unchanged check (size + mtime quick check — metadata only, NEVER reads content) ── */
 
+/**
+ * Same size and a destination at least as new as the source counts as unchanged.
+ *
+ * This must never open either file. Source trees live in cloud storage (Dropbox via macOS File
+ * Provider), where online-only files are dataless placeholders and ANY read forces a full
+ * download. The byte-compare that used to sit behind the stat gate (`files_equal` in Rust) ran on
+ * exactly the unchanged path — copyFile does not preserve mtime, so the destination is always
+ * newer and the gate never short-circuited — which made every no-change export read the entire
+ * library and pull every online-only file onto disk.
+ *
+ * The accepted trade-off is the restored-backup edge case: a same-size content swap whose mtime
+ * went BACKWARDS now reads as unchanged. A real restore is repaired by touching the sources or
+ * deleting the target copies. Characterized in pipelineCollect.characterization.test.ts.
+ */
 export async function isUnchanged(src: string, dest: string): Promise<boolean> {
   try {
     const [ss, ds] = await Promise.all([stat(src), stat(dest)]);
     if (ss.size !== ds.size) return false;
-    if (ss.mtime && ds.mtime && ds.mtime.getTime() < ss.mtime.getTime()) return false;
-    // A destination newer than a restored source is not proof of equality. Compare in Rust so a
-    // same-size content swap republishes without loading both large files into the webview.
-    return await invoke<boolean>('files_equal', {
-      sourcePath: src,
-      destinationPath: dest,
-    });
+    if (!ss.mtime || !ds.mtime) return false; // cannot prove equality — err toward copying
+    return ds.mtime.getTime() >= ss.mtime.getTime();
   } catch { return false; } // dest missing (or unreadable) — not unchanged, copy it
 }
