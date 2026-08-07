@@ -237,6 +237,34 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   What is uploaded, skipped, or linked is unchanged, and the export boundary is untouched: a client
   destination still receives assets and never an artifact.
 
+- **Every provider now streams a large upload from disk, and they all do it the same way.** The three
+  cloud providers each buffered a whole deliverable before sending it, in three different places, and
+  nothing recorded a reason. Drive and OneDrive pulled the file across the IPC bridge into the
+  webview and posted it from there — copied twice, and resident for the length of the transfer.
+  Dropbox looked like the exception and was not: it ran natively, but read the file into a `Vec<u8>`
+  and then copied each 48 MB chunk out of it again, so "native" bought a smaller copy rather than
+  none. The comment claiming it streamed from disk had been wrong for as long as it had been there.
+
+  There is now one native command that reads a file — or one byte range of it, for a chunked session
+  — straight into the request body. Peak memory is a read buffer whatever the file's size. Nothing
+  else moved: auth, folder resolution, the skip decision and the choice of upload shape all stay in
+  TypeScript, per provider, which is why a provider change is still a change to one small module.
+
+  **Small files deliberately still go through memory**, because for them it is simpler and the bound
+  is the provider's own — Drive's multipart create (≤5 MiB) interleaves metadata with the bytes in
+  one body, and OneDrive's simple PUT (≤4 MiB) is a single request. The threshold each provider
+  already had is the threshold for streaming.
+
+  **The destination is bound.** A command that reads any allowed file and posts it to a
+  caller-supplied URL with a caller-supplied `Authorization` header is an exfiltration primitive if
+  it is not, so the URL must be HTTPS at an allowlisted host — matched exactly or as a dot-suffix,
+  and checked before a byte is read. This is the same rule `supabase_request` follows. The byte range
+  is validated against the file too, because a body shorter than its declared `Content-Length` does
+  not fail against these providers, it stalls the connection.
+
+  Also fixed while there: the Dropbox whole-file read was blocking work inside an `async fn`, which
+  pins a runtime thread for its duration. Nothing in that path blocks now.
+
 ### Fixed
 
 - **OneDrive re-uploaded every file it could have skipped.** Alone among the providers it had no

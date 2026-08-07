@@ -10,6 +10,7 @@
 import { open as openBrowser } from '@tauri-apps/plugin-shell';
 import type { CloudToken } from '../../domain/client';
 import { asyncPool } from '../pipeline/pool';
+import { streamUpload, parseUploadBody, type UploadSource } from './uploadStream';
 import { REDIRECT_URI, generatePKCE, waitForCallback, delay } from './oauth';
 
 const DRIVE_FILES = 'https://www.googleapis.com/drive/v3/files';
@@ -393,7 +394,8 @@ function rememberCreatedFile(
 
 /**
  * Sync a file to Google Drive with skip-if-unchanged semantics.
- * Bytes are loaded lazily via `getBytes` — unchanged remotes never load the local file into memory.
+ * Bytes are loaded lazily — an unchanged remote never reads the local file, and a file over
+ * `GDRIVE_SIMPLE_MAX` is never read into memory at all: it streams from disk.
  * - Same-name file + matching size and MD5 → skip
  * - Same-name file + changed size or MD5 → media update in place
  * - Missing → multipart create
@@ -403,11 +405,16 @@ function rememberCreatedFile(
 const GDRIVE_SIMPLE_MAX = 5 * 1024 * 1024;
 
 /** Resumable upload/update — supports files far beyond the multipart limit.
- *  Pass fileId to update existing content; omit it (with parents) to create. */
+ *  Pass fileId to update existing content; omit it (with parents) to create.
+ *
+ *  The session is negotiated here and the BYTES are streamed from disk natively. This is the path a
+ *  500 MB deliverable takes, and it used to pull the whole thing into the webview first. The init
+ *  request is a small JSON call and stays on `fetch`. */
 async function gdriveResumableUpload(
   accessToken: string,
   opts:        { fileId?: string; name: string; parents?: string[] },
-  bytes:       Uint8Array<ArrayBuffer>,
+  source:      UploadSource,
+  size:        number,
   mimeType:    string,
 ): Promise<{ id?: string; webViewLink?: string }> {
   const isUpdate = !!opts.fileId;
@@ -423,7 +430,7 @@ async function gdriveResumableUpload(
       Authorization:            `Bearer ${accessToken}`,
       'Content-Type':           'application/json; charset=UTF-8',
       'X-Upload-Content-Type':  mimeType,
-      'X-Upload-Content-Length': String(bytes.byteLength),
+      'X-Upload-Content-Length': String(size),
     },
     body: JSON.stringify(meta),
   });
@@ -431,19 +438,21 @@ async function gdriveResumableUpload(
   const sessionUrl = initRes.headers.get('Location');
   if (!sessionUrl) throw new Error('GDrive resumable session URL missing from response.');
 
-  const putRes = await fetch(sessionUrl, {
-    method:  'PUT',
-    headers: { 'Content-Type': mimeType, 'Content-Length': String(bytes.byteLength) },
-    body:    bytes,
+  // No Content-Length passed: it is set natively from the range actually sent, which is the only
+  // number that can be right.
+  const put = await streamUpload({
+    url: sessionUrl, method: 'PUT', headers: { 'Content-Type': mimeType }, filePath: source.path,
   });
-  if (!putRes.ok) throw new Error(`GDrive resumable upload failed (${putRes.status}): ${await putRes.text()}`);
-  return await putRes.json() as { id?: string; webViewLink?: string };
+  if (!put.ok) throw new Error(`GDrive resumable upload failed (${put.status}): ${put.body}`);
+  return parseUploadBody<{ id?: string; webViewLink?: string }>(put.body) ?? {};
 }
 
 export async function uploadGDriveFile(
   accessToken:   string,
   localSize:     number,
-  getBytes:      () => Promise<Uint8Array<ArrayBuffer>>,
+  /** Where the file is, plus a lazy reader for the small in-memory paths. A file over
+   *  `GDRIVE_SIMPLE_MAX` never calls `bytes()` — it is streamed from `path` by Rust. */
+  source:        UploadSource,
   getMd5:        () => Promise<string>,
   mimeType:      string,
   fileName:      string,
@@ -475,19 +484,21 @@ export async function uploadGDriveFile(
     }
   }
 
-  const bytes = await getBytes();
+  /* The size decides the shape, and it comes from the STAT rather than from the bytes — reading the
+     file to find out how big it is would defeat the streaming path entirely. */
+  const large = localSize > GDRIVE_SIMPLE_MAX;
 
   if (existing) {
     // Content changed — update in place (no second same-name file).
-    const updated = bytes.byteLength > GDRIVE_SIMPLE_MAX
-      ? await gdriveResumableUpload(accessToken, { fileId: existing.id, name: fileName }, bytes, mimeType)
+    const updated = large
+      ? await gdriveResumableUpload(accessToken, { fileId: existing.id, name: fileName }, source, localSize, mimeType)
       : await (async () => {
           const updateRes = await fetch(
             `https://www.googleapis.com/upload/drive/v3/files/${existing.id}?uploadType=media&fields=id,webViewLink&supportsAllDrives=true`,
             {
               method:  'PATCH',
               headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': mimeType },
-              body:    bytes,
+              body:    await source.bytes(),
             },
           );
           if (!updateRes.ok) throw new Error(`GDrive update failed (${updateRes.status}): ${await updateRes.text()}`);
@@ -503,9 +514,9 @@ export async function uploadGDriveFile(
   }
 
   // Large new file → resumable session (multipart create is memory-bound / capped).
-  if (bytes.byteLength > GDRIVE_SIMPLE_MAX) {
+  if (large) {
     const fileData = await gdriveResumableUpload(
-      accessToken, { name: fileName, parents: [folderId] }, bytes, mimeType,
+      accessToken, { name: fileName, parents: [folderId] }, source, localSize, mimeType,
     );
     rememberCreatedFile(listed, fileName, fileData, sizeStr);
     const url = getLink && fileData.id
@@ -521,7 +532,7 @@ export async function uploadGDriveFile(
   const parts    = [
     encoder.encode(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n`),
     encoder.encode(`--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`),
-    bytes,
+    await source.bytes(),
     encoder.encode(`\r\n--${boundary}--`),
   ];
   const totalLen = parts.reduce((s, p) => s + p.byteLength, 0);

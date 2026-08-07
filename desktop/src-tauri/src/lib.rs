@@ -10,6 +10,7 @@ mod native;
 mod render;
 mod path_policy;
 mod quickxor;
+mod upload_stream;
 
 /// Extensions routed through LibreOffice → PDF → PDFium.
 ///
@@ -359,6 +360,7 @@ pub fn run() {
             r2::list_r2_keys,
             r2::delete_r2_object,
             cloud::upload_to_dropbox,
+            upload_stream::cloud_upload_stream,
             cloud::onedrive_device_code,
             cloud::onedrive_poll_token,
             cloud::onedrive_refresh_token,

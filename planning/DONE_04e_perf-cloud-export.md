@@ -1,8 +1,8 @@
 # 04e — Cloud export: kill the cold-cache penalty (Drive sweep, MD5 memo, OneDrive skip)
 
-> **LANDED 2026-08-07 — E1, E2, E3. E4 deliberately not taken.** Green on `lint` (max-warnings 0),
+> **LANDED 2026-08-07 — all four parts, in two commits.** Green on `lint` (max-warnings 0),
 > `typecheck` (packages + desktop), `test:packages`, `test:desktop`, `test:rust`, `lint:rust`,
-> `build:docs`.
+> `build:desktop`, `build:docs`.
 >
 > ## E1 — the hash memo, and where it actually lives
 >
@@ -76,13 +76,48 @@
 > half up to date. It is flushed on the way out now. Squarely the same problem this prompt is about,
 > which is why it is in the same commit.
 >
-> ## E4 — not taken
+> ## E4 — taken after all, and it was wrong about the premise
 >
-> Skippable by its own description, and it is the one part that cannot be finished honestly here: it
-> needs a manual >150 MB transfer against a real Drive/Graph account to be worth trusting. The
-> reasoning for it is unchanged and it stands on its own — see the section below. Note that its
-> closing line is now half-true anyway: E1's md5 fallback already runs in Rust and never enters the
-> webview.
+> Deferred in the first commit, then done in a second (`upload_stream.rs` + `cloud/uploadStream.ts`)
+> after the question "why does Dropbox use a different approach?" turned up something the prompt had
+> taken on trust.
+>
+> **`upload_to_dropbox` did not stream from disk.** It did `std::fs::read` — the whole file into a
+> `Vec<u8>` — and `dropbox_upload_session` then did `bytes[offset..end].to_vec()`, copying each 48 MB
+> chunk again. So the model E4 said to "mirror" was a smaller copy, not no copy, and mirroring it
+> would have moved Drive/OneDrive's buffer from the webview into Rust and called it done. The comment
+> in `upload.characterization.test.ts` asserting it streamed had been wrong since it was written.
+>
+> **There was also no reason for the split.** `git log -S "files/upload" -- '*.ts'` finds no JS
+> Dropbox upload, ever; `cloud.rs` arrives whole in the subtree import. The CSP looks like a cause
+> and is a consequence — it allows `api.dropboxapi.com` but not `content.dropboxapi.com`, while
+> explicitly allowing every host Drive and OneDrive upload to. The allowlist was written around a
+> split that already existed.
+>
+> So: ONE `cloud_upload_stream` command, `reqwest::Body::wrap_stream` over a `tokio::fs::File`, used
+> by all three. The JS keeps auth, folder resolution, the skip decision and the upload shape.
+>
+> - **≤ each provider's own threshold stays in memory** (Drive multipart ≤5 MiB, OneDrive PUT
+>   ≤4 MiB). Those bodies are bounded by the provider, the multipart one interleaves metadata with
+>   the bytes, and both are simpler read whole. That also kept every pinned small-file assertion
+>   intact rather than rewriting it.
+> - **The destination is BOUND** — HTTPS, host matched exactly or as a dot-suffix against
+>   `UPLOAD_HOSTS`, checked before a byte is read. Unbound this is an exfiltration primitive carrying
+>   an `Authorization` header the app supplied, which is the rule `supabase_request` already follows
+>   (`native-security.mdx`). `googleapis.com.attacker.example` is in the refusal test.
+> - **`Content-Length` is set natively from the range actually sent**, never passed in. A streaming
+>   body has no length hyper can infer, so without it the request goes out chunked — which Graph's
+>   sessions and Drive's resumable PUT reject. This is the part that could not be reasoned about, so
+>   there is a test that runs a real socket and asserts the bytes on the wire.
+> - **Dropbox's blocking read is gone** — it was `std::fs::read` inside an `async fn`, pinning a
+>   runtime thread, which is the shape `CLAUDE.md` warns about.
+>
+> Two new direct dependencies, both already in `Cargo.lock` transitively: reqwest's `stream` feature
+> and `tokio-util` (`io`). The lock gains exactly one crate, `wasm-streams`, which no native target
+> compiles.
+>
+> **Still owed by hand:** a real >150 MB transfer per provider. The socket test proves the framing;
+> it cannot prove Graph and Drive accept it.
 >
 > ## Still owed by hand
 >

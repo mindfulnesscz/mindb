@@ -19,7 +19,8 @@ path prefix, so they cannot race each other into creating duplicate same-named f
 queries include `corpora=drive`, `driveId`, `includeItemsFromAllDrives`, and `supportsAllDrives`.
 
 New files up to 5 MB upload as one multipart request (metadata + bytes); **larger files use a
-resumable session** (`uploadType=resumable`), so big assets upload past the multipart limit. Before
+resumable session** (`uploadType=resumable`) whose body is **streamed off disk natively** and never
+enters the webview — see [How the bytes actually move](/cloud-storage/overview#how-the-bytes-actually-move). Before
 uploading, Sotto checks for an existing same-name file in the target folder. It skips only when both
 size and Drive's `md5Checksum` match a native streaming checksum of the local file; equal-size
 changed content updates in place instead (media `PATCH`, or a resumable update when large). With link
@@ -43,6 +44,6 @@ The local checksum is also memoized — see
 
 Shared Drives give organization ownership and consistent destination regardless of who connects.
 Folder creation is convenient. Costs are broad OAuth scope, a client secret stored in the
-workstation's OS keychain, full-file memory assembly for uploads, API quota usage from folder and
+workstation's OS keychain, API quota usage from folder and
 file searches, and potentially public sharing. Google-native anonymous sharing may be blocked by
 Workspace policy.

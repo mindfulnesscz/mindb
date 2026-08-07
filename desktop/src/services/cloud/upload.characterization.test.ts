@@ -46,8 +46,26 @@ const FOLDER_Q        = /mimeType='application\/vnd\.google-apps\.folder'/;
 
 let stub: FetchStub;
 
+/* Bytes above each provider's threshold no longer travel through the webview — they are streamed
+   from disk by `cloud_upload_stream`. So the large-file assertions moved from the fetch stub to the
+   invoke stub, and they got STRONGER rather than weaker: as well as the URL and headers, they now
+   pin the byte range actually read off disk, which is what a chunked session depends on and what
+   `body.byteLength` could only imply. */
+const streamedUploads = () => invokeStub.argsFor('cloud_upload_stream');
+const streamedHeaders = (call: Record<string, unknown>): Record<string, string> =>
+  Object.fromEntries(call.headers as Array<[string, string]>);
+
+/** A file to upload, as the providers now take it. `bytes()` is the ≤threshold path only. */
+const source = (size: number, path = '/local/OUT/deck.pdf') =>
+  ({ path, size, bytes: async () => bytes(size) });
+
 beforeEach(() => {
   invokeStub.reset();
+  // A streamed upload succeeds by default; tests that care about the status override it.
+  invokeStub.replies.set('cloud_upload_stream', {
+    status: 200,
+    body: JSON.stringify({ id: 'resumable-file', webViewLink: 'https://drive/big' }),
+  });
   stub = installFetchStub();
 });
 afterEach(() => stub.restore());
@@ -89,7 +107,7 @@ describe('uploadOneDriveFile — simple vs session', () => {
   });
 
   it('uploads a small file as a single PUT', async () => {
-    await uploadOneDriveFile('tok', bytes(1024), 'Sotto/ESS/deck.pdf', false);
+    await uploadOneDriveFile('tok', source(1024), 'Sotto/ESS/deck.pdf', false);
 
     const call = stub.one(GRAPH_PUT);
     expect(call.method).toBe('PUT');
@@ -98,19 +116,29 @@ describe('uploadOneDriveFile — simple vs session', () => {
   });
 
   it('still uses a single PUT at EXACTLY 4 MiB — the boundary is inclusive', async () => {
-    await uploadOneDriveFile('tok', bytes(4 * MIB), 'a/b.pdf', false);
+    await uploadOneDriveFile('tok', source(4 * MIB), 'a/b.pdf', false);
     expect(stub.matching(GRAPH_PUT)).toHaveLength(1);
     expect(stub.matching(GRAPH_SESSION)).toHaveLength(0);
   });
 
   it('switches to an upload session one byte over the boundary', async () => {
-    await uploadOneDriveFile('tok', bytes(4 * MIB + 1), 'a/b.pdf', false);
+    await uploadOneDriveFile('tok', source(4 * MIB + 1), 'a/b.pdf', false);
     expect(stub.matching(GRAPH_SESSION)).toHaveLength(1);
     expect(stub.matching(GRAPH_PUT)).toHaveLength(0);
   });
 
+  it('never reads a session-sized file into memory', async () => {
+    /* The whole point of the native transfer. `bytes()` is the webview path; a file that needs a
+       session must go from disk to socket without ever being one object in this process. */
+    const src = { ...source(12 * MIB), bytes: vi.fn(async () => bytes(12 * MIB)) };
+    await uploadOneDriveFile('tok', src, 'a/b.pdf', false);
+
+    expect(src.bytes).not.toHaveBeenCalled();
+    expect(streamedUploads()).toHaveLength(2);
+  });
+
   it('asks the session to REPLACE on conflict, so a re-export overwrites rather than duplicating', async () => {
-    await uploadOneDriveFile('tok', bytes(5 * MIB), 'a/b.pdf', false);
+    await uploadOneDriveFile('tok', source(5 * MIB), 'a/b.pdf', false);
     expect(stub.one(GRAPH_SESSION).json()).toEqual({
       item: { '@microsoft.graph.conflictBehavior': 'replace' },
     });
@@ -118,40 +146,44 @@ describe('uploadOneDriveFile — simple vs session', () => {
 
   it('sends contiguous, correctly-labelled chunks covering the whole file', async () => {
     const total = 12 * MIB;                       // → 10 MiB + 2 MiB
-    await uploadOneDriveFile('tok', bytes(total), 'a/b.pdf', false);
+    await uploadOneDriveFile('tok', source(total, '/local/big.mov'), 'a/b.pdf', false);
 
-    const chunks = stub.matching(/upload\.example\/session/);
+    const chunks = streamedUploads();
     expect(chunks).toHaveLength(2);
-    expect(chunks.map(c => c.headers['Content-Range'])).toEqual([
+    expect(chunks.map(c => streamedHeaders(c)['Content-Range'])).toEqual([
       `bytes 0-${10 * MIB - 1}/${total}`,
       `bytes ${10 * MIB}-${total - 1}/${total}`,
     ]);
-    // The declared length must match the bytes actually sent, or Graph stalls the session.
-    expect(chunks.map(c => c.size())).toEqual([10 * MIB, 2 * MIB]);
-    expect(chunks.map(c => Number(c.headers['Content-Length']))).toEqual([10 * MIB, 2 * MIB]);
+    // The bytes read off disk must be exactly the ones the range header claims, or Graph stalls the
+    // session waiting for a byte that is never coming. Every chunk reads from the ONE source file.
+    expect(chunks.map(c => [c.offset, c.length])).toEqual([[0, 10 * MIB], [10 * MIB, 2 * MIB]]);
+    expect(chunks.every(c => c.filePath === '/local/big.mov')).toBe(true);
+    expect(chunks.every(c => c.url === CHUNK_URL)).toBe(true);
+    // Content-Length is set natively from the range; passing one from here could disagree with it.
+    expect(chunks.every(c => !('Content-Length' in streamedHeaders(c)))).toBe(true);
   });
 
   it('accepts 200 and 201 on the final chunk, not only 202', async () => {
-    stub.route(/upload\.example\/session/, c =>
-      (c.headers['Content-Range'] as string).startsWith('bytes 10485760') ? { status: 201 } : { status: 202 });
-    await expect(uploadOneDriveFile('tok', bytes(12 * MIB), 'a/b.pdf', false)).resolves.toBeNull();
+    invokeStub.replies.set('cloud_upload_stream', (args: Record<string, unknown>) =>
+      (args.offset as number) === 10 * MIB ? { status: 201, body: '' } : { status: 202, body: '' });
+    await expect(uploadOneDriveFile('tok', source(12 * MIB), 'a/b.pdf', false)).resolves.toBeNull();
   });
 
   it('throws on an unexpected chunk status rather than reporting success', async () => {
-    stub.route(/upload\.example\/session/, { status: 500, text: 'boom' });
-    await expect(uploadOneDriveFile('tok', bytes(5 * MIB), 'a/b.pdf', false))
+    invokeStub.replies.set('cloud_upload_stream', { status: 500, body: 'boom' });
+    await expect(uploadOneDriveFile('tok', source(5 * MIB), 'a/b.pdf', false))
       .rejects.toThrow(/chunk upload failed \(500\).*boom/s);
   });
 
   it('throws when the session cannot be created', async () => {
     stub.route(GRAPH_SESSION, { status: 403, text: 'quota' });
-    await expect(uploadOneDriveFile('tok', bytes(5 * MIB), 'a/b.pdf', false))
+    await expect(uploadOneDriveFile('tok', source(5 * MIB), 'a/b.pdf', false))
       .rejects.toThrow(/upload session failed \(403\).*quota/s);
   });
 
   it('throws on a failed simple upload', async () => {
     stub.route(GRAPH_PUT, { status: 507, text: 'insufficient storage' });
-    await expect(uploadOneDriveFile('tok', bytes(10), 'a/b.pdf', false))
+    await expect(uploadOneDriveFile('tok', source(10), 'a/b.pdf', false))
       .rejects.toThrow(/upload failed \(507\).*insufficient storage/s);
   });
 });
@@ -163,7 +195,7 @@ describe('uploadOneDriveFile — targeting and links', () => {
   });
 
   it('routes into the configured SharePoint drive, not the personal one', async () => {
-    await uploadOneDriveFile('tok', bytes(10), 'a/b.pdf', false, 'b!drive');
+    await uploadOneDriveFile('tok', source(10), 'a/b.pdf', false, 'b!drive');
     expect(stub.calls[0].url).toContain('/drives/b!drive/root:/');
     expect(stub.calls[0].url).not.toContain('/me/drive');
   });
@@ -174,17 +206,17 @@ describe('uploadOneDriveFile — targeting and links', () => {
        The first segment deliberately CONTAINS A SPACE: that is what this test proves, and it used to
        be the product name until the Sotto rename replaced it with a single word, which quietly
        removed the space from the fixture while the encoded expectation still read `DC%20Hub`. */
-    await uploadOneDriveFile('tok', bytes(10), 'Client Assets/ESS 2026/a+b.pdf', false);
+    await uploadOneDriveFile('tok', source(10), 'Client Assets/ESS 2026/a+b.pdf', false);
     expect(stub.calls[0].url).toContain('root:/Client%20Assets/ESS%202026/a%2Bb.pdf:/content');
   });
 
   it('returns null and requests no link when getLink is false', async () => {
-    await expect(uploadOneDriveFile('tok', bytes(10), 'a/b.pdf', false)).resolves.toBeNull();
+    await expect(uploadOneDriveFile('tok', source(10), 'a/b.pdf', false)).resolves.toBeNull();
     expect(stub.matching(GRAPH_LINK)).toHaveLength(0);
   });
 
   it('creates and returns a share link when asked', async () => {
-    await expect(uploadOneDriveFile('tok', bytes(10), 'a/b.pdf', true)).resolves.toBe('https://share/x');
+    await expect(uploadOneDriveFile('tok', source(10), 'a/b.pdf', true)).resolves.toBe('https://share/x');
     expect(stub.matching(GRAPH_LINK)).toHaveLength(1);
   });
 });
@@ -278,7 +310,7 @@ const upload = (over: Partial<{
 }> = {}) => uploadGDriveFile(
   'tok',
   over.size ?? 1024,
-  async () => bytes(over.size ?? 1024),
+  source(over.size ?? 1024),
   async () => over.md5 ?? LOCAL_MD5,
   'application/pdf',
   over.name ?? 'deck.pdf',
@@ -336,12 +368,12 @@ describe('uploadGDriveFile — the same-size skip', () => {
   it('never reads the file bytes when it skips', async () => {
     // The checksum streams natively, but the webview never loads the full file or transfers it.
     routeDrive({ existing: { id: 'old', size: '1024', md5Checksum: LOCAL_MD5 } });
-    const getBytes = vi.fn(async () => bytes(1024));
+    const src = { ...source(1024), bytes: vi.fn(async () => bytes(1024)) };
     const getMd5 = vi.fn(async () => LOCAL_MD5);
     await uploadGDriveFile(
-      'tok', 1024, getBytes, getMd5, 'application/pdf', 'deck.pdf', 'skip/noread', false,
+      'tok', 1024, src, getMd5, 'application/pdf', 'deck.pdf', 'skip/noread', false,
     );
-    expect(getBytes).not.toHaveBeenCalled();
+    expect(src.bytes).not.toHaveBeenCalled();
     expect(getMd5).toHaveBeenCalledOnce();
   });
 
@@ -518,6 +550,33 @@ describe('uploadGDriveFile — the 5 MiB boundary', () => {
     expect(stub.matching(DRIVE_RESUMABLE)).toHaveLength(1);
     expect(stub.matching(DRIVE_MULTIPART)).toHaveLength(0);
     expect(r).toEqual({ url: null, skipped: false });
+  });
+
+  it('streams a resumable body from disk without reading it into memory', async () => {
+    /* The session is negotiated over `fetch` — it is a small JSON call — and only the BYTES go
+       native. A 500 MB deliverable used to cross the IPC bridge into the webview and be posted from
+       there, so it was copied twice and resident for the whole transfer. */
+    routeDrive();
+    const src = { ...source(50 * MIB, '/local/big.mov'), bytes: vi.fn(async () => bytes(50 * MIB)) };
+    await uploadGDriveFile(
+      'tok', 50 * MIB, src, async () => LOCAL_MD5,
+      'video/quicktime', 'big.mov', 'new/streamed', false,
+    );
+
+    expect(src.bytes).not.toHaveBeenCalled();
+    const [put] = streamedUploads();
+    expect(put).toMatchObject({ url: RESUMABLE_URL, method: 'PUT', filePath: '/local/big.mov' });
+    // The whole file: no range, and the length the session was told to expect comes from the stat.
+    expect(put.offset).toBeNull();
+    expect(put.length).toBeNull();
+    expect(stub.one(DRIVE_RESUMABLE).headers['X-Upload-Content-Length']).toBe(String(50 * MIB));
+  });
+
+  it('reports a failed streamed upload with the provider body', async () => {
+    routeDrive();
+    invokeStub.replies.set('cloud_upload_stream', { status: 403, body: 'storageQuotaExceeded' });
+    await expect(upload({ size: 6 * MIB, folder: 'new/streamfail' }))
+      .rejects.toThrow(/resumable upload failed \(403\).*storageQuotaExceeded/s);
   });
 
   it('names the file and parents it correctly in the multipart metadata', async () => {

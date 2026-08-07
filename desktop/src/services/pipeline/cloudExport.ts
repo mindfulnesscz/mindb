@@ -503,10 +503,16 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
               : null;
             skipped += 1;
           } else {
-            // Read only once the skip has been ruled out — the bytes are the expensive part on a
-            // synced source tree, where reading an online-only file downloads it.
-            const bytes = await readFile(srcPath);
-            url = await uploadOneDriveFile(cfg.token!.accessToken, bytes, remote, dest.generateLink, cfg.driveId);
+            /* The source is handed over rather than the bytes. A file needing an upload session
+               (>4 MiB) is never read here at all — each chunk streams from disk natively. Below
+               that threshold `bytes()` is called once, after the skip has been ruled out: reading
+               is the expensive part on a synced source tree, where an online-only file is
+               downloaded to be read. */
+            url = await uploadOneDriveFile(
+              cfg.token!.accessToken,
+              { path: srcPath, size: srcInfo.size, bytes: () => readFile(srcPath) },
+              remote, dest.generateLink, cfg.driveId,
+            );
             if (uploadLogged < 3) {
               appendLog('success', `  ✓  ${nestedName}`);
               uploadLogged += 1;
@@ -521,7 +527,7 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
           const result = await uploadGDriveFile(
             cfg.token!.accessToken,
             srcInfo.size,
-            () => readFile(srcPath),
+            { path: srcPath, bytes: () => readFile(srcPath) },
             () => contentHash('md5', srcPath, mtimeMs, srcInfo.size),
             mimeFromExt(ext),
             gdriveFileName,

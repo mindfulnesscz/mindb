@@ -35,9 +35,20 @@ The evidence behind the 04 series: `REF_performance-audit.md`.
 
 ## ✅ Done (implemented — don't re-run)
 
-- `DONE_04e_perf-cloud-export.md` — E1, E2, E3. **E4 (uploads in Rust) deliberately not taken** —
-  skippable by its own description, and the one part that cannot be finished honestly without a
-  manual >150 MB transfer against a real account. **E1**: a file's content is hashed **at most once,
+- `DONE_04e_perf-cloud-export.md` — all four parts, in two commits. **E4** turned out to rest on a
+  false premise: `upload_to_dropbox` did NOT stream from disk (`std::fs::read` of the whole file,
+  then a `.to_vec()` copy per 48 MB chunk), so "mirror Dropbox" would have moved Drive/OneDrive's
+  buffer from the webview into Rust and stopped there. There was no reason for the split either —
+  no JS Dropbox upload has ever existed in the history, and the CSP allowing `api.dropboxapi.com`
+  but not `content.dropboxapi.com` is a consequence of the split, not its cause. There is now ONE
+  `cloud_upload_stream` command used by all three, with each provider's own small-file threshold
+  still going through memory (bounded by the provider, and it keeps the pinned assertions intact).
+  **The destination is bound** — HTTPS + host allowlist checked before a byte is read, same rule as
+  `supabase_request`, because otherwise it is an exfiltration primitive carrying an `Authorization`
+  header. **`Content-Length` is set natively from the range sent**, never passed in: a streaming
+  body goes out chunked without it and Graph/Drive reject that, which is why there is a test running
+  a real socket asserting the bytes on the wire. Dropbox's blocking read inside an `async fn` is
+  gone. **E1**: a file's content is hashed **at most once,
   ever**. `cloud-upload-cache.json` grew a second section — `{ uploads, hashes }`, `hashes` keyed by
   **source path** and fingerprinted on mtime+size — because "these bytes hash to this" is a property
   of the file, not of where it was sent, so a second destination, a reconnected one and a later run
@@ -211,6 +222,20 @@ The evidence behind the 04 series: `REF_performance-audit.md`.
 - `docs/pages/ideas/slimming-the-bundled-libreoffice.mdx` — the ~800MB trim, relevant before auto-update is turned on.
 
 ## Known deliberate residual (not a task)
+- **`cloud_upload_stream` is the second native proxy, and it is bound like the first** (`04e` E4).
+  HTTPS only, host matched exactly or as a dot-suffix against `UPLOAD_HOSTS`, checked before a byte
+  is read. It can read any path-policy-allowed file and post it with a caller-supplied
+  `Authorization` header — unbound that is an exfiltration primitive, which is why
+  `supabase_request` is origin-bound too. Widening the list is a deliberate act with a reason.
+- **Never pass `Content-Length` to a streamed upload** (`04e` E4). It is derived natively from the
+  range actually sent, and that is the only value guaranteed to match the bytes on the wire. A
+  streaming body without one goes out `chunked`, which Graph's upload sessions and Drive's resumable
+  PUT both reject — and a body SHORTER than a declared length does not fail against these providers,
+  it stalls the connection. Pinned by a test that runs a real socket.
+- **Small uploads deliberately still go through memory** (`04e` E4): Drive's multipart create
+  (≤5 MiB) interleaves metadata with the bytes in one body, OneDrive's simple PUT (≤4 MiB) is one
+  request. Both are bounded by the provider. "Stream everything for consistency" would complicate
+  the multipart composition for no gain on files that are already small.
 - **No provider skips on size alone** (`04e`). Drive refuses it when Drive publishes no md5, and
   OneDrive refuses it when Graph publishes no `quickXorHash` — an edit preserving the byte count
   would otherwise leave a client on the old file indefinitely. Every uncertain answer in a skip

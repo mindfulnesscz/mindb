@@ -16,7 +16,9 @@ Uploading to a shared SharePoint document library — rather than the connecting
 
 The native Rust backend posts to `/<tenant>/oauth2/v2.0/devicecode`, because Microsoft's endpoint does not allow the Tauri webview origin through CORS. Sotto shows the returned code/verification URL and repeatedly invokes a single native token poll. Success stores access/refresh tokens and expiry; refresh also runs natively.
 
-For each export, files up to 4 MB are PUT to `…/root:/<encoded path>:/content` (simple upload, overwrite). **Larger files use a resumable upload session** (`createUploadSession`) sent in 10 MiB chunks, so large video/design assets no longer hit the simple-upload ceiling. When link generation is enabled, Sotto requests an `anonymous` view link and **falls back to `organization` scope** when the tenant blocks anonymous sharing.
+For each export, files up to 4 MB are PUT to `…/root:/<encoded path>:/content` (simple upload, overwrite). **Larger files use a resumable upload session** (`createUploadSession`) sent in 10 MiB chunks, so large video/design assets no longer hit the simple-upload ceiling. Each chunk is **streamed off disk natively** and never enters the webview — see [How the bytes actually move](/cloud-storage/overview#how-the-bytes-actually-move). When link generation is enabled, Sotto requests an `anonymous` view link and **falls back to `organization` scope** when the tenant blocks anonymous sharing.
+
+A personal (non-business) OneDrive hands back an upload-session URL on a host the app does not reach — `api.onedrive.com` is in neither the CSP nor the native upload allowlist. That has always been true; large uploads to a personal drive are not a supported path, and SharePoint or OneDrive for Business is the intended target.
 
 ## Skip-if-unchanged
 
@@ -37,7 +39,7 @@ a cold `cloud-upload-cache.json` re-sent the entire library. See
 
 ## Tradeoffs
 
-Device code works well across browsers and lets authorization happen on another device. Overwrite semantics avoid duplicate names. SharePoint targeting removes the dependence on one user's `me/drive`, and upload sessions remove the size limit. Remaining considerations: tenant Conditional Access, whole-file memory usage during chunking, and sharing policy — if a tenant blocks even organization links, enable sharing for that library in SharePoint admin.
+Device code works well across browsers and lets authorization happen on another device. Overwrite semantics avoid duplicate names. SharePoint targeting removes the dependence on one user's `me/drive`, and upload sessions remove the size limit. Remaining considerations: tenant Conditional Access and sharing policy — if a tenant blocks even organization links, enable sharing for that library in SharePoint admin.
 
 `AADSTS50059` normally means a single-tenant app was called through `common`; enter the tenant GUID. Error 53003 generally indicates Conditional Access/device compliance and requires an Entra administrator.
 

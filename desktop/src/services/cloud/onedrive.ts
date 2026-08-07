@@ -12,6 +12,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import type { CloudToken } from '../../domain/client';
+import { streamUpload, type UploadSource } from './uploadStream';
 
 export interface DeviceCodeInfo {
   deviceCode:      string;
@@ -200,7 +201,9 @@ export async function oneDriveShareLink(
 
 export async function uploadOneDriveFile(
   accessToken: string,
-  bytes:        Uint8Array<ArrayBuffer>,
+  /** Where the file is, its size from the STAT, and a lazy reader used only by the ≤4 MiB path.
+   *  A file that needs an upload session never calls `bytes()` — each chunk streams from disk. */
+  source:       UploadSource & { size: number },
   remotePath:   string,   // e.g. "Sotto/ESS/file.pdf"
   getLink:      boolean,
   driveId?:     string,   // SharePoint/OneDrive-for-Business drive; empty → /me/drive
@@ -208,13 +211,13 @@ export async function uploadOneDriveFile(
   const encodedPath = remotePath.split('/').map(encodeURIComponent).join('/');
   const driveBase   = graphDriveBase(driveId);
 
-  if (bytes.byteLength <= ONEDRIVE_SIMPLE_MAX) {
+  if (source.size <= ONEDRIVE_SIMPLE_MAX) {
     const uploadRes = await fetch(
       `${driveBase}/root:/${encodedPath}:/content`,
       {
         method:  'PUT',
         headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/octet-stream' },
-        body:    bytes,
+        body:    await source.bytes(),
       },
     );
     if (!uploadRes.ok) throw new Error(`OneDrive upload failed (${uploadRes.status}): ${await uploadRes.text()}`);
@@ -231,21 +234,24 @@ export async function uploadOneDriveFile(
     if (!sessionRes.ok) throw new Error(`OneDrive upload session failed (${sessionRes.status}): ${await sessionRes.text()}`);
     const { uploadUrl } = await sessionRes.json() as { uploadUrl: string };
 
-    const total = bytes.byteLength;
+    /* Each chunk is read from disk as it is sent, so a 2 GB video costs one read buffer rather than
+       2 GB of webview memory. `Content-Length` is deliberately NOT set here: it is derived natively
+       from the range actually streamed, which is the only value that can agree with the bytes on
+       the wire. Graph does not reject a short body, it stalls the session waiting for the rest. */
+    const total = source.size;
     for (let start = 0; start < total; start += ONEDRIVE_CHUNK) {
-      const end   = Math.min(start + ONEDRIVE_CHUNK, total);
-      const chunk = bytes.subarray(start, end);
-      const putRes = await fetch(uploadUrl, {
-        method:  'PUT',
-        headers: {
-          'Content-Length': String(chunk.byteLength),
-          'Content-Range':  `bytes ${start}-${end - 1}/${total}`,
-        },
-        body: chunk,
+      const end = Math.min(start + ONEDRIVE_CHUNK, total);
+      const put = await streamUpload({
+        url:      uploadUrl,
+        method:   'PUT',
+        headers:  { 'Content-Range': `bytes ${start}-${end - 1}/${total}` },
+        filePath: source.path,
+        offset:   start,
+        length:   end - start,
       });
       // 202 = chunk accepted; 200/201 = final chunk, upload complete.
-      if (putRes.status !== 202 && putRes.status !== 200 && putRes.status !== 201) {
-        throw new Error(`OneDrive chunk upload failed (${putRes.status}): ${await putRes.text()}`);
+      if (put.status !== 202 && put.status !== 200 && put.status !== 201) {
+        throw new Error(`OneDrive chunk upload failed (${put.status}): ${put.body}`);
       }
     }
   }
