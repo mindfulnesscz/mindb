@@ -7,6 +7,7 @@
 import { basename } from '@tauri-apps/api/path';
 import { buildVocabMap } from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
+import { timePhase } from './timing';
 import { findPackageFolders, syncPackageFromOut } from './packages';
 
 /* ── Distribute operation ───────────────────────────────────────────────── */
@@ -20,6 +21,7 @@ export async function runDistribute(ctx: RunContext, stats: RunStats): Promise<v
     return;
   }
 
+  const phase = timePhase('DISTRIBUTE');
   appendLog('section', `━━━ ${dryRun ? 'DRY RUN' : 'COLLECTING'} ━━━`);
   appendLog('dim', `  Source: ${source}`);
   appendLog('dim',
@@ -32,6 +34,7 @@ export async function runDistribute(ctx: RunContext, stats: RunStats): Promise<v
       `  No package folders found matching prefix "${settings.packagePrefix}". `
       + 'Name __hash asset folders are not package anchors.',
     );
+    phase.done(); // the folder search still cost something; record it, don't announce it
     return;
   }
 
@@ -76,6 +79,6 @@ export async function runDistribute(ctx: RunContext, stats: RunStats): Promise<v
 
   appendLog('section',
     `━━━ COLLECT DONE — ${stats.packages} package(s) · `
-    + `${stats.copied} copied · ${stats.skipped} unchanged · ${stats.errors} errors ━━━`,
+    + `${stats.copied} copied · ${stats.skipped} unchanged · ${stats.errors} errors ━━━ in ${phase.done()}`,
   );
 }

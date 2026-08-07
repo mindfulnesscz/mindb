@@ -28,6 +28,7 @@ import { loadVocabulary } from '../../services/vocabService';
 import { notifyRunComplete } from '../../services/notifyService';
 import { groupAssets, type VocabularyData } from '@sotto/domain';
 import { resolveRunPlan } from './runPlan';
+import { beginRunTimeline, endRunTimeline, logRunTimeline, timePhase } from '../../services/pipeline/timing';
 
 export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise<void> {
   const settings = useSettingsStore(s => s.settings);
@@ -38,6 +39,7 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
 
   return async function handleRun() {
     startRun();
+    beginRunTimeline();
     const { effectiveSettings, localDest: runLocalDest, cloudDests } = resolveRunPlan(settings, selectedDests);
 
     const collectedAssets: string[] = [];
@@ -68,6 +70,7 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
     let vocabData = vocab ?? { _schema_version: '2.1.0', _comment: '', tags: [] };
     let vocabFresh = false;
     if (clientId && !vocabDirty) {
+      const vocabPhase = timePhase('VOCABULARY REFRESH');
       try {
         const fresh = await loadVocabulary(clientId, {
           forceFromDb: true,
@@ -77,9 +80,9 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
         vocabData = fresh;
         vocabFresh = true;
         useVocabularyStore.getState().setData(fresh, { dirty: false });
-        log('dim', '  Vocabulary refreshed from portal');
+        log('dim', `  Vocabulary refreshed from portal in ${vocabPhase.done()}`);
       } catch (e) {
-        log('warn', `  Vocabulary refresh skipped — using cached labels (${e})`);
+        log('warn', `  Vocabulary refresh skipped — using cached labels (${e}) after ${vocabPhase.done()}`);
       }
     } else if (vocabDirty) {
       log('dim', '  Using local unpublished vocabulary (will publish leaves after sync)');
@@ -91,6 +94,7 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
     let previewPageLimit: number | undefined;
     if (sbConfig && clientId && !effectiveSettings.dryRun
         && (effectiveSettings.doThumbnails || effectiveSettings.doCdnOriginals)) {
+      const grantPhase = timePhase('R2 GRANT');
       try {
         const grant = await requestR2Grant(sbConfig, clientId);
         // A pipeline grant without the gated half means the environment is half-provisioned.
@@ -117,16 +121,17 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
           gatedSecretKey:    grant.gatedSecretAccessKey!,
           gatedSessionToken: grant.gatedSessionToken!,
         };
-        log('dim', `  Storage grant issued for "${activeClient!.name}" (public ${grant.bucket} · gated ${grant.gatedBucket}, expires ${new Date(grant.expiresAt).toLocaleTimeString()})`);
+        log('dim', `  Storage grant issued for "${activeClient!.name}" (public ${grant.bucket} · gated ${grant.gatedBucket}, expires ${new Date(grant.expiresAt).toLocaleTimeString()}) in ${grantPhase.done()}`);
 
         /* Object keys carry the access level, so the upload stages need each asset's CURRENT level
            before they write. The same read indexes live URL/key references for safe pruning. A
            failed read routes assets at the restrictive create-time default and disables pruning,
            because the pipeline cannot prove a stale key is unshared. */
+        const statePhase = timePhase('ASSET STORAGE STATE');
         const storageState = await fetchAssetStorageState(clientId, sbConfig);
         assetLevels = storageState?.levels ?? new Map<string, string>();
         cdnKeyReferences = storageState?.references ?? undefined;
-        log('dim', `  ${assetLevels.size} known asset level(s) loaded for key routing`);
+        log('dim', `  ${assetLevels.size} known asset level(s) loaded for key routing in ${statePhase.done()}`);
         if (!cdnKeyReferences) {
           log('warn', '  CDN row references unavailable — stale thumbnail/original pruning disabled for safety');
         }
@@ -134,11 +139,14 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
         /* How many pages of a document get previewed is an admin setting on the client row, so it
            comes from the same place `perm` does. A failed read leaves it undefined and the pipeline
            uses the documented default rather than an unbounded render. */
+        const limitPhase = timePhase('PAGE-PREVIEW LIMIT');
         previewPageLimit = await fetchPreviewPageLimit(clientId, sbConfig) ?? undefined;
+        const limitElapsed = limitPhase.done();
         if (previewPageLimit !== undefined) {
-          log('dim', `  Page-preview limit for this client: ${previewPageLimit}`);
+          log('dim', `  Page-preview limit for this client: ${previewPageLimit} (read in ${limitElapsed})`);
         }
       } catch (e) {
+        grantPhase.done();
         log('error', `  ✕  CDN steps disabled — ${e}`);
       }
     }
@@ -181,6 +189,11 @@ export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise
       log('error', `  ✕  Post-run sync failed: ${e}`);
       stats.errors += 1;
     }
+
+    /* Last thing before the run is declared over, so the total covers the pre-run fetches and the
+       portal sync as well as the pipeline itself — the two places the silent gaps were found. */
+    logRunTimeline(appendLog);
+    endRunTimeline();
 
     finishRun(stats, stats.errors > 0 || stats.skipped > 0);
     notifyRunComplete(stats, stats.errors > 0 || stats.skipped > 0);
@@ -249,7 +262,11 @@ async function syncRunToPortal(a: {
        them; drain it here rather than leaving it for whoever next opens the portal. */
     if (!a.isStopping()) {
       if (a.effectiveSettings.dryRun) a.log('dim', '  [DRY] would drain CDN reconcile tasks');
-      else await reconcileCdnObjects(a.sbConfig, a.log);
+      else {
+        const reconcilePhase = timePhase('CDN RECONCILE');
+        await reconcileCdnObjects(a.sbConfig, a.log);
+        a.log('dim', `  CDN reconcile drained in ${reconcilePhase.done()}`);
+      }
     }
 
     /* Videos onto Stream. AFTER the export, because a video is attached to an asset row and a
@@ -283,7 +300,9 @@ async function syncRunToPortal(a: {
   }
 
   if (a.effectiveSettings.sourceFolder && !a.isStopping()) {
+    const scanPhase = timePhase('VERSION SCAN');
     const versionMap = await scanVersionMap(a.effectiveSettings.sourceFolder, a.vocabData, a.effectiveSettings);
+    a.log('dim', `  Version map scanned in ${scanPhase.done()}`);
     await syncVersionHistory(versionMap, a.clientId, a.vocabData, a.sbConfig, a.log, {
       dryRun: a.effectiveSettings.dryRun,
       shouldStop: a.isStopping,

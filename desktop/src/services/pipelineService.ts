@@ -32,6 +32,7 @@ import { runArtifactMigration } from './pipeline/artifactMigration';
 import { runThumbnails } from './pipeline/thumbnails';
 import { runCdnUpload, runPagesUpload, runOriginalUpload } from './pipeline/cdnUpload';
 import { runCloudExport } from './pipeline/cloudExport';
+import { timePhase } from './pipeline/timing';
 
 /* ── Public surface ───────────────────────────────────────────────────────────
    Consumers import from here, not from ./pipeline/*, so the internal layout stays free to
@@ -70,11 +71,14 @@ export async function runPipeline(ctx: RunContext): Promise<RunStats> {
     // Single scan — shared by thumbnails (filtered) and Supabase sync (all stems)
     if (settings.sourceFolder) {
       ctx.sourceReadErrors ??= new Set<string>();
+      const scanPhase = timePhase('SOURCE SCAN');
       const scanned = await scanAllAssets(settings.sourceFolder, settings, (path, error) => {
         ctx.sourceReadErrors?.add(path);
         appendLog('error', `  ✕  Cannot read source directory: ${path}\n     ${error}`);
       });
       ctx.collectedAssets?.push(...scanned);
+      // The scan has no banner of its own, and it feeds every stage below — give it one line.
+      appendLog('dim', `  Scanned ${scanned.length} asset file(s) in ${scanPhase.done()}`);
     }
 
     // Resolve folder identity before anything stores an asset URL. CDN objects and cloud sharing
@@ -83,9 +87,12 @@ export async function runPipeline(ctx: RunContext): Promise<RunStats> {
     const needsAssetIdentity = (ctx.r2 && (settings.doThumbnails || settings.doCdnOriginals))
       || settings.doFlatExport;
     if (!settings.dryRun && !stopping('asset identity resolution') && needsAssetIdentity) {
+      const identityPhase = timePhase('ASSET IDENTITY');
       try {
         ctx.cdnIdentity = await resolveCdnIdentity(ctx.collectedAssets ?? [], settings.outFolder || 'OUT');
+        appendLog('dim', `  Asset identity resolved in ${identityPhase.done()}`);
       } catch (e) {
+        identityPhase.done();
         appendLog('error', `  ✕  Asset identity resolution failed — uploads cannot attach URLs to affected assets: ${e}`);
       }
     }

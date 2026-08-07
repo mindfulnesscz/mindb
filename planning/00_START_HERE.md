@@ -5,7 +5,7 @@ CONTEXT block from `DONE_01_security-hardening-S0-S7.md` to any prompt before ha
 `REF_` files are reference/strategy, not tasks. `DONE_` files are already implemented — kept for
 context, don't re-run.
 
-_Last updated 2026-08-07 (00a/00b/00c landed; `02` closed — the Drive duplicate-folder fix and its cleanup tool are in; `04a`–`04f` performance series added, evidence in `REF_performance-audit.md`)._
+_Last updated 2026-08-07 (00a/00b/00c landed; `02` closed; `04a`–`04f` performance series filed, evidence in `REF_performance-audit.md`; **`04a` landed** — the run log now carries per-phase durations, so `04b` onwards has a baseline)._
 
 ## 🚢 3.2.2 — code complete
 
@@ -28,7 +28,6 @@ throughput, which `00b` part A restored but which no automated test can observe.
 
 | # | File | What it does | Status |
 |---|---|---|---|
-| 04a | `04a_perf-timing-instrumentation.md` | Per-stage durations in the run log + RUN TOTAL. Zero behaviour change; every later 04x measures against it. | TODO (run FIRST of the 04 series) |
 | 04b | `04b_perf-supabase-write-concurrency.md` | Asset-row writes pooled 8-wide instead of one awaited HTTP call per row (~8× on the biggest silent gap). Builds the shared `asyncPool`. | TODO |
 | 04c | `04c_perf-readme-churn.md` | Stop rewriting every readme.md into the Dropbox source tree every run (timestamp removed, skip-if-unchanged). | TODO |
 | 04d | `04d_perf-worker-pools-and-ipc.md` | Chunked barriers → true worker pools; pure-string path joins (kill per-file IPC); log/progress batching. | TODO (after 04b for the pool helper) |
@@ -39,6 +38,21 @@ throughput, which `00b` part A restored but which no automated test can observe.
 The evidence behind the 04 series: `REF_performance-audit.md`.
 
 ## ✅ Done (implemented — don't re-run)
+
+- `DONE_04a_perf-timing-instrumentation.md` — run time is observable. Every section-DONE banner
+  carries its own duration, the source scan got the line it never had, and the run closes with a
+  `RUN TOTAL` block: wall clock from the Run button, the five slowest top-level phases with their
+  share, and a `measured … of …` line so untimed work shows as the difference. Sub-steps (the
+  Supabase export's fetch/plan/writes/readmes/disconnect, one cloud destination of several) report
+  where they happen but stay out of the ranking. The timeline is module state in
+  `services/pipeline/timing.ts` **on purpose** — a run's phases span `runPipeline`, the stage
+  modules and the post-run sync in `useRunPipeline`, and threading a collector through
+  `exportAssetsToSupabase`'s fourteen positional arguments would have been a bigger change than the
+  measurement it exists to add. Zero behaviour change: nothing reordered, nothing skipped, no banner
+  text altered (durations are appended). Covered by `pipeline/timing.test.ts` (formatter boundaries,
+  ranking, idempotent `done()`) and `pipelineTiming.integration.test.ts`, which drives a real run
+  and fails if any section-DONE banner loses its duration.
+  **Record before/after numbers from this in every later 04x commit.**
 
 - `DONE_02_gdrive-duplicate-folder-fix.md` — Drive's duplicate folders, both halves.
   **G1**: folder resolution is race-safe (one shared in-flight resolve per path segment, the

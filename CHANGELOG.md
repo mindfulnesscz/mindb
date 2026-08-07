@@ -5,6 +5,32 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **The run log now says how long everything took.** Every section-DONE banner ends with its own
+  duration, the source scan gets the line it never had, and the run closes with a `RUN TOTAL` block
+  naming the five slowest phases and their share of the run.
+
+  Nothing in the log carried a timestamp before this, which is why run speed regressed across
+  several audits without anyone being able to say where — a stage that had quietly become the
+  slowest thing in the run looked exactly like one that had not. The total is wall clock from the
+  Run button, so it covers the pre-run fetches and the post-run portal sync, not only the pipeline:
+  those are where the audit found the silent gaps. A `measured … of …` line reports the summed
+  phases against that total, so untimed work shows up as the difference rather than hiding in it.
+
+  Steps inside a phase — the Supabase export's fetch/plan/writes/readmes/disconnect, one cloud
+  destination of several — report their own durations where they happen but stay out of the
+  ranking, so a parent and its own child cannot take two of the five slots to say one thing.
+
+  **This changes no pipeline behaviour**: no stage was reordered, parallelised or skipped, and no
+  banner's existing text changed — the duration is appended after it. It exists so the changes that
+  do reorder things have a number to be measured against. See
+  [Logs and diagnostics → Timings](docs/pages/desktop/logs.mdx).
+
+---
+
 ## [3.2.2] — 2026-08-06
 
 A hotfix for 3.2.1, which could not run a pipeline at all on a fresh install — and, alongside it, the

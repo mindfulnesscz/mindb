@@ -16,6 +16,7 @@
 
 import { writeTextFile, readTextFile, copyFile, mkdir, rename, remove } from '@tauri-apps/plugin-fs';
 import { join } from '@tauri-apps/api/path';
+import { timePhase } from './pipeline/timing';
 import type { RunStats } from '../store/pipelineStore';
 import type { RunContext } from './pipeline/types';
 import {
@@ -42,6 +43,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
     return;
   }
 
+  const phase = timePhase('OBSIDIAN');
   appendLog('section', '━━━ DAM / OBSIDIAN ━━━');
   appendLog('dim', `  → ${settings.vaultFolder}`);
 
@@ -68,7 +70,7 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
 
   if (!outDirs.length) {
     appendLog('dim', `  No "${settings.outFolder}" folders found — check source folder and out-folder name in Settings.`);
-    appendLog('section', '━━━ OBSIDIAN DONE — 0 notes ━━━');
+    appendLog('section', `━━━ OBSIDIAN DONE — 0 notes ━━━ in ${phase.done()}`);
     return;
   }
 
@@ -355,6 +357,6 @@ export async function runObsidian(ctx: RunContext, stats: RunStats): Promise<voi
   }
 
   appendLog('section',
-    `━━━ OBSIDIAN DONE — ${stats.notes} notes · ${stats.disconnected} disconnected · ${stats.errors} errors ━━━`
+    `━━━ OBSIDIAN DONE — ${stats.notes} notes · ${stats.disconnected} disconnected · ${stats.errors} errors ━━━ in ${phase.done()}`
   );
 }

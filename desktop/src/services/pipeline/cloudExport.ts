@@ -10,6 +10,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { stat, readFile, readTextFile, writeTextFile, exists } from '@tauri-apps/plugin-fs';
 import { join, appDataDir } from '@tauri-apps/api/path';
+import { timePhase, timeStep } from './timing';
 import {
   assetIdentityKey, buildVocabMap, translateExportName, stripWorkflowPrefix, isArtifactPath,
 } from '@sotto/domain';
@@ -126,6 +127,7 @@ function relativeUnderOut(srcPath: string, outFolderName: string): { dir: string
 export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<void> {
   const { vocab, appendLog, collectedAssets, cloudDestinations, cloudUrls, settings } = ctx;
 
+  const phase = timePhase('CLOUD EXPORT');
   appendLog('section', '━━━ CLOUD EXPORT ━━━');
 
   // Any selected non-local destination with a valid token participates.
@@ -248,6 +250,7 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
   appendLog('info', `  ${activeDests.length} destination(s)`);
 
   for (const dest of activeDests) {
+    const destStep = timeStep(`CLOUD EXPORT › ${dest.name}`);
     if (ctx.isStopping?.()) return;
     const cfg = dest.config;
     if (cfg.type === 'local') continue;
@@ -426,7 +429,7 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
     if (cfg.type === 'gdrive') reportDuplicateFolders();
     appendLog(
       'section',
-      `  ${dest.name} DONE — ${uploaded} uploaded · ${cached} cached · ${skipped - cached} remote-skip · ${errors} errors`,
+      `  ${dest.name} DONE — ${uploaded} uploaded · ${cached} cached · ${skipped - cached} remote-skip · ${errors} errors in ${destStep.done()}`,
     );
   }
 
@@ -437,5 +440,5 @@ export async function runCloudExport(ctx: RunContext, stats: RunStats): Promise<
     appendLog('warn', `  No sharing links collected — enable "Generate sharing link" on destinations in Settings to store URLs in Supabase and Obsidian.`);
   }
 
-  appendLog('section', `━━━ CLOUD EXPORT DONE — ${stats.published} uploaded · ${totalLinks} link(s) collected ━━━`);
+  appendLog('section', `━━━ CLOUD EXPORT DONE — ${stats.published} uploaded · ${totalLinks} link(s) collected ━━━ in ${phase.done()}`);
 }

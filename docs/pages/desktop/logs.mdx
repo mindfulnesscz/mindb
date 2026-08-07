@@ -11,6 +11,28 @@ Always read the section header before interpreting a symbol.
 | `CLOUD EXPORT` green `✓` | Provider call succeeded; Dropbox separately logs existing paths as dim skips |
 | red `✕` | That file/operation failed; sibling jobs usually continue |
 
+## Timings
+
+Every section-DONE banner ends with how long that section took — `━━━ THUMBNAILS DONE — 42 created · 0 errors ━━━ in 41.0s` — and the run closes with a `RUN TOTAL` block:
+
+```
+━━━ RUN TOTAL — 3m 12s ━━━
+  1. SUPABASE EXPORT   48.2s  (25%)
+  2. THUMBNAILS        41.0s  (21%)
+  3. CLOUD EXPORT      33.5s  (17%)
+  4. CDN THUMBNAILS    12.4s   (6%)
+  5. PUBLISH            9.1s   (4%)
+  measured 2m 24s of 3m 12s
+```
+
+Read it as follows.
+
+- **`RUN TOTAL` is wall clock**, measured from the moment the Run button is pressed. It covers the pre-run fetches (vocabulary, storage grant, asset levels, page-preview limit) and the post-run portal sync as well as the pipeline stages, because those are where the run's silent gaps have historically been.
+- **The ranking lists top-level phases only.** A step inside a phase — the Supabase export's `plan`/`writes`/`disconnect`, one cloud destination of several — reports its own duration on its own line where it happens, but stays out of the ranking so a parent and its child cannot take two slots to say one thing.
+- **`measured … of …` is the honest line.** The two numbers differ by whatever the run does that nothing times. A large and growing gap is the signal to instrument something new, not a rounding artefact.
+
+Durations are wall clock, not CPU time: a phase waiting on the network reports the wait. That is the intent — the operator is waiting too.
+
 Counters are shared across stages. `published` can include multiple destinations, so it is not a unique-asset count. `skipped` includes benign unchanged work and contributes to “completed with issues.” CDN thumbnail summary’s “no thumb” bucket means a missing local sidecar (not an inventory shortcut).
 
 For proof, inspect the target appropriate to the phase: local filesystem for generation, R2 metadata/object URL for CDN, provider UI/API for cloud export, and Supabase row for portal state.

@@ -3,6 +3,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { assessDestruction } from '../guardrail';
 import type { R2Config } from './types';
+import { timePhase } from './timing';
 
 /* ── Targeted CDN deletion — called after Supabase sync with the stale list ─ */
 
@@ -16,6 +17,7 @@ export async function deleteCdnObjects(
   shouldStop?: () => boolean,
 ): Promise<void> {
   if (!objectKeys.length) return;
+  const phase = timePhase('CDN DELETE');
   appendLog('section', '━━━ CDN DELETE ━━━');
 
   // Unlike a disconnected row, a deleted object is GONE — there is no soft form of this stage. The
@@ -27,11 +29,13 @@ export async function deleteCdnObjects(
   appendLog(verdict.blocked ? 'error' : 'dim', verdict.message);
   if (verdict.blocked) {
     appendLog('section', '━━━ CDN DELETE SKIPPED ━━━');
+    phase.done();
     return;
   }
   if (dryRun) {
     for (const objectKey of objectKeys) appendLog('dim', `  [DRY] would remove: ${objectKey}`);
     appendLog('section', `━━━ CDN DELETE DRY RUN — ${objectKeys.length} object(s) retained ━━━`);
+    phase.done();
     return;
   }
   let removed = 0;
@@ -61,5 +65,5 @@ export async function deleteCdnObjects(
       errors += 1;
     }
   }
-  appendLog('section', `━━━ CDN DELETE DONE — ${removed} removed · ${errors} errors ━━━`);
+  appendLog('section', `━━━ CDN DELETE DONE — ${removed} removed · ${errors} errors ━━━ in ${phase.done()}`);
 }

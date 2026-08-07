@@ -17,6 +17,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { thumbPathFor, pagesDirFor } from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
+import { timePhase } from './timing';
 import { THUMB_EXTS, PAGE_PREVIEW_EXTS, extensionOf, DEFAULT_PREVIEW_PAGE_LIMIT } from './naming';
 
 /* ── Thumbnail generation ───────────────────────────────────────────────── */
@@ -30,6 +31,7 @@ export async function runThumbnails(ctx: RunContext, stats: RunStats): Promise<v
     return;
   }
 
+  const phase = timePhase('THUMBNAILS');
   appendLog('section', '━━━ THUMBNAILS ━━━');
   const width   = parseInt(String(thumbWidth),  10) || 320;
   const quality = parseInt(String(thumbQuality), 10) || 70;
@@ -156,7 +158,7 @@ export async function runThumbnails(ctx: RunContext, stats: RunStats): Promise<v
   }
 
   appendLog('section',
-    `━━━ THUMBNAILS DONE — ${stats.thumbnails} created · ${stats.pagePreviews} page preview(s) · ${stats.errors} errors ━━━`);
+    `━━━ THUMBNAILS DONE — ${stats.thumbnails} created · ${stats.pagePreviews} page preview(s) · ${stats.errors} errors ━━━ in ${phase.done()}`);
 }
 
 /* Scan all publishable files in OUT folders. Parallel walk — all sibling dirs listed concurrently. */

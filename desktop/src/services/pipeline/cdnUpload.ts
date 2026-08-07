@@ -12,6 +12,7 @@
  */
 
 import { stat, readTextFile } from '@tauri-apps/plugin-fs';
+import { timePhase } from './timing';
 import { invoke } from '@tauri-apps/api/core';
 import {
   filterHighestVersions, storageTarget, assetUrl, tierFor,
@@ -203,6 +204,7 @@ export async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<vo
     return;
   }
 
+  const phase = timePhase('CDN THUMBNAILS');
   appendLog('section', '━━━ CDN UPLOAD ━━━');
 
   const { kept: cdnAssets, dropped: olderVersions } = filterCdnEligible(collectedAssets ?? []);
@@ -373,7 +375,7 @@ export async function runCdnUpload(ctx: RunContext, stats: RunStats): Promise<vo
   if (r2CacheDirty) await saveR2Cache(r2Cache);
 
   appendLog('section',
-    `━━━ CDN DONE — ${uploaded} uploaded · ${cached} cached · ${deduped} unchanged · ${pruned} pruned · ${skipped} no thumb · ${errors} errors ━━━`,
+    `━━━ CDN DONE — ${uploaded} uploaded · ${cached} cached · ${deduped} unchanged · ${pruned} pruned · ${skipped} no thumb · ${errors} errors ━━━ in ${phase.done()}`,
   );
 }
 
@@ -405,6 +407,7 @@ export async function runPagesUpload(ctx: RunContext, stats: RunStats): Promise<
     return;
   }
 
+  const phase = timePhase('CDN PAGES');
   appendLog('section', '━━━ CDN PAGE PREVIEWS ━━━');
 
   const { kept: cdnAssets } = filterCdnEligible(collectedAssets ?? []);
@@ -559,7 +562,7 @@ export async function runPagesUpload(ctx: RunContext, stats: RunStats): Promise<
   if (r2CacheDirty) await saveR2Cache(r2Cache);
 
   appendLog('section',
-    `━━━ CDN PAGES DONE — ${uploaded} uploaded · ${cached} cached · ${deduped} unchanged · ${pruned} pruned · ${errors} errors ━━━`);
+    `━━━ CDN PAGES DONE — ${uploaded} uploaded · ${cached} cached · ${deduped} unchanged · ${pruned} pruned · ${errors} errors ━━━ in ${phase.done()}`);
 }
 
 /* ── Original-file CDN upload — content-hash deduped, version/rename-stable key ──
@@ -576,6 +579,7 @@ export async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promi
     return;
   }
 
+  const phase = timePhase('CDN ORIGINALS');
   appendLog('section', '━━━ CDN ORIGINALS UPLOAD ━━━');
 
   const { kept: cdnAssets, dropped: olderVersions } = filterCdnEligible(collectedAssets ?? []);
@@ -766,7 +770,7 @@ export async function runOriginalUpload(ctx: RunContext, stats: RunStats): Promi
   if (r2CacheDirty) await saveR2Cache(r2Cache);
 
   appendLog('section',
-    `━━━ CDN ORIGINALS DONE — ${uploaded} uploaded · ${cached} cached · ${deduped} unchanged · ${pruned} pruned · ${errors} errors ━━━`);
+    `━━━ CDN ORIGINALS DONE — ${uploaded} uploaded · ${cached} cached · ${deduped} unchanged · ${pruned} pruned · ${errors} errors ━━━ in ${phase.done()}`);
 }
 
 

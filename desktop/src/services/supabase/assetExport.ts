@@ -27,6 +27,7 @@ import { identifyAssets } from './exportIdentify';
 import { planExport } from './exportPlan';
 import { dedupeByKey, writeParents, writeChildren } from './exportWrite';
 import { disconnectStaleRows } from './exportDisconnect';
+import { timePhase, timeStep } from '../pipeline/timing';
 
 export type { SupabaseExportResult } from './exportTypes';
 
@@ -68,6 +69,7 @@ export async function exportAssetsToSupabase(
   shouldStop?: () => boolean,
   sourceFresh = true,
 ): Promise<SupabaseExportResult> {
+  const phase = timePhase('SUPABASE EXPORT');
   const result: SupabaseExportResult = { created: 0, updated: 0, disconnected: 0, errors: 0, staleObjectKeys: [] };
   const base    = `${config.url}/rest/v1`;
   const headers = await makeHeaders(config.anonKey);
@@ -92,6 +94,7 @@ export async function exportAssetsToSupabase(
     // and optimistically select the count for disconnect cleanup, with a legacy-schema retry below.
     let pagePreviewColumns = pageCounts?.size ? await hasPagePreviewColumns(base, headers) : true;
     // Existing rows, keyed the same way the plan keys its writes.
+    const fetchStep = timeStep('SUPABASE EXPORT › fetch existing');
     const existing = new Map<string, StableRow>();
     try {
       // perm/status come along for readme.md only — the pipeline reports them, never rewrites
@@ -117,12 +120,13 @@ export async function exportAssetsToSupabase(
         );
       }
       for (const r of rows) existing.set(`${r.stable_id}:${r.child_id}`, r);
+      appendLog('dim', `  ${existing.size} existing row(s) fetched in ${fetchStep.done()}`);
     } catch (e) {
       appendLog('error', `  ✕  Could not fetch existing stable-identity records: ${e}`);
       appendLog('error', '  ✕  Supabase export aborted before planning or writes — existing identity state is unknown.');
       result.errors += 1;
       appendLog('section',
-        `━━━ SUPABASE DONE — ${result.created} new · ${result.updated} updated · ${result.disconnected} disconnected · ${result.errors} errors ━━━`,
+        `━━━ SUPABASE DONE — ${result.created} new · ${result.updated} updated · ${result.disconnected} disconnected · ${result.errors} errors ━━━ in ${phase.done()}`,
       );
       return result;
     }
@@ -147,10 +151,12 @@ export async function exportAssetsToSupabase(
     }
 
     /* ── 2. Plan ──────────────────────────────────────────────────────────── */
+    const planStep = timeStep('SUPABASE EXPORT › plan');
     const plan = await planExport({
       identified, clientId, vocab, existingByStableId, cdnUrls, originalUrls, cloudUrls,
       pageCounts: writablePageCounts, appendLog, dryRun,
     });
+    appendLog('dim', `  planned in ${planStep.done()}`);
 
     /* ── 3. Write — parents first; children need the resolved parent uuid ─── */
     const parents = dedupeByKey(plan.parentWrites, 'parent/single', appendLog);
@@ -163,6 +169,7 @@ export async function exportAssetsToSupabase(
       return false;
     });
 
+    const writeStep = timeStep('SUPABASE EXPORT › writes');
     let parentIdByKey: Map<string, string>;
     if (dryRun) {
       parentIdByKey = new Map(parents.map(parent => [
@@ -186,7 +193,8 @@ export async function exportAssetsToSupabase(
 
     appendLog(dryRun ? 'dim' : 'success',
       `  ${dryRun ? '[DRY] would sync' : '✓  Stable identity:'} ` +
-      `${plan.parentWrites.length} parent/single · ${plan.childWrites.length} child record(s)`,
+      `${plan.parentWrites.length} parent/single · ${plan.childWrites.length} child record(s)` +
+      ` in ${writeStep.done()}`,
     );
 
     // Access level as the DB has it, for readme.md. A row created this run isn't in here with a
@@ -195,22 +203,26 @@ export async function exportAssetsToSupabase(
     for (const row of existing.values()) dbLevelById.set(row.id, { perm: row.perm, status: row.status });
 
     if (!dryRun && !shouldStop?.()) {
+      const readmeStep = timeStep('SUPABASE EXPORT › readmes');
       await writeReadmes(plan.readmeTargets, parentIdByKey, dbLevelById, vocab, config, appendLog);
+      if (plan.readmeTargets.length) appendLog('dim', `  ${plan.readmeTargets.length} readme.md written in ${readmeStep.done()}`);
     } else if (dryRun && plan.readmeTargets.length) {
       appendLog('dim', `  [DRY] would write ${plan.readmeTargets.length} readme.md file(s)`);
     }
 
     /* ── 4. Disconnect ────────────────────────────────────────────────────── */
     if (!shouldStop?.()) {
+      const disconnectStep = timeStep('SUPABASE EXPORT › disconnect');
       await disconnectStaleRows(
         existing, plan.currentStableKeys, clientId, base, headers, result, appendLog,
         allowLargeDeletions, dryRun, shouldStop, sourceFresh,
       );
+      appendLog('dim', `  disconnect pass in ${disconnectStep.done()}`);
     }
   }
 
   appendLog('section',
-    `━━━ SUPABASE DONE — ${result.created} new · ${result.updated} updated · ${result.disconnected} disconnected · ${result.errors} errors ━━━`,
+    `━━━ SUPABASE DONE — ${result.created} new · ${result.updated} updated · ${result.disconnected} disconnected · ${result.errors} errors ━━━ in ${phase.done()}`,
   );
   return result;
 }

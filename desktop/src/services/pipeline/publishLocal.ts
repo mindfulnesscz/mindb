@@ -14,6 +14,7 @@
 import { copyFile, mkdir, rename, remove } from '@tauri-apps/plugin-fs';
 import { join, dirname } from '@tauri-apps/api/path';
 import type { AppSettings } from '../../store/settingsStore';
+import { timePhase } from './timing';
 import type { LogType } from '../../store/pipelineStore';
 import { buildVocabMap, translateExportName, stripStableId, isPreviewArtifact } from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
@@ -171,6 +172,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
   const layout: DestExportLayout = ctx.localExportLayout ?? 'folders';
   const includePackages = layout === 'folders' && !!ctx.localIncludePackages;
 
+  const phase = timePhase('PUBLISH');
   appendLog('section', `━━━ ${dryRun ? 'DRY RUN' : 'PUBLISHING'} ━━━`);
   appendLog('dim', `  → ${targetFolder}`);
   appendLog('dim', `  Layout: ${layout}${includePackages ? ' + nested packages' : ''} · always highest version only`);
@@ -395,6 +397,6 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
 
   appendLog('section',
     `━━━ PUBLISH DONE — ${stats.published} published · ${stats.skipped} unchanged · ` +
-    `${stats.disconnected} disconnected · ${stats.errors} errors ━━━`
+    `${stats.disconnected} disconnected · ${stats.errors} errors ━━━ in ${phase.done()}`
   );
 }

@@ -1,5 +1,24 @@
 # 04a — Per-stage timing instrumentation (run this FIRST)
 
+> **LANDED 2026-08-07.** `desktop/src/services/pipeline/timing.ts` + call sites in `pipelineService`,
+> every stage module, the Supabase/tag/stream/version-history sync modules, and `useRunPipeline`.
+> Green on `lint`, `typecheck`, `test:packages`, `test:desktop`, `build:docs`.
+>
+> **Two decisions worth knowing before touching it:**
+>
+> - **The timeline is module state, not a threaded collector.** A run's phases span `runPipeline`,
+>   the stage modules and the post-run sync in `useRunPipeline`, and the widest of them
+>   (`exportAssetsToSupabase`) already takes fourteen positional arguments. `beginRunTimeline()` in
+>   `handleRun` resets it, which is what keeps tests hermetic; `timePhase`/`timeStep` outside a run
+>   still return a working timer and simply record nothing, so a stage under unit test needs no setup.
+> - **`timePhase` ranks, `timeStep` does not.** A parent and its own child would otherwise take two
+>   of the five RUN TOTAL slots to say one thing, and summing both would inflate `measured`.
+>
+> **Known residual:** if `fetchAssetStorageState` or `fetchPreviewPageLimit` throws, its own phase
+> never settles and is absent from the ranking (the enclosing `catch` only settles the R2 grant).
+> The error is still logged. Worth two lines whenever someone is next in `useRunPipeline` — `04f`
+> rewrites that block anyway.
+>
 > Delegatable prompt. Prepend the SHARED CONTEXT block from `DONE_01_security-hardening-S0-S7.md`
 > before handing to an agent. Honour every "Non-negotiables" item in `00_START_HERE.md`.
 
