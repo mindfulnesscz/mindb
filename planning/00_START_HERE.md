@@ -5,7 +5,7 @@ CONTEXT block from `DONE_01_security-hardening-S0-S7.md` to any prompt before ha
 `REF_` files are reference/strategy, not tasks. `DONE_` files are already implemented — kept for
 context, don't re-run.
 
-_Last updated 2026-08-07 (00a/00b/00c landed; `02` closed; `04a`–`04f` performance series filed, evidence in `REF_performance-audit.md`; **`04a`–`04d` landed** — the run log carries per-phase durations, every batched stage runs on the shared `asyncPool` instead of a chunked barrier, path arithmetic no longer crosses the Rust bridge per file, the log no longer competes with the run for the main thread, and a no-change run writes zero readmes into the client's synced source tree. `04e` is next)._
+_Last updated 2026-08-07 (00a/00b/00c landed; `02` closed; `04a`–`04f` performance series filed, evidence in `REF_performance-audit.md`; **`04a`–`04e` landed** — the run log carries per-phase durations, every batched stage runs on the shared `asyncPool` instead of a chunked barrier, path arithmetic no longer crosses the Rust bridge per file, the log no longer competes with the run for the main thread, a no-change run writes zero readmes into the client's synced source tree, and a cloud export with a COLD upload cache no longer re-reads or re-lists what it could have asked once. `04f` is next — and it is the riskiest of the series)._
 
 ## 🚢 3.2.2 — code complete
 
@@ -28,13 +28,39 @@ throughput, which `00b` part A restored but which no automated test can observe.
 
 | # | File | What it does | Status |
 |---|---|---|---|
-| 04e | `04e_perf-cloud-export.md` | Drive folder-children sweep instead of per-file LIST; MD5 memo (stops cold-cache Dropbox downloads); OneDrive skip-if-unchanged; stretch: uploads in Rust. | TODO |
 | 04f | `04f_perf-stage-overlap.md` | Parallel pre-run fetches; early scanVersionMap; optional publish ∥ CDN overlap. Riskiest — run LAST. | TODO |
 | 05 | `05_asset-conversion-and-tag-inference.md` | The adoption feature: folder→asset conversion (drop/batch/right-click) + path/file-type tag inference. Prompts A–E, has its own dependency graph. | TODO (feature work — after the perf series) |
 
 The evidence behind the 04 series: `REF_performance-audit.md`.
 
 ## ✅ Done (implemented — don't re-run)
+
+- `DONE_04e_perf-cloud-export.md` — E1, E2, E3. **E4 (uploads in Rust) deliberately not taken** —
+  skippable by its own description, and the one part that cannot be finished honestly without a
+  manual >150 MB transfer against a real account. **E1**: a file's content is hashed **at most once,
+  ever**. `cloud-upload-cache.json` grew a second section — `{ uploads, hashes }`, `hashes` keyed by
+  **source path** and fingerprinted on mtime+size — because "these bytes hash to this" is a property
+  of the file, not of where it was sent, so a second destination, a reconnected one and a later run
+  all reuse it. The prompt's `md5?` on `CloudCacheEntry` would have been a DEAD FIELD (the early skip
+  fires on exactly the condition that would have read it) and is not there. The legacy flat shape is
+  still read. **E2**: `ensureGDriveFolderPaths` now returns `Map<path, folderId>` instead of throwing
+  the ids away, and `sweepGDriveFolderFiles` lists those folders once (4-wide, same `asyncPool`),
+  returning `Map<folderId, Map<name, file>>` or **`null` if any folder failed** — the CDN manifest's
+  convention, and for its reason: a listing believed complete when it is not reads as "not uploaded
+  yet" and puts a second copy beside the client's file. `listGDriveChildren` was **extended, not
+  forked**. Two additions the prompt did not ask for and the change needs: same-named FILES resolve
+  canonical-oldest (or two runs update different copies), and a file created during the run is
+  **folded back into the listing** — without that, two jobs writing one name into one folder would
+  create a duplicate where the per-file lookup used to update in place. **E3**: OneDrive asks Graph
+  what is there, compares size before reading anything, and only then compares a native streaming
+  **QuickXorHash** (`src-tauri/src/quickxor.rs`, a faithful port with a hand-computed vector and a
+  block-size-invariance test for the streaming carry). **Size-only skipping was rejected** — it is
+  weaker than the rule Drive's uploader already refuses, and every uncertain answer points at
+  uploading. Personal OneDrive publishes no QuickXorHash and uploads as before. **Also fixed,
+  unasked**: a stopped export used to discard its whole cache (saved only after the last
+  destination), so the next run started cold against a half-updated destination. **Still owed: the
+  timed cold-cache run** — clear the cache, run against a small real destination, confirm no
+  full-file reads and one `listed N Drive folder(s) once` line in place of N lookups.
 
 - `DONE_04d_perf-worker-pools-and-ipc.md` — all three parts. **A**: every chunked
   `for (i += 8) { await Promise.all(chunk) }` is now `asyncPool`, so a slot refills the moment it
@@ -185,6 +211,16 @@ The evidence behind the 04 series: `REF_performance-audit.md`.
 - `docs/pages/ideas/slimming-the-bundled-libreoffice.mdx` — the ~800MB trim, relevant before auto-update is turned on.
 
 ## Known deliberate residual (not a task)
+- **No provider skips on size alone** (`04e`). Drive refuses it when Drive publishes no md5, and
+  OneDrive refuses it when Graph publishes no `quickXorHash` — an edit preserving the byte count
+  would otherwise leave a client on the old file indefinitely. Every uncertain answer in a skip
+  decision (404, 401, 5xx, an absent hash, a failed listing) must point at UPLOADING. Adding a
+  size-only shortcut "because it closes most of the gap" reintroduces exactly the class of silent
+  staleness the pinned Drive test exists to prevent.
+- **A pre-listed Drive folder must be updated when the run writes into it** (`04e`,
+  `rememberCreatedFile`). The sweep is a snapshot; without the write-back, two jobs writing the same
+  name into one folder create a duplicate where the old per-file lookup updated in place. If the
+  sweep is ever reworked, that write-back is the part that is not an optimisation.
 - **`services/pipeline/paths.ts` does not resolve `.` or `..`** (`04d` Part B). Nothing in the
   pipeline composes them, and collapsing them in JS would be a way to climb out of a folder
   `path_policy` had approved. Canonicalisation stays in Rust, behind the scope check. Same file:

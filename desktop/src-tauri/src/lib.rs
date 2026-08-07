@@ -9,6 +9,7 @@ mod reveal;
 mod native;
 mod render;
 mod path_policy;
+mod quickxor;
 
 /// Extensions routed through LibreOffice → PDF → PDFium.
 ///
@@ -106,6 +107,18 @@ fn file_md5(app: tauri::AppHandle, path: String) -> Result<String, String> {
     let file = std::fs::File::open(&path)
         .map_err(|e| format!("open {}: {e}", path.display()))?;
     reader_md5(BufReader::new(file))
+}
+
+/// The OneDrive half of the same question: Graph publishes `file.hashes.quickXorHash` for an item,
+/// so a local file can be proved identical to the remote copy without uploading it. Streams from
+/// disk for the same reason `file_md5` does — the decision is "should this 500 MB video be sent
+/// again", and loading it into the webview to answer that would cost more than sending it.
+#[tauri::command(async)]
+fn file_quick_xor_hash(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let path = path_policy::require_allowed_file(&app, &path, "checksum source")?;
+    let file = std::fs::File::open(&path)
+        .map_err(|e| format!("open {}: {e}", path.display()))?;
+    quickxor::reader_quick_xor_hash(BufReader::new(file))
 }
 
 #[cfg(test)]
@@ -335,6 +348,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             files_equal,
             file_md5,
+            file_quick_xor_hash,
             generate_thumbnail,
             generate_document_previews,
             wait_for_oauth_redirect,

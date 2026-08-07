@@ -9,6 +9,7 @@
 
 import { open as openBrowser } from '@tauri-apps/plugin-shell';
 import type { CloudToken } from '../../domain/client';
+import { asyncPool } from '../pipeline/pool';
 import { REDIRECT_URI, generatePKCE, waitForCallback, delay } from './oauth';
 
 const DRIVE_FILES = 'https://www.googleapis.com/drive/v3/files';
@@ -253,23 +254,74 @@ async function getOrCreateGDriveFolder(
  * races for a folder at all, and any duplicate sets are reported before the first file moves rather
  * than interleaved with it. Sequential on purpose — these are a handful of paths, and the point is
  * to not be concurrent.
+ *
+ * Returns the resolved id for each DISTINCT path, which is what lets the caller sweep those folders'
+ * children once instead of asking Drive about every file (`sweepGDriveFolderFiles`).
  */
 export async function ensureGDriveFolderPaths(
   accessToken:   string,
   folderPaths:   string[],
   sharedDriveId: string,
   cacheScope:    string,
-): Promise<void> {
+): Promise<Map<string, string>> {
+  const resolved = new Map<string, string>();
   for (const folderPath of [...new Set(folderPaths)]) {
-    await getOrCreateGDriveFolder(accessToken, folderPath, sharedDriveId, cacheScope);
+    resolved.set(
+      folderPath,
+      await getOrCreateGDriveFolder(accessToken, folderPath, sharedDriveId, cacheScope),
+    );
   }
+  return resolved;
 }
 
-type GDriveRemoteFile = {
+export type GDriveRemoteFile = {
   id: string
   size?: string
   md5Checksum?: string
   webViewLink?: string
+}
+
+/** Folder listings run a few at a time: these are read-only metadata calls, but a large tree is
+ *  still one per folder and Drive's per-user quota is easy to reach. */
+const SWEEP_CONCURRENCY = 4;
+
+/**
+ * One children listing per destination FOLDER, in place of one `files.list` per FILE.
+ *
+ * `findGDriveFile` costs a round trip (~200–400 ms) for every file the local upload cache misses,
+ * and the whole library misses whenever that cache is cold — a first run, a reconnected destination,
+ * a cleared app data folder. A destination with 300 assets in 12 folders pays 300 of those requests
+ * to learn what 12 would have told it. This is the same trade the CDN stage already makes with its
+ * one key-manifest sweep per prefix (`fetchTieredManifest` in `pipeline/cdnUpload.ts`).
+ *
+ * `null` means the sweep failed and the caller must fall back to per-file lookups — the same
+ * convention, and for the same reason: a listing that came back short would read as "this file is
+ * not there yet" and create a SECOND copy beside the client's existing one. `listGDriveChildren`
+ * pages to the end and throws rather than returning a partial page, so short is not a state this
+ * can be in; a thrown page fails the whole sweep instead of quietly shrinking it.
+ */
+export async function sweepGDriveFolderFiles(
+  accessToken:   string,
+  folderIds:     Iterable<string>,
+  sharedDriveId: string,
+): Promise<Map<string, Map<string, GDriveRemoteFile>> | null> {
+  const ids = [...new Set(folderIds)];
+  const byFolder = new Map<string, Map<string, GDriveRemoteFile>>();
+  if (!ids.length) return byFolder;
+
+  const outcomes = await asyncPool(SWEEP_CONCURRENCY, ids, async (folderId) => {
+    const { files } = await listGDriveChildren(accessToken, folderId, sharedDriveId);
+    const byName = new Map<string, GDriveRemoteFile>();
+    // Drive allows two FILES of one name in a folder just as it allows two folders, and the listing
+    // is ordered by createdTime — so first-wins is oldest-wins, the same rule
+    // `pickCanonicalGDriveFolder` applies above. Two runs must not update different copies.
+    for (const file of files) {
+      if (!byName.has(file.name)) byName.set(file.name, file);
+    }
+    byFolder.set(folderId, byName);
+  });
+
+  return outcomes.every(o => o.status === 'fulfilled') ? byFolder : null;
 }
 
 /** Find an existing non-trashed file by exact name under a Drive folder. */
@@ -317,6 +369,26 @@ async function ensureGDriveShareLink(
   if (!meta.ok) return null;
   const data = await meta.json() as { webViewLink?: string };
   return data.webViewLink ?? null;
+}
+
+/* A file this run just created, folded back into the swept listing.
+ *
+ * Without it the sweep would be a REGRESSION on one path the per-file lookup handles: two jobs
+ * writing the same name into the same folder — a flattened export where two galleries hold an
+ * `01.jpg`, say. The second one used to list, find the first one's file and update it in place;
+ * against a listing taken before either ran it would instead create a second copy, which is the
+ * duplicate-in-Drive shape `DONE_02` spent a release removing for folders.
+ *
+ * No md5 is recorded: the caller has the bytes, not their hash, and an absent checksum makes the
+ * next comparison update in place rather than skip — the safe direction. */
+function rememberCreatedFile(
+  listed:   Map<string, GDriveRemoteFile> | null,
+  fileName: string,
+  created:  { id?: string; webViewLink?: string },
+  sizeStr:  string,
+): void {
+  if (!listed || !created.id) return;
+  listed.set(fileName, { id: created.id, size: sizeStr, webViewLink: created.webViewLink });
 }
 
 /**
@@ -379,9 +451,18 @@ export async function uploadGDriveFile(
   getLink:       boolean,
   sharedDriveId: string = '',
   cacheScope:    string = '',
+  /** Children of each destination folder, listed once up front by `sweepGDriveFolderFiles`. When
+   *  a folder is present here its contents are authoritative and no per-file lookup is made; `null`
+   *  (a failed or unattempted sweep) falls back to one `files.list` per file. A file created below
+   *  is written back into it, so a later upload of the same name in the same run still updates in
+   *  place rather than adding a second copy. */
+  preListed:     Map<string, Map<string, GDriveRemoteFile>> | null = null,
 ): Promise<{ url: string | null; skipped: boolean }> {
   const folderId = await getOrCreateGDriveFolder(accessToken, folderPath, sharedDriveId, cacheScope);
-  const existing = await findGDriveFile(accessToken, folderId, fileName, sharedDriveId);
+  const listed   = preListed?.get(folderId) ?? null;
+  const existing = listed
+    ? (listed.get(fileName) ?? null)
+    : await findGDriveFile(accessToken, folderId, fileName, sharedDriveId);
   const sizeStr  = String(localSize);
 
   if (existing?.size === sizeStr && existing.md5Checksum) {
@@ -412,6 +493,9 @@ export async function uploadGDriveFile(
           if (!updateRes.ok) throw new Error(`GDrive update failed (${updateRes.status}): ${await updateRes.text()}`);
           return await updateRes.json() as { id?: string; webViewLink?: string };
         })();
+    // Same reason as a create, plus the size it now holds — a later job for this name must not
+    // compare against the size the sweep saw before this write.
+    rememberCreatedFile(listed, fileName, { id: updated.id ?? existing.id, webViewLink: updated.webViewLink }, sizeStr);
     const url = getLink && updated.id
       ? await ensureGDriveShareLink(accessToken, updated.id, updated.webViewLink)
       : null;
@@ -423,6 +507,7 @@ export async function uploadGDriveFile(
     const fileData = await gdriveResumableUpload(
       accessToken, { name: fileName, parents: [folderId] }, bytes, mimeType,
     );
+    rememberCreatedFile(listed, fileName, fileData, sizeStr);
     const url = getLink && fileData.id
       ? await ensureGDriveShareLink(accessToken, fileData.id, fileData.webViewLink)
       : null;
@@ -457,6 +542,7 @@ export async function uploadGDriveFile(
   );
   if (!uploadRes.ok) throw new Error(`GDrive upload failed (${uploadRes.status}): ${await uploadRes.text()}`);
   const fileData = await uploadRes.json() as { id?: string; webViewLink?: string };
+  rememberCreatedFile(listed, fileName, fileData, sizeStr);
 
   const url = getLink && fileData.id
     ? await ensureGDriveShareLink(accessToken, fileData.id, fileData.webViewLink)
@@ -517,6 +603,9 @@ export interface GDriveChild {
   size?:        string;
   md5Checksum?: string;
   createdTime?: string;
+  /** Requested so the upload sweep can answer a share-link request without a second round trip;
+   *  the dedupe tool ignores it. */
+  webViewLink?: string;
 }
 
 export interface GDriveChildren {
@@ -539,7 +628,7 @@ export async function listGDriveChildren(
   do {
     const params = driveScope(new URLSearchParams({
       q:        `'${driveQuote(folderId)}' in parents and trashed=false`,
-      fields:   'nextPageToken,files(id,name,mimeType,size,md5Checksum,createdTime)',
+      fields:   'nextPageToken,files(id,name,mimeType,size,md5Checksum,createdTime,webViewLink)',
       orderBy:  'createdTime',
       pageSize: '200',
     }), sharedDriveId);

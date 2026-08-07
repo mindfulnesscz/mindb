@@ -21,8 +21,8 @@ import { invokeStub } from '../../test/invokeStub';
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (cmd: string, args: Record<string, unknown>) => invokeStub.invoke(cmd, args) }));
 vi.mock('@tauri-apps/plugin-shell', () => ({ open: vi.fn() }));
 
-const { graphDriveBase, uploadOneDriveFile } = await import('./onedrive');
-const { uploadGDriveFile, drainGDriveDuplicateFolders, pickCanonicalGDriveFolder } = await import('./gdrive');
+const { graphDriveBase, uploadOneDriveFile, oneDriveRemoteItem, oneDriveShareLink } = await import('./onedrive');
+const { uploadGDriveFile, drainGDriveDuplicateFolders, pickCanonicalGDriveFolder, sweepGDriveFolderFiles } = await import('./gdrive');
 const { uploadDropboxFile } = await import('./dropbox');
 
 const MIB = 1024 * 1024;
@@ -190,6 +190,61 @@ describe('uploadOneDriveFile — targeting and links', () => {
 });
 
 /* ════════════════════════════════════════════════════════════════════════════
+   OneDrive — what is already up there
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/** The item GET is the only thing standing between a cold cache and re-uploading the library, and
+ *  every failure mode of it must send the caller to the upload path rather than to a skip. */
+describe('oneDriveRemoteItem', () => {
+  const ITEM = /graph\.microsoft\.com\/[^?]*root:\/[^:]*$/;
+
+  it('reports the size and the QuickXorHash the skip decision compares against', async () => {
+    stub.route(ITEM, { json: {
+      size: 2048, webUrl: 'https://sp/deck', file: { hashes: { quickXorHash: 'QX==' } },
+    } });
+
+    await expect(oneDriveRemoteItem('tok', 'Client Assets/deck.pdf', 'b!drive')).resolves.toEqual({
+      size: 2048, quickXorHash: 'QX==', webUrl: 'https://sp/deck',
+    });
+    // Same per-segment encoding as the upload, or the probe and the PUT address different items.
+    expect(stub.calls[0].url).toContain('/drives/b!drive/root:/Client%20Assets/deck.pdf');
+  });
+
+  it('reports no hash for a personal drive, which publishes SHA-1/SHA-256 instead', async () => {
+    stub.route(ITEM, { json: { size: 10, file: { hashes: { sha256Hash: 'AB' } } } });
+    await expect(oneDriveRemoteItem('tok', 'deck.pdf')).resolves
+      .toEqual({ size: 10, quickXorHash: undefined, webUrl: undefined });
+  });
+
+  it('reads a 404 as "nothing there", which is the ordinary first-export answer', async () => {
+    stub.route(ITEM, { status: 404, text: 'itemNotFound' });
+    await expect(oneDriveRemoteItem('tok', 'deck.pdf')).resolves.toBeNull();
+  });
+
+  it('reads an auth or server failure as "nothing there" too — never as a skip', async () => {
+    stub.route(ITEM, { status: 401, text: 'InvalidAuthenticationToken' });
+    await expect(oneDriveRemoteItem('tok', 'deck.pdf')).resolves.toBeNull();
+    stub.route(ITEM, { status: 503, text: 'serviceNotAvailable' });
+    await expect(oneDriveRemoteItem('tok', 'deck.pdf')).resolves.toBeNull();
+  });
+
+  it('reads a folder, or anything without a size, as nothing to compare against', async () => {
+    stub.route(ITEM, { json: { folder: { childCount: 3 } } });
+    await expect(oneDriveRemoteItem('tok', 'Client Assets')).resolves.toBeNull();
+  });
+});
+
+describe('oneDriveShareLink', () => {
+  it('creates a link for a file this run did not upload', async () => {
+    // A skipped upload still owes the portal its URL; dropping it would blank the client's link.
+    stub.route(GRAPH_LINK, { json: { link: { webUrl: 'https://share/skipped' } } });
+    await expect(oneDriveShareLink('tok', 'Client Assets/deck.pdf', 'b!drive'))
+      .resolves.toBe('https://share/skipped');
+    expect(stub.one(GRAPH_LINK).url).toContain('/drives/b!drive/root:/Client%20Assets/deck.pdf:/createLink');
+  });
+});
+
+/* ════════════════════════════════════════════════════════════════════════════
    Google Drive upload — folder walk, the skip decision, the 5 MiB boundary
    ════════════════════════════════════════════════════════════════════════════ */
 
@@ -219,6 +274,7 @@ const LOCAL_MD5 = 'd41d8cd98f00b204e9800998ecf8427e';
 
 const upload = (over: Partial<{
   size: number; name: string; folder: string; getLink: boolean; driveId: string; md5: string;
+  preListed: Map<string, Map<string, { id: string; size?: string; md5Checksum?: string; webViewLink?: string }>>;
 }> = {}) => uploadGDriveFile(
   'tok',
   over.size ?? 1024,
@@ -229,6 +285,8 @@ const upload = (over: Partial<{
   over.folder ?? 'Sotto/ESS',
   over.getLink ?? false,
   over.driveId ?? '',
+  '',
+  over.preListed ?? null,
 );
 
 describe('pickCanonicalGDriveFolder', () => {
@@ -322,6 +380,115 @@ describe('uploadGDriveFile — the same-size skip', () => {
 
     expect(stub.matching(DRIVE_RESUMABLE)).toHaveLength(1);
     expect(stub.matching(DRIVE_MEDIA)).toHaveLength(0);
+  });
+});
+
+describe('sweepGDriveFolderFiles', () => {
+  const file = (id: string, name: string, over: Record<string, unknown> = {}) =>
+    ({ id, name, mimeType: 'application/pdf', size: '10', ...over });
+
+  it('returns one name→file map per folder, folders excluded', async () => {
+    stub.route(DRIVE_LIST, c => {
+      const parent = new URL(c.url).searchParams.get('q')?.match(/'([^']*)' in parents/)?.[1];
+      return { json: { files: [
+        file(`${parent}-a`, 'deck.pdf', { md5Checksum: 'aa', webViewLink: 'https://drive/a' }),
+        { id: `${parent}-sub`, name: 'nested', mimeType: 'application/vnd.google-apps.folder' },
+      ] } };
+    });
+
+    const swept = await sweepGDriveFolderFiles('tok', ['f1', 'f2'], '');
+
+    expect([...swept!.keys()].sort()).toEqual(['f1', 'f2']);
+    expect([...swept!.get('f1')!.keys()]).toEqual(['deck.pdf']);   // the folder is not a candidate
+    expect(swept!.get('f2')!.get('deck.pdf')).toMatchObject({ id: 'f2-a', webViewLink: 'https://drive/a' });
+  });
+
+  it('keeps the OLDEST of same-named files, the rule the folder resolver already uses', async () => {
+    // Drive allows two files of one name in a folder. Two runs picking differently would update
+    // different copies, and the client opens whichever one their sync happened to show.
+    stub.route(DRIVE_LIST, { json: { files: [
+      file('oldest', 'deck.pdf'), file('newer', 'deck.pdf'),
+    ] } });
+    const swept = await sweepGDriveFolderFiles('tok', ['f1'], '');
+
+    expect(swept!.get('f1')!.get('deck.pdf')!.id).toBe('oldest');
+    // Asked of Drive in that order as well as taken in it — the listing may be paged.
+    expect(new URL(stub.calls[0].url).searchParams.get('orderBy')).toBe('createdTime');
+  });
+
+  it('returns null when ANY folder fails, so the caller falls back per file', async () => {
+    // A sweep believed complete when it is not reads as "this file is not there yet" and puts a
+    // second copy beside the client's. Partial is never an answer; null is.
+    stub.route(DRIVE_LIST, c =>
+      new URL(c.url).searchParams.get('q')?.includes('broken')
+        ? { status: 403, text: 'insufficientPermissions' }
+        : { json: { files: [file('a', 'deck.pdf')] } });
+
+    await expect(sweepGDriveFolderFiles('tok', ['fine', 'broken'], '')).resolves.toBeNull();
+  });
+
+  it('is a no-op with no folders, rather than a failed sweep', async () => {
+    await expect(sweepGDriveFolderFiles('tok', [], '')).resolves.toEqual(new Map());
+    expect(stub.calls).toHaveLength(0);
+  });
+});
+
+/* One listing per folder replaces one lookup per file. The listing is taken before the batch starts
+   (`sweepGDriveFolderFiles`), which is what makes a cold upload cache affordable — 300 assets in 12
+   folders used to cost 300 round trips to learn what 12 would have said. */
+describe('uploadGDriveFile — the pre-listed folder sweep', () => {
+  /** `files.list` calls that asked about a FILE rather than resolving a folder. */
+  const fileLookups = () => stub.matching(DRIVE_LIST)
+    .filter(c => !FOLDER_Q.test(new URL(c.url).searchParams.get('q') ?? ''));
+
+  it('decides the skip from the pre-listed children, without asking Drive about the file', async () => {
+    routeDrive();
+    const preListed = new Map([['folder-listedskip', new Map([
+      ['deck.pdf', { id: 'known', size: '1024', md5Checksum: LOCAL_MD5, webViewLink: 'https://drive/known' }],
+    ])]]);
+
+    const r = await upload({ size: 1024, folder: 'prelist/listedskip', preListed });
+
+    expect(r).toEqual({ url: null, skipped: true });
+    expect(fileLookups()).toHaveLength(0);
+  });
+
+  it('treats a folder present in the sweep but missing the name as "not there yet"', async () => {
+    routeDrive();
+    const preListed = new Map([['folder-empty', new Map()]]);
+
+    await upload({ folder: 'prelist/empty', preListed });
+
+    expect(fileLookups()).toHaveLength(0);
+    expect(stub.matching(DRIVE_MULTIPART)).toHaveLength(1);
+  });
+
+  it('folds a file it just created back into the sweep, so a same-name sibling updates in place', async () => {
+    /* The one case the per-file lookup handled and a snapshot cannot: two jobs writing the same name
+       into one folder — a flattened export where two galleries each hold an `01.jpg`. The second one
+       used to find the first one's file and update it. Against a listing taken before either ran it
+       would create a SECOND copy, which is the duplicate-in-Drive shape the folder work removed. */
+    routeDrive();
+    const preListed = new Map([['folder-writeback', new Map()]]);
+
+    await upload({ folder: 'prelist/writeback', name: 'clash.jpg', preListed });
+    await upload({ folder: 'prelist/writeback', name: 'clash.jpg', preListed });
+
+    expect(stub.matching(DRIVE_MULTIPART)).toHaveLength(1);          // created once
+    expect(stub.one(DRIVE_MEDIA).url).toContain('/files/new-file?'); // then updated in place
+    expect(fileLookups()).toHaveLength(0);
+  });
+
+  it('still asks per file for a folder the sweep does not cover', async () => {
+    // A failed sweep passes `null`; a partial one is not a state it can be in, but an unknown folder
+    // id must fall back rather than be read as empty.
+    routeDrive({ existing: { id: 'old', size: '1024', md5Checksum: LOCAL_MD5 } });
+    const preListed = new Map([['some-other-folder', new Map()]]);
+
+    const r = await upload({ size: 1024, folder: 'prelist/uncovered', preListed });
+
+    expect(fileLookups()).toHaveLength(1);
+    expect(r.skipped).toBe(true);
   });
 });
 

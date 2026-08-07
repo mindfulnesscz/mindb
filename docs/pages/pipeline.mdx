@@ -135,8 +135,11 @@ For each cloud destination with a valid OAuth token:
 
 Sharing links (when `generateLink`) are keyed by `(stable_id, child_id)` and later written to
 Supabase for the portal. Equal filenames in separate packages cannot overwrite each other's links.
-An existing same-name file is skipped only when both its size and Drive MD5 checksum match the local
-file.
+An existing remote file is skipped only when both its size and its provider content hash match the
+local file — Drive's `md5Checksum`, OneDrive's `quickXorHash` — each computed natively and reused
+across destinations and runs. A destination's mtime+size cache short-circuits all of that; what it
+costs when that cache is **cold** is described in
+[Cloud destination comparison](/cloud-storage/overview#what-a-run-costs-when-its-upload-cache-is-cold).
 
 **Google Drive folder resolution is race-safe.** Drive addresses folders by id, not path, and accepts
 several folders with one name in the same parent — so uploading 8-wide into a tree that does not

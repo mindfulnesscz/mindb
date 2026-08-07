@@ -8,10 +8,29 @@ A destination has a provider, name, pipeline role (`internal` / `client`), porta
 |---|---|---|---|---|---|
 | Local | None | mtime/size skip in local publishing | Can mirror folders | Synced enterprise folder, inspectable output | Depends on another sync client; local disk coupling |
 | Dropbox | Browser PKCE | **Skips if path exists**, regardless of changed content | Cloud stage is flat into remote path | Simple delivery, stable shared links | Existing remote file can become stale |
-| OneDrive | Device code | PUT overwrites same path | Cloud stage is flat | Microsoft 365 users | Conditional Access; simple upload is memory/CORS-sensitive |
-| Google Drive | Browser PKCE plus client secret | Skip only when size **and** MD5 match; update in place when changed | Resolves remote folders by id, creating them once per run | Workspace/Shared Drive collaboration | Full-file memory upload; public permission creation |
+| OneDrive | Device code | Skip only when size **and** QuickXorHash match; PUT overwrites otherwise | Cloud stage is flat | Microsoft 365 users | Conditional Access; simple upload is memory/CORS-sensitive |
+| Google Drive | Browser PKCE plus client secret | Skip only when size **and** MD5 match; update in place when changed | Resolves remote folders by id, listing each once per run | Workspace/Shared Drive collaboration | Full-file memory upload; public permission creation |
 
 All three provider uploads are one API operation per file, not a zip or transactional batch. OneDrive and Google Drive read the complete file into the webview’s memory. Dropbox uses native Rust to avoid webview binary limits.
+
+## What a run costs when its upload cache is cold
+
+Each destination keeps an mtime+size record per delivered file in `cloud-upload-cache.json`, and a
+match there skips the file with no network call at all. That cache is **empty on a first run, after
+reconnecting a destination (it is keyed by destination id), and after clearing the app data folder**
+— and a sync client that rewrites mtimes can invalidate it wholesale. The cold path is therefore the
+one that decides how long an export takes, and three things bound it:
+
+- **Content is hashed at most once per file, ever.** The hash a skip decision needs (Drive's MD5,
+  OneDrive's QuickXorHash) is computed natively and stored beside the upload records, keyed by
+  source path and fingerprinted on mtime+size. Two destinations, a reconnected destination, or a
+  later run reuse it. This matters beyond CPU: hashing **reads** the file, and reading an
+  online-only file in a synced source tree downloads it.
+- **Drive lists each destination folder once**, not once per file, and answers every existence
+  question for that run from the listing. A failed listing falls back to a lookup per file rather
+  than assuming a folder is empty — assuming would put a second copy beside the client's file.
+- **A stopped export keeps what it learned.** The cache is written on the way out of a stopped run,
+  so resuming does not start cold against a destination that is already half up to date.
 
 Only generated links from destinations with role `client` are written to `download_urls`. The portal then role-gates those links with `minRole` / `showInPortal`. R2 `download_url` remains the primary Download button — see [CDN and cloud URLs](/data-model/cloud-links).
 

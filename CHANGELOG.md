@@ -204,7 +204,57 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   `x-amz-meta-sha256` and cache headers, an unservable key is still refused, a page's source is
   still deleted as part of its move, and a failed asset still stays queued with its reason.
 
+- **Cloud export stops paying full price for a cold upload cache.** Each destination keeps an
+  mtime+size record per delivered file, and with that cache warm the export was already fast — no
+  network, no reads. Everything it does on a cache MISS was written as though a miss were rare. It
+  is not: the cache is empty on a first run, after reconnecting a destination (it is keyed by
+  destination id), after clearing the app data folder, and effectively after any sync client that
+  rewrites mtimes.
+
+  **A file's content is now hashed at most once, ever.** Drive's skip needs the local MD5, and
+  hashing means READING the file — which on a Dropbox or iCloud source tree means macOS downloads an
+  online-only file to answer "has this changed", the same bug class as the byte-compare removed from
+  the publish stage. Two destinations used to pay it twice for the same bytes, and a reconnected
+  destination paid it again on every later run. The hash is recorded beside the upload records,
+  keyed by SOURCE path and fingerprinted on mtime+size, so a second destination, a later run and a
+  resumed run all reuse it. A file whose mtime or size moved is re-hashed rather than trusted.
+
+  **Google Drive lists each destination folder once instead of asking about every file.** Drive has
+  no paths, so every cache-missed file cost a `files.list` round trip of its own — 300 assets across
+  12 folders spent 300 requests learning what 12 could say. After the destination tree is resolved,
+  its folders are listed once and every upload in that run reads its answer from there. Two files of
+  one name in a folder resolve to the **oldest**, the rule folder resolution already used, so two
+  runs cannot update different copies; a file created during the run is folded back into the listing
+  so a same-name sibling later in the run updates it rather than adding a duplicate. **A failed
+  listing falls back to a query per file** — a listing believed complete when it is not would read
+  as "not uploaded yet" and put a second copy beside the client's file, which is the same reasoning
+  behind the CDN key manifest's `null`.
+
+  **A stopped export now keeps what it learned.** The cache was written only after the last
+  destination, so stopping a long run — a normal thing to do — discarded every record of what had
+  already been sent, and the next run started cold against a destination that was half up to date.
+
+  What is uploaded, skipped, or linked is unchanged, and the export boundary is untouched: a client
+  destination still receives assets and never an artifact.
+
 ### Fixed
+
+- **OneDrive re-uploaded every file it could have skipped.** Alone among the providers it had no
+  skip-if-unchanged rule at all: on any cache miss it read the whole file off disk and PUT it. A
+  cold cache therefore re-sent the entire library over a link the operator is usually waiting on,
+  and on a synced source tree the read alone could pull every online-only file back down.
+
+  Sotto now asks Graph what is already at that path first. Sizes are compared before anything is
+  read; only if they match is the local **QuickXorHash** computed — Microsoft's own 160-bit content
+  hash, implemented natively and streamed from disk — and compared with the item's
+  `file.hashes.quickXorHash`. Both matching skips the file, and a sharing link is still collected
+  for it so the portal keeps its URL.
+
+  **Size alone is deliberately not enough**, which is the same judgement Drive's uploader has always
+  made: an edit preserving the byte count would otherwise leave a client on the old file
+  indefinitely. Every uncertain answer points at uploading instead — a 404, a 401, a Graph outage,
+  or an item that publishes no QuickXorHash (personal OneDrive publishes SHA-1/SHA-256 instead) all
+  send the file exactly as before.
 
 - **A token expiring mid-run could revoke the session instead of renewing it.** A `401` is retried
   once with a force-refreshed token, which was correct while requests went out one at a time. With

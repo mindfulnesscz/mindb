@@ -150,6 +150,54 @@ async function onedriveCreateLink(
   return null;
 }
 
+/** What Graph says about an item already at a path. `quickXorHash` is absent on personal OneDrive,
+ *  which publishes SHA-1/SHA-256 instead — see `oneDriveRemoteItem`. */
+export interface OneDriveRemoteItem {
+  size:          number;
+  quickXorHash?: string;
+  webUrl?:       string;
+}
+
+/**
+ * Metadata for the item at a remote path, or `null` when there is nothing there to compare against.
+ *
+ * This is what gives the OneDrive export a skip-if-unchanged decision at all: it used to read every
+ * file off disk and PUT it on every cache miss, so a cold upload cache re-sent the entire library
+ * over a link the operator is usually waiting on. One small GET per file answers it instead.
+ *
+ * **Any failure reads as "no remote item"**, which sends the caller down the upload path — the same
+ * direction the code took before this existed. A 404 is the ordinary answer for a file that has
+ * never been exported, and a 401 or a 5xx must not turn into a skip.
+ */
+export async function oneDriveRemoteItem(
+  accessToken: string,
+  remotePath:  string,
+  driveId?:    string,
+): Promise<OneDriveRemoteItem | null> {
+  const encodedPath = remotePath.split('/').map(encodeURIComponent).join('/');
+  const res = await fetch(
+    `${graphDriveBase(driveId)}/root:/${encodedPath}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  ).catch(() => null);
+  if (!res?.ok) return null;
+  const item = await res.json().catch(() => null) as {
+    size?: number; webUrl?: string; file?: { hashes?: { quickXorHash?: string } };
+  } | null;
+  if (typeof item?.size !== 'number') return null;
+  return { size: item.size, quickXorHash: item.file?.hashes?.quickXorHash, webUrl: item.webUrl };
+}
+
+/** The sharing link for a file that was NOT uploaded this run. `uploadOneDriveFile` returns one as
+ *  part of its own work; a skipped file still needs its URL for the portal. */
+export async function oneDriveShareLink(
+  accessToken: string,
+  remotePath:  string,
+  driveId?:    string,
+): Promise<string | null> {
+  const encodedPath = remotePath.split('/').map(encodeURIComponent).join('/');
+  return onedriveCreateLink(graphDriveBase(driveId), encodedPath, accessToken);
+}
+
 export async function uploadOneDriveFile(
   accessToken: string,
   bytes:        Uint8Array<ArrayBuffer>,

@@ -4,6 +4,9 @@ const uploadDropboxFile = vi.fn();
 const uploadOneDriveFile = vi.fn();
 const uploadGDriveFile = vi.fn();
 const ensureGDriveFolderPaths = vi.fn();
+const sweepGDriveFolderFiles = vi.fn();
+const oneDriveRemoteItem = vi.fn();
+const oneDriveShareLink = vi.fn();
 const drainGDriveDuplicateFolders = vi.fn(() => [] as Array<{ path: string; count: number; chosenId: string }>);
 
 vi.mock('@tauri-apps/plugin-fs', async () => (await import('../test/vfs')).vfs.fsApi());
@@ -15,6 +18,9 @@ vi.mock('./cloudService', () => ({
   uploadOneDriveFile: (...args: unknown[]) => uploadOneDriveFile(...args),
   uploadGDriveFile: (...args: unknown[]) => uploadGDriveFile(...args),
   ensureGDriveFolderPaths: (...args: unknown[]) => ensureGDriveFolderPaths(...args),
+  sweepGDriveFolderFiles: (...args: unknown[]) => sweepGDriveFolderFiles(...args),
+  oneDriveRemoteItem: (...args: unknown[]) => oneDriveRemoteItem(...args),
+  oneDriveShareLink: (...args: unknown[]) => oneDriveShareLink(...args),
   drainGDriveDuplicateFolders: () => drainGDriveDuplicateFolders(),
 }));
 
@@ -28,6 +34,11 @@ beforeEach(() => {
   uploadOneDriveFile.mockReset();
   uploadGDriveFile.mockReset();
   ensureGDriveFolderPaths.mockReset();
+  sweepGDriveFolderFiles.mockReset();
+  sweepGDriveFolderFiles.mockResolvedValue(new Map());
+  oneDriveRemoteItem.mockReset();
+  oneDriveRemoteItem.mockResolvedValue(null);
+  oneDriveShareLink.mockReset();
   drainGDriveDuplicateFolders.mockReset();
   drainGDriveDuplicateFolders.mockReturnValue([]);
 });
