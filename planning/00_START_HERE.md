@@ -5,7 +5,7 @@ CONTEXT block from `DONE_01_security-hardening-S0-S7.md` to any prompt before ha
 `REF_` files are reference/strategy, not tasks. `DONE_` files are already implemented — kept for
 context, don't re-run.
 
-_Last updated 2026-08-07 (00a/00b/00c landed; `02` closed; `04a`–`04f` performance series filed, evidence in `REF_performance-audit.md`; **`04a` and `04b` landed** — the run log carries per-phase durations, and the Supabase row writes are pooled 8-wide on the shared `asyncPool` that `04d` reuses)._
+_Last updated 2026-08-07 (00a/00b/00c landed; `02` closed; `04a`–`04f` performance series filed, evidence in `REF_performance-audit.md`; **`04a`, `04b` and `04c` landed** — the run log carries per-phase durations, the Supabase row writes are pooled 8-wide on the shared `asyncPool` that `04d` reuses, and a no-change run writes zero readmes into the client's synced source tree)._
 
 ## 🚢 3.2.2 — code complete
 
@@ -28,7 +28,6 @@ throughput, which `00b` part A restored but which no automated test can observe.
 
 | # | File | What it does | Status |
 |---|---|---|---|
-| 04c | `04c_perf-readme-churn.md` | Stop rewriting every readme.md into the Dropbox source tree every run (timestamp removed, skip-if-unchanged). | TODO |
 | 04d | `04d_perf-worker-pools-and-ipc.md` | Chunked barriers → true worker pools; pure-string path joins (kill per-file IPC); log/progress batching. | TODO — `asyncPool` is built and shipped, so Part A is a mechanical swap |
 | 04e | `04e_perf-cloud-export.md` | Drive folder-children sweep instead of per-file LIST; MD5 memo (stops cold-cache Dropbox downloads); OneDrive skip-if-unchanged; stretch: uploads in Rust. | TODO |
 | 04f | `04f_perf-stage-overlap.md` | Parallel pre-run fetches; early scanVersionMap; optional publish ∥ CDN overlap. Riskiest — run LAST. | TODO |
@@ -37,6 +36,22 @@ throughput, which `00b` part A restored but which no automated test can observe.
 The evidence behind the 04 series: `REF_performance-audit.md`.
 
 ## ✅ Done (implemented — don't re-run)
+
+- `DONE_04c_perf-readme-churn.md` — a no-change run now writes **zero** readmes. Every package
+  folder gets a `readme.md`, and each carried a `_Last synced: <timestamp>_` line, so its content
+  differed from the copy on disk every run and every run rewrote the whole library — inside the
+  client's **synced Dropbox source tree**, which then spent the minutes after each run re-uploading
+  hundreds of tiny files saying the same thing as before. `buildReadme` is now a pure function of its
+  input (**do not reintroduce a clock, a random id, or anything else that varies between two runs
+  over identical data** — the skip depends on it), and `writeReadme` reads the existing file,
+  compares, and writes only on a difference. **The comparison is against DISK, never a record of what
+  the last run wrote**: that is what heals a teammate's edit or a deletion in the shared folder, and
+  a missing/unreadable file reads as "write it" so every failure errs toward writing. Stats still
+  flow — a changed rating, view count, `status` or `perm` changes the content and that one readme is
+  written. One summary line replaces the old per-target count (which was wrong: targets are not one
+  per folder). Same path, same name, so Obsidian is unaffected. Tests: `readmeService.test.ts` and
+  `supabase/assetExportReadme.test.ts`. **Still owed: the timed no-change run** and a manual check
+  that Dropbox shows no re-sync storm afterwards — neither is observable from a test.
 
 - `DONE_04b_perf-supabase-write-concurrency.md` — the biggest silent gap, closed. The Supabase
   export was issuing **one awaited PostgREST round trip per asset row**, in series, for parents and
