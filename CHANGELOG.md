@@ -9,9 +9,17 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 **Deployment**
 
-- No migration, no environment variables, no operator action. The one new file,
-  `run-timings.jsonl`, is created in the app data directory on the first run after upgrading and is
-  safe to delete at any time — it costs the timing history and nothing else.
+- **One migration, and the `cdn-reconcile` function must be deployed with it.**
+  `20260807120000_cdn_move_queue_keep_attempt_marker` stops the queue trigger clearing `attempts`
+  and `last_error` on a re-queue; the reconcile's new "skip the page sweep when the level did not
+  move" rule reads that marker to decide when skipping is unsafe. Apply with `supabase migration up`
+  — pending migrations only, never a reset — then `supabase functions deploy cdn-reconcile`, local →
+  staging → production. **Deploying the function without the migration is the wrong order**: the
+  trigger would keep erasing the marker, and an asset whose earlier pass failed could have a page
+  left at a wider level than its row. The reverse order is harmless.
+- No environment variables or secrets change. The one new file, `run-timings.jsonl`, is created in
+  the app data directory on the first run after upgrading and is safe to delete at any time — it
+  costs the timing history and nothing else.
 - **The first run after upgrading has nothing to compare against.** Deltas appear from the second
   comparable run onwards; until then the `RUN TOTAL` block prints without them.
 
@@ -107,6 +115,39 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   teammate's edit to a readme in the shared folder, or a deleted one, is still healed by the next
   run. Nothing moved: same path, same name, same format minus one line, so Obsidian reads them
   exactly as before.
+
+- **The CDN reconcile stopped being the run.** It was 20.5 s of a 23.7 s run over 29 assets — 87 %
+  of the wall clock — and almost none of it was work. Page previews have no URL column, so the mover
+  finds them by attempting a copy from every level except the target and expecting three of four to
+  miss; it did that for every queued asset whether or not its level had moved, one round trip at a
+  time. A twenty-page deck is sixty attempts, forty of them guaranteed to find nothing, and the
+  migration that introduced the queue seeded it with the whole library on the reasoning that a no-op
+  pass is cheap.
+
+  Four changes, in order of what they were worth:
+
+  **The page sweep runs only when the level actually moved.** `cdn_move_queue.was_level` was already
+  recorded and described as "purely diagnostic"; when it still matches the row's effective level the
+  pages are where they belong. Every case that cannot be shown safe still sweeps — including a row
+  whose previous attempt failed, because a partial pass can leave one document's pages split across
+  two levels while `was_level` still looks correct.
+
+  **Within one bucket the bytes no longer pass through the function.** A move used to GET the whole
+  object into the edge runtime, hash it, and PUT it back. Same-bucket moves — every level change
+  inside the gated tier — are now one server-side `x-amz-copy-source` request. Crossing the
+  public/gated boundary still streams, because temporary credentials are minted per bucket and no
+  single signature can read one and write the other.
+
+  **Assets and their pages move concurrently** (4 × 6) instead of one round trip at a time.
+
+  **A run waits for its own client only.** The desktop passes `client_id`, so it no longer queues
+  behind another tenant's backlog; anything left is drained by a second pass that outlives the run.
+  It still *does* wait for its own client, deliberately: the Stream sync immediately after reads
+  each master off `download_url`, which must already point at the key its level requires.
+
+  **No access-level behaviour changes.** The same objects end up at the same keys with the same
+  `x-amz-meta-sha256` and cache headers, an unservable key is still refused, a page's source is
+  still deleted as part of its move, and a failed asset still stays queued with its reason.
 
 ### Fixed
 

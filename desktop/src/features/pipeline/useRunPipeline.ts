@@ -281,13 +281,24 @@ async function syncRunToPortal(a: {
 
     /* This run changed `status` — new rows published, absent files disconnected — and status is
        half of the access level, so some objects now belong at a different key. The trigger queued
-       them; drain it here rather than leaving it for whoever next opens the portal. */
+       them; drain it here rather than leaving it for whoever next opens the portal.
+
+       SCOPED TO THIS CLIENT, and the run waits for it: the Stream sync below reads each master off
+       `download_url`, so those rows must already point at the key their level requires. What the run
+       does NOT wait for is everyone else's backlog — that is drained by a follow-up pass that
+       outlives this line. The queue is durable, so a follow-up that never lands delays the move
+       rather than losing it. */
     if (!a.isStopping()) {
       if (a.effectiveSettings.dryRun) a.log('dim', '  [DRY] would drain CDN reconcile tasks');
       else {
         const reconcilePhase = timePhase('CDN RECONCILE');
-        await reconcileCdnObjects(a.sbConfig, a.log);
+        const outcome = await reconcileCdnObjects(a.sbConfig, a.log, { clientId: a.clientId });
         a.log('dim', `  CDN reconcile drained in ${reconcilePhase.done()}`);
+        if (outcome && outcome.remaining > 0) {
+          a.log('dim',
+            `  ⟳  ${outcome.remaining} asset(s) queued elsewhere — draining after the run`);
+          void reconcileCdnObjects(a.sbConfig, a.log, { background: true });
+        }
       }
     }
 

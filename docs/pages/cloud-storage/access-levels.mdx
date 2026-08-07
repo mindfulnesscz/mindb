@@ -121,6 +121,16 @@ invisible to both: narrowing a deck from `client` to `internal` moved its thumbn
 readable under the old `client/` prefix. Both now additionally LIST each of the four level prefixes for
 the asset's page directory.
 
+**The page sweep only runs when the level actually moved.** Probing four levels for a page that did
+not move is three round trips per page that cannot succeed, and `cdn_move_queue` was seeded with the
+entire library on the reasoning that a no-op pass is cheap — it was not, it was most of a pipeline
+run (20.5 s of a 23.7 s run, measured 2026-08-07). The queue records `was_level`; when it still
+matches the row's effective level and no earlier attempt on that row failed, the pages are already
+where they belong and the sweep is skipped. Every other case sweeps, including a row whose previous
+attempt failed: a partial pass moves some pages and deletes their sources while others stay put, so
+the pages can be split across two levels while `was_level` still looks correct. The rule lives in
+`supabase/functions/_shared/reconcile-policy.ts` and nowhere else.
+
 One deliberate asymmetry. For a thumbnail or original the reconciler **leaves the source in place** —
 its URL column has been repointed, so the move remains recoverable. The next desktop upload that
 touches that identity confirms the current target and then prunes its thumbnail and original from all
@@ -241,6 +251,25 @@ One edit sets off four things, in this order:
 Steps 3 and 4 need a caller to drain the queue. The portal does it after an edit and the desktop
 after a run, so in practice it is seconds — but an empty `cdn_move_queue` is the only proof that
 bytes and levels agree.
+
+### How a move is actually performed
+
+Three properties worth knowing, because they are what keeps a drain off a pipeline run's critical
+path:
+
+- **Within one bucket the bytes never enter the function.** A level change inside the gated tier —
+  `client` → `internal` and its kin, which is most of them — is a single signed `x-amz-copy-source`
+  request that R2 performs server-side. Crossing the public/gated boundary still streams the object
+  through the function, because temporary credentials are minted per bucket and no one signature can
+  read one and write the other. That is a property of the grant; do not widen the credentials to
+  make it faster.
+- **Assets, and the pages within an asset, are moved concurrently** (4 × 6). Every unit of work is a
+  network round trip, so the serial loop this replaced was almost entirely idle.
+- **A caller can narrow the batch.** The portal passes `asset_ids` for exactly what it just changed;
+  the desktop passes `client_id`, so a run waits for its own client's queue but not for another
+  tenant's backlog. Whatever is left over is reported as `remaining`, and the desktop starts a
+  second, unwaited pass for it — the queue is durable, so a pass that never lands delays a move
+  rather than losing one.
 
 ### When the reconcile fails
 

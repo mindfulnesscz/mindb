@@ -28,6 +28,20 @@ interface ReconcileResult {
   failures?: ReconcileFailure[];
 }
 
+export interface ReconcileOptions {
+  /**
+   * Drain only this client's share of the queue.
+   *
+   * A run has to wait for the assets it just changed — Stream pulls a master straight off
+   * `download_url` in the next stage, so the row must already point at the key the level requires.
+   * It has no reason to wait behind another tenant's backlog, which is what an unscoped drain makes
+   * it do.
+   */
+  clientId?: string | null;
+  /** Set on the follow-up pass so it cannot schedule another one. */
+  background?: boolean;
+}
+
 /** How many per-asset reasons to print before collapsing the rest into a count. */
 const MAX_REPORTED = 5;
 
@@ -55,15 +69,21 @@ export function describeReconcileFailures(failures: ReconcileFailure[]): string[
   return lines;
 }
 
+/**
+ * Drain the move queue. Returns how many assets are still queued across every client, or null when
+ * the call could not be made at all — the queue is durable, so either way nothing is lost.
+ */
 export async function reconcileCdnObjects(
   config:    SupabaseConfig,
   appendLog: (type: string, msg: string) => void,
-): Promise<void> {
+  options:   ReconcileOptions = {},
+): Promise<{ remaining: number } | null> {
+  const where = options.background ? ' (background)' : '';
   try {
     const res = await sbFetch(`${config.url}/functions/v1/cdn-reconcile`, {
       method:  'POST',
       headers: await makeHeaders(config.anonKey),
-      body:    '{}',
+      body:    JSON.stringify(options.clientId ? { client_id: options.clientId } : {}),
     });
     if (!res.ok) {
       // 503 means the environment has no gated tier configured, which is a setup gap rather than a
@@ -71,12 +91,12 @@ export async function reconcileCdnObjects(
       const detail = res.status === 503
         ? 'gated storage not provisioned for this environment'
         : await res.text();
-      appendLog('dim', `  ⦾  CDN reconcile skipped (${res.status}): ${detail}`);
-      return;
+      appendLog('dim', `  ⦾  CDN reconcile skipped${where} (${res.status}): ${detail}`);
+      return null;
     }
     const r = await res.json<ReconcileResult>();
     if (r.moved || r.failed || r.remaining) {
-      appendLog('dim', `  ⟳  CDN reconcile — ${r.moved} moved · ${r.failed} failed · ${r.remaining} still queued`);
+      appendLog('dim', `  ⟳  CDN reconcile${where} — ${r.moved} moved · ${r.failed} failed · ${r.remaining} still queued`);
     }
     /* The summary alone sent people to the Supabase dashboard's function logs, which is exactly
        where a desktop user cannot go mid-run. `warn`, not `dim`: a failure here means bytes and
@@ -88,7 +108,9 @@ export async function reconcileCdnObjects(
       // detail does not read as "no reason available".
       appendLog('warn', '      ↳ no per-asset reasons returned — check the cdn-reconcile function logs');
     }
+    return { remaining: r.remaining ?? 0 };
   } catch (e) {
-    appendLog('dim', `  ⦾  CDN reconcile unavailable: ${e}`);
+    appendLog('dim', `  ⦾  CDN reconcile unavailable${where}: ${e}`);
+    return null;
   }
 }
