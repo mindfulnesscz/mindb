@@ -22,7 +22,7 @@ so Dropbox online-only files stay online-only during local export).
 | P2 | Every readme.md rewritten (timestamp) into the Dropbox source tree every run | `readmeService.ts`, `assetExport.ts` | N serial writes + Dropbox re-sync storm | 04c |
 | P3 | Chunked `Promise.all` barriers idle 7 slots on one slow item; pages-upload outer loop serial per document; prune/delete loops serial | `thumbnails.ts`, `cdnUpload.ts`, `cloudExport.ts`, `cdnCleanup.ts` | slowest-item × chunks | 04d-A |
 | P4 | `join()`/`dirname()` are IPC round trips, called once per file in every walk | `pipeline/*`, `dam/*` | thousands of IPC hops | 04d-B |
-| P5 | Pre-run fetches serial; `scanVersionMap` runs after all network syncs; publish (disk) serialized behind CDN (network) | `useRunPipeline.ts`, `pipelineService.ts` | sum instead of max | 04f |
+| P5 | Pre-run fetches serial; `scanVersionMap` runs after all network syncs; publish (disk) serialized behind CDN (network) | `useRunPipeline.ts`, `pipelineService.ts` | sum instead of max | 04f — first two fixed; **publish ∥ CDN dropped**, ceiling measured at 0.2–0.8 s (see `DONE_04f`) |
 | P6 | Per-line store updates for log + progress thrash the main thread | `pipelineStore` consumers | UI jank disguised as run time | 04d-C |
 | P7 | No timings anywhere — regressions are invisible | run log | — | 04a |
 | G1 | Drive: per-file `files.list` on every cache miss | `gdrive.ts` `findGDriveFile` | N × RTT when cache cold | 04e-E2 |

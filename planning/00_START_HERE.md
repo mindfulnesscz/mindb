@@ -5,7 +5,7 @@ CONTEXT block from `DONE_01_security-hardening-S0-S7.md` to any prompt before ha
 `REF_` files are reference/strategy, not tasks. `DONE_` files are already implemented — kept for
 context, don't re-run.
 
-_Last updated 2026-08-07 (00a/00b/00c landed; `02` closed; `04a`–`04f` performance series filed, evidence in `REF_performance-audit.md`; **`04a`–`04e` landed** — the run log carries per-phase durations, every batched stage runs on the shared `asyncPool` instead of a chunked barrier, path arithmetic no longer crosses the Rust bridge per file, the log no longer competes with the run for the main thread, a no-change run writes zero readmes into the client's synced source tree, and a cloud export with a COLD upload cache no longer re-reads or re-lists what it could have asked once. `04f` is next — and it is the riskiest of the series)._
+_Last updated 2026-08-07 (00a/00b/00c landed; `02` closed; **the whole `04a`–`04f` performance series is now closed**, evidence in `REF_performance-audit.md` — the run log carries per-phase durations, every batched stage runs on the shared `asyncPool` instead of a chunked barrier, path arithmetic no longer crosses the Rust bridge per file, the log no longer competes with the run for the main thread, a no-change run writes zero readmes into the client's synced source tree, a cloud export with a COLD upload cache no longer re-reads or re-lists what it could have asked once, and the pre-run reads plus the version-history walk no longer wait in series for work that shares nothing. `04f`'s third part — publish ∥ CDN — was **measured and dropped**: its ceiling on real runs is 0.2–0.8 s. `05` is next, and it is feature work)._
 
 ## 🚢 3.2.2 — code complete
 
@@ -28,12 +28,38 @@ throughput, which `00b` part A restored but which no automated test can observe.
 
 | # | File | What it does | Status |
 |---|---|---|---|
-| 04f | `04f_perf-stage-overlap.md` | Parallel pre-run fetches; early scanVersionMap; optional publish ∥ CDN overlap. Riskiest — run LAST. | TODO |
-| 05 | `05_asset-conversion-and-tag-inference.md` | The adoption feature: folder→asset conversion (drop/batch/right-click) + path/file-type tag inference. Prompts A–E, has its own dependency graph. | TODO (feature work — after the perf series) |
+| 05 | `05_asset-conversion-and-tag-inference.md` | The adoption feature: folder→asset conversion (drop/batch/right-click) + path/file-type tag inference. Prompts A–E, has its own dependency graph. | TODO (the perf series is closed — this is next) |
 
 The evidence behind the 04 series: `REF_performance-audit.md`.
 
 ## ✅ Done (implemented — don't re-run)
+
+- `DONE_04f_perf-stage-overlap.md` — **F1 and F2 landed; F3 was measured and dropped.** The four
+  pre-run reads (vocabulary, `r2-grant`, asset levels, page-preview limit) go out together from the
+  new `features/pipeline/preRun.ts`, and **their results are still applied, logged and degraded in
+  the old order** — the lines are emitted after the join rather than as each read lands, so an
+  operator reads the same run they read before. A failed grant still disables the CDN steps with the
+  same line and still **discards the two reads that already finished**, because `preview_page_limit`
+  decides how many pages a degraded run renders LOCALLY; a read that throws behind a good grant still
+  stops the ones after it, which is what falling out of the old `try` block did. The
+  **version-history walk** now starts right after the source scan (`ctx.earlyVersionScan` ⇒
+  `ctx.versionScan`) and is awaited where the portal sync consumes it — nothing the run writes
+  changes what it reads, and a run with no portal never starts it. Its rejection is **carried as a
+  value**: the await is minutes away, and an unhandled rejection would replace the one log line the
+  failure is meant to produce (the test fails if that handler is removed).
+  **Measured, from `run-timings.jsonl` on this machine:** the pre-run block now equals the `R2 grant`
+  step exactly (561 ms, 1017 ms) against a serial 394–910 ms before — the other three reads cost
+  nothing, ~60–85 ms hidden against LOCAL Supabase, ~0.5 s against a remote project where each read
+  is 150–300 ms rather than 20 ms. **F3 (publish ∥ CDN) is not worth it:** across nine real runs the
+  disk chain (`DISTRIBUTE` + `PUBLISH`) never exceeded **0.8 s**, so `min(disk, network)` — the entire
+  prize — is 0.2–0.8 s, against concurrency around the 🚫-rename and the package hard-delete, an
+  interleaved log whose only clean fix loses its timestamps (`appendLog` stamps a line when the store
+  hears about it), a progress bar fed by two stages with no arbitration, and a join that lets one
+  chain finish the run while the other is still copying into a client's folder. The two hot phases in
+  the real data are `CDN ORIGINALS` (143 s / 15 assets) and `CLOUD EXPORT` (163 s) — single-destination
+  network transfers, where the win is bandwidth or skipping, not overlap. **Still owed: one run
+  against a real client library** — F2's value scales with the `versions/` subtrees and was 6 ms on a
+  15-asset library. Look for `Version map ready in 3ms (walked in 6.1s alongside the run)`.
 
 - `DONE_04e_perf-cloud-export.md` — all four parts, in two commits. **E4** turned out to rest on a
   false premise: `upload_to_dropbox` did NOT stream from disk (`std::fs::read` of the whole file,
@@ -250,6 +276,12 @@ The evidence behind the 04 series: `REF_performance-audit.md`.
   pipeline composes them, and collapsing them in JS would be a way to climb out of a folder
   `path_policy` had approved. Canonicalisation stays in Rust, behind the scope check. Same file:
   `appDataDir()` and every other OS question still goes through `@tauri-apps/api/path`.
+- **A phase measures what the run WAITED, not what the work took** (`04f`). Anything overlapping the
+  run is a `timeStep`, never a `timePhase`: the four pre-run reads are steps under one
+  `PRE-RUN READS` phase, and `VERSION SCAN` is the wait for a walk that already happened. Otherwise
+  concurrent work is counted twice and `measured … of …` — the line whose whole job is to reveal
+  untimed work as a positive difference — claims more time than the run took. Report the overlapped
+  work's own duration in the log line instead, as the version map does.
 - **A `section` log line flushes the buffer synchronously** (`04d` Part C). Everything else waits up
   to 100 ms. That is what keeps stage banners current in a tail, keeps breadcrumbs attributable, and
   guarantees batching never reorders a log. If you add a log type that must be immediate, flush it
