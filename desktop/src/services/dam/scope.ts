@@ -5,7 +5,7 @@
  * as assets — writing notes about notes, one level deeper every time.
  */
 
-import { join } from '@tauri-apps/api/path';
+import { joinPath } from '../pipeline/paths';
 import type { AppSettings } from '../../store/settingsStore';
 import {
   listDir, shouldSkip, isPackageFolder,
@@ -34,7 +34,7 @@ export async function findPackageAnchors(root: string, s: AppSettings): Promise<
     }
     for (const e of entries) {
       if (e.isDirectory && !isPackageFolder(e.name, s) && !shouldSkip(e.name, s)) {
-        await walk(await join(dir, e.name));
+        await walk(joinPath(dir, e.name));
       }
     }
   }

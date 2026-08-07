@@ -10,7 +10,7 @@
  * skips, to build version history for the portal.
  */
 
-import { join } from '@tauri-apps/api/path';
+import { joinPath } from './paths';
 import type { AppSettings } from '../../store/settingsStore';
 import {
   type VocabularyData, buildVocabMap, parseFilename, extractStableId, isPreviewArtifact,
@@ -33,7 +33,7 @@ export async function scanAllAssets(
     const hasOut  = entries.some(e => e.isDirectory && isOutFolder(e.name, s));
     const dirs    = entries.filter(e => e.isDirectory && !shouldSkip(e.name, s) && !isPackageFolder(e.name, s));
     await Promise.all(dirs.map(async e => {
-      const childPath = await join(dir, e.name);
+      const childPath = joinPath(dir, e.name);
       if (isOutFolder(e.name, s)) {
         await collectInOut(childPath);
       } else if (!hasOut) {
@@ -49,7 +49,7 @@ export async function scanAllAssets(
     await Promise.all(entries.map(async e => {
       if (e.name.startsWith('.') || shouldSkip(e.name, s) || isPreviewArtifact(e.name)) return;
       if (e.isDirectory && e.name.toLowerCase() === 'versions') return; // versions/ handled separately in VH sync
-      const childPath = await join(dir, e.name);
+      const childPath = joinPath(dir, e.name);
       if (e.isFile && isPublishableFile(e.name)) {
         results.push(childPath);
       } else if (e.isDirectory) {
@@ -134,10 +134,10 @@ export async function scanVersionMap(
       entries
         .filter(e => e.isDirectory && !shouldSkip(e.name, settings) && !isPackageFolder(e.name, settings))
         .map(async e => {
-          const childPath = await join(dir, e.name);
+          const childPath = joinPath(dir, e.name);
           if (isOutFolder(e.name, settings)) {
             await collectFromDir(childPath, false);
-            const versPath = await join(childPath, 'versions');
+            const versPath = joinPath(childPath, 'versions');
             await collectFromDir(versPath, true).catch(() => {}); // OK if absent
           } else if (!hasOut) {
             await walkForVH(childPath);
@@ -150,7 +150,7 @@ export async function scanVersionMap(
     const entries = await listDir(dir);
     await Promise.all(entries.map(async e => {
       if (e.name.startsWith('.') || shouldSkip(e.name, settings) || isPreviewArtifact(e.name)) return;
-      const childPath = await join(dir, e.name);
+      const childPath = joinPath(dir, e.name);
       if (e.isFile) {
         addEntry(childPath, e.name, isHistory);
       } else if (e.isDirectory && e.name.toLowerCase() !== 'versions') {

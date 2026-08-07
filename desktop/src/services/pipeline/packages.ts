@@ -11,7 +11,7 @@
  */
 
 import { copyFile, mkdir, remove, exists } from '@tauri-apps/plugin-fs';
-import { join, dirname } from '@tauri-apps/api/path';
+import { joinPath, parentPath } from './paths';
 import type { AppSettings } from '../../store/settingsStore';
 import type { LogType } from '../../store/pipelineStore';
 import { filterHighestVersions, buildVocabMap, translateExportName, isPreviewArtifact } from '@sotto/domain';
@@ -33,7 +33,7 @@ export async function findPackageFolders(root: string, s: AppSettings): Promise<
     for (const e of entries) {
       if (!e.isDirectory) continue;
       if (shouldSkip(e.name, s)) continue;
-      const childPath = await join(dir, e.name);
+      const childPath = joinPath(dir, e.name);
       if (isPackageFolder(e.name, s)) {
         results.push(childPath);
       } else {
@@ -61,7 +61,7 @@ async function collectOutUnderParent(
       if (!e.isDirectory || shouldSkip(e.name, s)) continue;
       // Never harvest from (or through) another 📦 anchor.
       if (isPackageFolder(e.name, s)) continue;
-      const childPath = await join(dir, e.name);
+      const childPath = joinPath(dir, e.name);
       if (isOutFolder(e.name, s)) {
         results.push(...await collectFiles(childPath, s, false));
       } else {
@@ -77,7 +77,7 @@ async function collectPackageOutSources(
   packageDir: string,
   s: AppSettings,
 ): Promise<string[]> {
-  const parent = await dirname(packageDir);
+  const parent = parentPath(packageDir);
   return collectOutUnderParent(parent, s);
 }
 
@@ -112,7 +112,7 @@ export async function purgePackageMirror(
     for (const e of entries) {
       if (e.name.startsWith('.') || shouldSkip(e.name, s)) continue;
       const childRel = rel ? `${rel}/${e.name}` : e.name;
-      const childPath = await join(dir, e.name);
+      const childPath = joinPath(dir, e.name);
       if (e.isDirectory) {
         /* An artifacts folder has no business in a package mirror. Purging it as a unit also
            removes the now-empty directory, which a file-by-file purge would leave behind. */
@@ -136,7 +136,7 @@ export async function purgePackageMirror(
 
   let removed = 0;
   for (const rel of purgeRels) {
-    const abs = await join(pkgDir, rel);
+    const abs = joinPath(pkgDir, rel);
     if (dryRun) {
       appendLog('dim', `  🗑  [DRY] would remove from ${logPrefix}: ${rel}`);
       removed += 1;
@@ -208,7 +208,7 @@ export async function syncPackageFromOut(
     const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
     const stem = ext ? rawName.slice(0, -ext.length) : rawName;
     const translated = translateExportName(stem, ext, vocabMap);
-    const destFile = await join(pkg, translated);
+    const destFile = joinPath(pkg, translated);
 
     const claimedBy = claimedDests.get(destFile);
     if (claimedBy) {
@@ -236,7 +236,7 @@ export async function syncPackageFromOut(
     }
 
     try {
-      await mkdir(await dirname(destFile), { recursive: true });
+      await mkdir(parentPath(destFile), { recursive: true });
       await copyFile(srcFile, destFile);
       appendLog('success', `  ✓  package ← ${rawName} → ${translated}`);
       result.copied += 1;

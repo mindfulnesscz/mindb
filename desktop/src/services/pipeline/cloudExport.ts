@@ -9,7 +9,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { stat, readFile, readTextFile, writeTextFile, exists } from '@tauri-apps/plugin-fs';
-import { join, appDataDir } from '@tauri-apps/api/path';
+import { appDataDir } from '@tauri-apps/api/path';
 import { timePhase, timeStep } from './timing';
 import {
   assetIdentityKey, buildVocabMap, translateExportName, stripWorkflowPrefix, isArtifactPath,
@@ -24,6 +24,7 @@ import { findPackageFolders, syncPackageFromOut, keepOnlyHighestVersions } from 
 import { nestedPublishRel } from './publishLocal';
 import { mimeFromExt } from './cdnUpload';
 import { asyncPool } from './pool';
+import { joinPath } from './paths';
 
 /** Unchanged from the chunked batches this replaced — the pipeline's standing upload width. */
 const UPLOAD_CONCURRENCY = 8;
@@ -34,7 +35,7 @@ type CloudCache = Record<string, CloudCacheEntry>
 let cloudCacheMemo: CloudCache | null = null
 
 async function getCloudCachePath(): Promise<string> {
-  return await join(await appDataDir(), 'cloud-upload-cache.json')
+  return joinPath(await appDataDir(), 'cloud-upload-cache.json')
 }
 
 async function loadCloudCache(): Promise<CloudCache> {

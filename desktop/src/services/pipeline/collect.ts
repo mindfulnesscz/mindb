@@ -4,7 +4,7 @@
  * translate, purge, copy) lives in ./packages, which is where the destructive part is.
  */
 
-import { basename } from '@tauri-apps/api/path';
+import { baseName } from './paths';
 import { buildVocabMap } from '@sotto/domain';
 import type { RunContext, RunStats } from './types';
 import { timePhase } from './timing';
@@ -45,7 +45,7 @@ export async function runDistribute(ctx: RunContext, stats: RunStats): Promise<v
   for (let idx = 0; idx < packages.length; idx++) {
     if (ctx.isStopping?.()) return;
     const pkg = packages[idx];
-    const pkgName = await basename(pkg);
+    const pkgName = baseName(pkg);
     appendLog('section', `📦  ${pkgName}`);
 
     const sync = await syncPackageFromOut(

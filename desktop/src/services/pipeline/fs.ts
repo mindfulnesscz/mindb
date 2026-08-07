@@ -10,7 +10,7 @@
  */
 
 import { readDir, stat, type DirEntry } from '@tauri-apps/plugin-fs';
-import { join } from '@tauri-apps/api/path';
+import { joinPath } from './paths';
 import type { AppSettings } from '../../store/settingsStore';
 import { shouldSkip, isPackageFolder, isPublishableFile } from './naming';
 import { isPreviewArtifact } from '@sotto/domain';
@@ -50,7 +50,7 @@ export async function collectFiles(dir: string, s: AppSettings, directOnly = fal
        collect `001.webp` as a publishable asset — page names carry no marker of any kind, so
        nothing downstream would have caught it. */
     if (isPreviewArtifact(e.name)) continue;
-    const childPath = await join(dir, e.name);
+    const childPath = joinPath(dir, e.name);
     if (e.isFile && isPublishableFile(e.name)) {
       results.push(childPath);
     } else if (e.isDirectory && !directOnly && !isPackageFolder(e.name, s)) {

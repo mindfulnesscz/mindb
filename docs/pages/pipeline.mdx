@@ -51,6 +51,14 @@ skipped changed with any of this, and no width was raised.
 
 `scanAllAssets` walks the configured source folder looking for folders named `OUT` (configurable — the naming convention settings default to `[03] OUT`) and collects every publishable file inside them (skipping each folder's `thumbnails/` artifacts and `versions/`, which is handled separately by Version history sync). This file list feeds every step below — nothing after this point re-scans the disk.
 
+The walk composes its paths in JavaScript (`services/pipeline/paths.ts`), not through
+`@tauri-apps/api/path`. Those calls look like string helpers but each one is an IPC round trip to
+Rust, and the scan, publish, collect and DAM walks call them **once per directory entry** — a few
+thousand bridge crossings per run to concatenate strings. The replacements are pure functions
+producing byte-identical results; `.` and `..` are deliberately *not* resolved, because
+canonicalisation belongs in Rust behind the path-policy scope check. Genuinely platform-specific
+lookups such as `appDataDir()` still go through the real API.
+
 ### 1 — Generate thumbnails
 
 For each collected asset, the Rust backend renders a WebP thumbnail (Office documents via bundled LibreOffice, PDFs via bundled PDFium, images directly) at the configured width/quality. Skipped for file types that don't support thumbnailing. Every output goes into a `thumbnails/` folder beside the assets it serves — see [thumbnail generation](/desktop/thumbnails) for the layout and for how a pre-3.2.2 library is migrated into it. Raster thumbnails record the source size + mtime and render settings in a hidden manifest; an existing WebP is reused only while that fingerprint still matches. Document thumbnails and page previews use the equivalent `.pages.json` fingerprint.

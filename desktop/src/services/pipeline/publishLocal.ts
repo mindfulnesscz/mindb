@@ -12,7 +12,7 @@
  */
 
 import { copyFile, mkdir, rename, remove } from '@tauri-apps/plugin-fs';
-import { join, dirname } from '@tauri-apps/api/path';
+import { joinPath, parentPath } from './paths';
 import type { AppSettings } from '../../store/settingsStore';
 import { timePhase } from './timing';
 import type { LogType } from '../../store/pipelineStore';
@@ -49,7 +49,7 @@ export async function flagDisconnected(
     const entries = read.entries;
     for (const e of entries) {
       if (e.name.startsWith('.')) continue;
-      const childPath = await join(dir, e.name);
+      const childPath = joinPath(dir, e.name);
       acc.push({ path: childPath, isDir: !!e.isDirectory });
       if (e.isDirectory) await collectAll(childPath, acc);
     }
@@ -126,7 +126,7 @@ export async function flagDisconnected(
     }
 
     if (name.startsWith('🚫')) continue;
-    const flagged = await join(existingPath.substring(0, existingPath.lastIndexOf('/')), `🚫 ${name}`);
+    const flagged = joinPath(existingPath.substring(0, existingPath.lastIndexOf('/')), `🚫 ${name}`);
     try {
       await rename(existingPath, flagged);
       appendLog('disconnected', `  🚫 DISCONNECTED: ${rel}`);
@@ -211,7 +211,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
 
     if (livePub.has(fileDest)) { stats.skipped += 1; return; }
     livePub.add(fileDest);
-    const destParent = await dirname(fileDest);
+    const destParent = parentPath(fileDest);
     livePub.add(destParent);
 
     if (dryRun) {
@@ -249,7 +249,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
     for (const pkg of packages) {
       if (ctx.isStopping?.()) return;
       const rel = nestedPublishRel(sourceFolder, pkg);
-      const destPkg = await join(targetFolder, rel);
+      const destPkg = joinPath(targetFolder, rel);
       stats.pubFolders += 1;
       livePub.add(destPkg);
       appendLog('section', `📦  ${rel}`);
@@ -276,7 +276,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
         const stem = ext ? rawName.slice(0, -ext.length) : rawName;
         const translated = translateExportName(stem, ext, vocabMap);
         liveNames.add(translated);
-        await copyOne(srcPath, await join(destPkg, translated), `${rel}/${translated}`);
+        await copyOne(srcPath, joinPath(destPkg, translated), `${rel}/${translated}`);
       }
 
       // Target 📦 = exact live mirror — wipe older versions / renamed tags (no 🚫).
@@ -312,7 +312,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
       const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()! : '';
       const stem = ext ? rawName.slice(0, -ext.length) : rawName;
       const translated = translateExportName(stem, ext, vocabMap);
-      await copyOne(srcPath, await join(targetFolder, translated), translated);
+      await copyOne(srcPath, joinPath(targetFolder, translated), translated);
     }
   } else {
     appendLog('dim', '  Mode: full folders (OUT tree)');
@@ -324,7 +324,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
         item => item.isFile && !shouldSkip(item.name, settings)
           && isPublishableFile(item.name) && !isPreviewArtifact(item.name),
       );
-      const paths = await Promise.all(fileItems.map(f => join(dirPath, f.name)));
+      const paths = fileItems.map(f => joinPath(dirPath, f.name));
       const { kept, dropped } = keepOnlyHighestVersions(paths);
       if (dropped.length) {
         appendLog('skip', `  ⊘  dropped ${dropped.map(p => p.split('/').pop()).join(', ')}`);
@@ -339,7 +339,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
         const ext = name.includes('.') ? '.' + name.split('.').pop()! : '';
         const stem = ext ? name.slice(0, -ext.length) : name;
         const translated = translateExportName(stem, ext, vocabMap);
-        await copyOne(fileSrc, await join(targetDir, translated), `${name} → ${translated}`);
+        await copyOne(fileSrc, joinPath(targetDir, translated), `${name} → ${translated}`);
       }
       for (const item of items) {
         if (ctx.isStopping?.()) return;
@@ -348,8 +348,8 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
            names (`001.webp`), so a filter applied to files alone would let a document's page
            previews through into a client's folder as assets. */
         if (isPreviewArtifact(item.name)) continue;
-        const subSrc    = await join(dirPath, item.name);
-        const subTarget = await join(targetDir, item.name);
+        const subSrc    = joinPath(dirPath, item.name);
+        const subTarget = joinPath(targetDir, item.name);
         livePub.add(subTarget);
         await publishDir(subSrc, subTarget);
       }
@@ -365,7 +365,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
         if (isPreviewArtifact(e.name)) continue;
         // Package dirs next to OUT are handled by publishNestedPackages when enabled.
         if (isPackageFolder(e.name, settings)) continue;
-        const childSrc = await join(src, e.name);
+        const childSrc = joinPath(src, e.name);
 
         if (isOutFolder(e.name, settings)) {
           stats.pubFolders += 1;
@@ -373,7 +373,7 @@ export async function runPublish(ctx: RunContext, stats: RunStats): Promise<void
         } else {
           const hasSiblingOut = entries.some(sib => sib.isDirectory && isOutFolder(sib.name, settings));
           if (hasSiblingOut) continue;
-          await publishFolder(childSrc, await join(target, stripStableId(e.name)));
+          await publishFolder(childSrc, joinPath(target, stripStableId(e.name)));
         }
       }
     }

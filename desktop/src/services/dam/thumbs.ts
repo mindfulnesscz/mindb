@@ -7,7 +7,7 @@
 import {
   copyFile, mkdir,
 } from '@tauri-apps/plugin-fs';
-import { join } from '@tauri-apps/api/path';
+import { joinPath } from '../pipeline/paths';
 import { invoke } from '@tauri-apps/api/core';
 import { isPreviewArtifact, thumbPathFor } from '@sotto/domain';
 import {
@@ -37,7 +37,7 @@ export async function galleryFirstThumbnable(folder: string): Promise<string | n
       return GALLERY_THUMB_EXTS.has(ext);
     })
     .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
-  return candidates.length ? join(folder, candidates[0].name) : null;
+  return candidates.length ? joinPath(folder, candidates[0].name) : null;
 }
 
 /* Copy pre-existing -thumb.webp, or generate via Rust command if missing.
@@ -51,7 +51,7 @@ export async function ensureThumb(
 ): Promise<string | null> {
   try {
     await mkdir(attRoot, { recursive: true });
-    const destPath  = await join(attRoot, destName);
+    const destPath  = joinPath(attRoot, destName);
     const srcDir    = srcFile.substring(0, srcFile.lastIndexOf('/'));
     const srcStem   = srcFile.split('/').pop()!.replace(/\.[^.]+$/, '');
     const preExisting = thumbPathFor(srcDir, srcStem);

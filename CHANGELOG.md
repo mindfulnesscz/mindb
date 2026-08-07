@@ -112,6 +112,15 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   dispatched moved. **Stop** is still checked before every dispatch, and requests already in the air
   still finish.
 
+- **Path arithmetic stopped crossing the Rust bridge.** `join`, `dirname` and `basename` from
+  `@tauri-apps/api/path` read like string helpers but each one is an IPC round trip, and the scan,
+  publish, collect and DAM walks called them **once per directory entry** — a few thousand bridge
+  crossings per run to concatenate strings. They are now pure functions
+  (`services/pipeline/paths.ts`) producing byte-identical results, which the characterization suites
+  check by comparing full absolute paths. `.` and `..` are deliberately *not* resolved:
+  canonicalisation belongs in Rust, behind the path-policy scope check. Genuinely
+  platform-specific lookups such as `appDataDir()` still go through the real API.
+
 - **The Supabase export writes rows eight at a time instead of one at a time.** It was issuing one
   awaited PostgREST round trip per asset row, in series, for parents and then for children. At the
   150–300 ms a round trip actually costs, a 300-asset library spent 45–90 seconds of every run doing
