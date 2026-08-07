@@ -102,7 +102,18 @@ Highest version only. Package folders become a **hard mirror of live OUT**:
 
 Migrated `Name __hash` asset folders are **not** package anchors (even with `.dchub.json`); destination export still publishes their OUT via the normal folders walk.
 
-Copy decisions use size + mtime as a fast gate (`isUnchanged`), then compare the files byte-for-byte in the Rust backend before skipping. The comparison streams fixed-size chunks rather than loading two large creative files into the webview. A restored older source or same-size content swap is therefore republished instead of being mistaken for an old unchanged file. Re-running is always safe.
+Copy decisions are **metadata only** (`isUnchanged`): same size, and a destination at least as new as
+the source, counts as unchanged. Neither file is opened.
+
+That is deliberate and it must stay that way. Source trees live in cloud storage — Dropbox through
+the macOS File Provider — where online-only files are dataless placeholders and **any** read forces a
+full download. A byte-for-byte comparison used to sit behind the stat gate, and because `copyFile`
+does not preserve mtime the destination was always newer, so the gate never short-circuited: every
+no-change export read the entire library and pulled every online-only file onto disk.
+
+**The accepted trade-off is the restored-backup case.** A same-size content swap whose mtime went
+*backwards* — restoring an older file over a newer one — now reads as unchanged and is skipped. Repair
+it by touching the sources or deleting the target copies. Re-running is otherwise safe.
 
 ### 3 — Export to destinations
 
