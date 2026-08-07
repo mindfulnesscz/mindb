@@ -111,8 +111,25 @@ async fn dropbox_sharing_link(
     Err(format!("Dropbox sharing link failed ({status}): {text}"))
 }
 
+const DROPBOX_CONTENT: &str = "https://content.dropboxapi.com/2";
+
+/// The three headers every Dropbox content-endpoint request carries. `Dropbox-API-Arg` is where
+/// the whole request actually lives — the body is bytes and nothing else.
+fn dropbox_content_headers(access_token: &str, api_arg: String) -> Vec<(String, String)> {
+    vec![
+        ("Authorization".into(), format!("Bearer {access_token}")),
+        ("Content-Type".into(),  "application/octet-stream".into()),
+        ("Dropbox-API-Arg".into(), api_arg),
+    ]
+}
+
 /// Upload a local file to Dropbox, skipping if already present, and optionally return a sharing URL.
-/// Uses Rust/reqwest — no WKWebView body-size or CSP restrictions.
+///
+/// The bytes are STREAMED from disk (`upload_stream`). They used to be `std::fs::read` into a
+/// `Vec<u8>` and then copied again per 48 MB chunk, which made "Dropbox runs natively" a claim about
+/// where the copy lived rather than about there being one — a 500 MB deliverable was 500 MB resident
+/// plus a chunk on top. That whole-file read was also blocking work inside an `async fn`, which pins
+/// a runtime thread for its duration; nothing here blocks now.
 #[tauri::command]
 pub async fn upload_to_dropbox(
     app:          tauri::AppHandle,
@@ -135,15 +152,17 @@ pub async fn upload_to_dropbox(
         return Ok(DropboxUploadResult { url, skipped: true });
     }
 
-    let bytes = std::fs::read(&file_path)
-        .map_err(|e| format!("Cannot read {}: {e}", file_path.display()))?;
+    let total = tokio::fs::metadata(&file_path)
+        .await
+        .map_err(|e| format!("Cannot stat {}: {e}", file_path.display()))?
+        .len();
 
     // Dropbox's simple /files/upload endpoint is capped at 150 MB; larger files
     // must use a chunked upload session (start → append_v2 → finish).
-    const DROPBOX_SIMPLE_MAX: usize = 150 * 1024 * 1024;
+    const DROPBOX_SIMPLE_MAX: u64 = 150 * 1024 * 1024;
 
-    if bytes.len() > DROPBOX_SIMPLE_MAX {
-        dropbox_upload_session(&client, &access_token, &remote_path, &bytes).await?;
+    if total > DROPBOX_SIMPLE_MAX {
+        dropbox_upload_session(&access_token, &remote_path, &file_path, total).await?;
     } else {
         let api_arg = json!({
             "path":       remote_path,
@@ -153,20 +172,17 @@ pub async fn upload_to_dropbox(
         })
         .to_string();
 
-        let upload_res = client
-            .post("https://content.dropboxapi.com/2/files/upload")
-            .header(AUTHORIZATION, format!("Bearer {access_token}"))
-            .header(CONTENT_TYPE, "application/octet-stream")
-            .header("Dropbox-API-Arg", &api_arg)
-            .body(bytes)
-            .send()
-            .await
-            .map_err(|e| format!("Dropbox upload request failed: {e}"))?;
-
-        if !upload_res.status().is_success() {
-            let status = upload_res.status().as_u16();
-            let body   = upload_res.text().await.unwrap_or_default();
-            return Err(format!("Dropbox upload failed ({status}): {body}"));
+        let res = crate::upload_stream::send_file_stream(
+            &format!("{DROPBOX_CONTENT}/files/upload"),
+            "POST",
+            &dropbox_content_headers(&access_token, api_arg),
+            &file_path,
+            0,
+            None,
+        )
+        .await?;
+        if !res.ok() {
+            return Err(format!("Dropbox upload failed ({}): {}", res.status, res.body));
         }
     }
 
@@ -181,102 +197,89 @@ pub async fn upload_to_dropbox(
 
 /// Chunked upload for files above Dropbox's 150 MB simple-upload limit.
 /// start (first chunk) → append_v2 (middle chunks) → finish (last chunk + commit).
+///
+/// Every request streams its own range straight off disk, so peak memory is one read buffer no
+/// matter how large the file or the chunk is.
 async fn dropbox_upload_session(
-    client:       &reqwest::Client,
     access_token: &str,
     remote_path:  &str,
-    bytes:        &[u8],
+    file_path:    &std::path::Path,
+    total:        u64,
 ) -> Result<(), String> {
     // 48 MB chunks (Dropbox requires a multiple of 4 MB, max 150 MB per request).
-    const CHUNK: usize = 48 * 1024 * 1024;
-    let total = bytes.len();
+    const CHUNK: u64 = 48 * 1024 * 1024;
+
+    let commit_arg = |offset: u64| json!({
+        "cursor": { "session_id": "", "offset": offset },
+        "commit": { "path": remote_path, "mode": "overwrite", "autorename": false, "mute": false },
+    });
 
     // Start with the first chunk.
     let first_end = std::cmp::min(CHUNK, total);
-    let start_res = client
-        .post("https://content.dropboxapi.com/2/files/upload_session/start")
-        .header(AUTHORIZATION, format!("Bearer {access_token}"))
-        .header(CONTENT_TYPE, "application/octet-stream")
-        .header("Dropbox-API-Arg", json!({ "close": false }).to_string())
-        .body(bytes[0..first_end].to_vec())
-        .send()
-        .await
-        .map_err(|e| format!("Dropbox session start failed: {e}"))?;
-    if !start_res.status().is_success() {
-        let status = start_res.status().as_u16();
-        return Err(format!("Dropbox session start failed ({status}): {}", start_res.text().await.unwrap_or_default()));
+    let start = crate::upload_stream::send_file_stream(
+        &format!("{DROPBOX_CONTENT}/files/upload_session/start"),
+        "POST",
+        &dropbox_content_headers(access_token, json!({ "close": false }).to_string()),
+        file_path,
+        0,
+        Some(first_end),
+    )
+    .await?;
+    if !start.ok() {
+        return Err(format!("Dropbox session start failed ({}): {}", start.status, start.body));
     }
-    let start_text = start_res.text().await.unwrap_or_default();
-    let start_val: serde_json::Value = serde_json::from_str(&start_text).unwrap_or_default();
+    let start_val: serde_json::Value = serde_json::from_str(&start.body).unwrap_or_default();
     let session_id = start_val["session_id"].as_str().unwrap_or_default().to_string();
     if session_id.is_empty() {
-        return Err(format!("Dropbox session start returned no session_id: {start_text}"));
+        return Err(format!("Dropbox session start returned no session_id: {}", start.body));
     }
+
+    let finish = |offset: u64, length: u64| {
+        let mut arg = commit_arg(offset);
+        arg["cursor"]["session_id"] = json!(session_id);
+        let headers = dropbox_content_headers(access_token, arg.to_string());
+        async move {
+            let res = crate::upload_stream::send_file_stream(
+                &format!("{DROPBOX_CONTENT}/files/upload_session/finish"),
+                "POST", &headers, file_path, offset, Some(length),
+            )
+            .await?;
+            if !res.ok() {
+                return Err(format!("Dropbox session finish failed ({}): {}", res.status, res.body));
+            }
+            Ok::<(), String>(())
+        }
+    };
 
     let mut offset = first_end;
     loop {
         // Commit once everything is uploaded (also covers the single-chunk case).
         if offset >= total {
-            let commit_arg = json!({
-                "cursor": { "session_id": session_id, "offset": offset },
-                "commit": { "path": remote_path, "mode": "overwrite", "autorename": false, "mute": false },
-            }).to_string();
-            let fin = client
-                .post("https://content.dropboxapi.com/2/files/upload_session/finish")
-                .header(AUTHORIZATION, format!("Bearer {access_token}"))
-                .header(CONTENT_TYPE, "application/octet-stream")
-                .header("Dropbox-API-Arg", commit_arg)
-                .body(Vec::new())
-                .send()
-                .await
-                .map_err(|e| format!("Dropbox session finish failed: {e}"))?;
-            if !fin.status().is_success() {
-                let status = fin.status().as_u16();
-                return Err(format!("Dropbox session finish failed ({status}): {}", fin.text().await.unwrap_or_default()));
-            }
-            break;
+            return finish(offset, 0).await;
         }
 
         let end = std::cmp::min(offset + CHUNK, total);
-        let chunk = bytes[offset..end].to_vec();
         if end < total {
-            let arg = json!({ "cursor": { "session_id": session_id, "offset": offset }, "close": false }).to_string();
-            let res = client
-                .post("https://content.dropboxapi.com/2/files/upload_session/append_v2")
-                .header(AUTHORIZATION, format!("Bearer {access_token}"))
-                .header(CONTENT_TYPE, "application/octet-stream")
-                .header("Dropbox-API-Arg", arg)
-                .body(chunk)
-                .send()
-                .await
-                .map_err(|e| format!("Dropbox session append failed: {e}"))?;
-            if !res.status().is_success() {
-                let status = res.status().as_u16();
-                return Err(format!("Dropbox session append failed ({status}): {}", res.text().await.unwrap_or_default()));
+            let arg = json!({
+                "cursor": { "session_id": session_id, "offset": offset }, "close": false,
+            });
+            let res = crate::upload_stream::send_file_stream(
+                &format!("{DROPBOX_CONTENT}/files/upload_session/append_v2"),
+                "POST",
+                &dropbox_content_headers(access_token, arg.to_string()),
+                file_path,
+                offset,
+                Some(end - offset),
+            )
+            .await?;
+            if !res.ok() {
+                return Err(format!("Dropbox session append failed ({}): {}", res.status, res.body));
             }
         } else {
-            let commit_arg = json!({
-                "cursor": { "session_id": session_id, "offset": offset },
-                "commit": { "path": remote_path, "mode": "overwrite", "autorename": false, "mute": false },
-            }).to_string();
-            let fin = client
-                .post("https://content.dropboxapi.com/2/files/upload_session/finish")
-                .header(AUTHORIZATION, format!("Bearer {access_token}"))
-                .header(CONTENT_TYPE, "application/octet-stream")
-                .header("Dropbox-API-Arg", commit_arg)
-                .body(chunk)
-                .send()
-                .await
-                .map_err(|e| format!("Dropbox session finish failed: {e}"))?;
-            if !fin.status().is_success() {
-                let status = fin.status().as_u16();
-                return Err(format!("Dropbox session finish failed ({status}): {}", fin.text().await.unwrap_or_default()));
-            }
+            return finish(offset, end - offset).await;
         }
         offset = end;
     }
-
-    Ok(())
 }
 
 /* ── OneDrive device code auth ───────────────────────────────────────────────

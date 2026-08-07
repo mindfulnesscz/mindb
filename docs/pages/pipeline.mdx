@@ -15,9 +15,35 @@ but it does not render or copy files, update identity manifests or caches, uploa
 cloud objects, mutate Supabase rows/tags/version history, write DAM output, or start
 Stream uploads. Intended actions are written to the activity log with `[DRY]`.
 
-**Stop is cooperative.** An in-flight bounded batch is allowed to finish; the run halts at the next
-stage or batch checkpoint. Post-run Supabase, CDN reconcile, tag, version-history and
-Stream work use the same stop signal, so the run is not marked complete before that tail finishes.
+**Stop is cooperative.** Work already in flight is allowed to finish; **Stop** is checked before
+every new item is dispatched, so nothing further starts. Post-run Supabase, CDN reconcile, tag,
+version-history and Stream work use the same stop signal, so the run is not marked complete before
+that tail finishes.
+
+**Everything bounded runs through one worker pool.** Renders, CDN uploads, page previews, cloud
+uploads, Supabase row writes and the CDN prune/delete sweeps all dispatch through
+`services/pipeline/pool.ts`, which keeps a fixed number of items in flight and starts the next one
+the moment a slot frees. The widths are **8 for uploads and renders, 4 for deletes** — a delete
+destroys an object and the lists are short, so it gets the narrower lane.
+
+The width is not the interesting part; the *scheduling* is. These stages used to run as chunked
+barriers — eight started, then all eight waited for the slowest before the next eight began — so one
+500 MB video or one 400-page deck held seven slots empty for as long as it took. Page previews had a
+second version of the same problem: documents ran strictly one at a time with their pages eight-wide
+inside, so a two-page deck used two of eight slots. Nothing about **what** is uploaded, deleted or
+skipped changed with any of this, and no width was raised.
+
+**Two things outside the stages overlap as well.** The four pre-run reads — vocabulary, `r2-grant`,
+asset levels, page-preview limit — share no inputs (the two database reads need the environment
+configuration, not the grant), so they are fetched together and the run waits for the slowest rather
+than the sum of four round trips. Their *results* are still applied, logged and degraded in the old
+order: a failed grant disables the CDN steps exactly as before, and discards the other reads even
+though they finished, because `preview_page_limit` decides how many pages a degraded run renders
+locally. The **version-history walk** — a second full pass over the source tree, reading the
+`versions/` subtrees the scan skips — starts right after the scan and is awaited only where its
+result is consumed, after the portal sync, so it happens under the network stages instead of after
+them. Nothing the run writes changes what it sees, and a run with no Supabase session never starts
+it.
 
 | Step | What it does | |
 |---|---|---|
@@ -36,6 +62,14 @@ Stream work use the same stop signal, so the run is not marked complete before t
 ### Scan
 
 `scanAllAssets` walks the configured source folder looking for folders named `OUT` (configurable — the naming convention settings default to `[03] OUT`) and collects every publishable file inside them (skipping each folder's `thumbnails/` artifacts and `versions/`, which is handled separately by Version history sync). This file list feeds every step below — nothing after this point re-scans the disk.
+
+The walk composes its paths in JavaScript (`services/pipeline/paths.ts`), not through
+`@tauri-apps/api/path`. Those calls look like string helpers but each one is an IPC round trip to
+Rust, and the scan, publish, collect and DAM walks call them **once per directory entry** — a few
+thousand bridge crossings per run to concatenate strings. The replacements are pure functions
+producing byte-identical results; `.` and `..` are deliberately *not* resolved, because
+canonicalisation belongs in Rust behind the path-policy scope check. Genuinely platform-specific
+lookups such as `appDataDir()` still go through the real API.
 
 ### 1 — Generate thumbnails
 
@@ -80,7 +114,18 @@ Highest version only. Package folders become a **hard mirror of live OUT**:
 
 Migrated `Name __hash` asset folders are **not** package anchors (even with `.dchub.json`); destination export still publishes their OUT via the normal folders walk.
 
-Copy decisions use size + mtime as a fast gate (`isUnchanged`), then compare the files byte-for-byte in the Rust backend before skipping. The comparison streams fixed-size chunks rather than loading two large creative files into the webview. A restored older source or same-size content swap is therefore republished instead of being mistaken for an old unchanged file. Re-running is always safe.
+Copy decisions are **metadata only** (`isUnchanged`): same size, and a destination at least as new as
+the source, counts as unchanged. Neither file is opened.
+
+That is deliberate and it must stay that way. Source trees live in cloud storage — Dropbox through
+the macOS File Provider — where online-only files are dataless placeholders and **any** read forces a
+full download. A byte-for-byte comparison used to sit behind the stat gate, and because `copyFile`
+does not preserve mtime the destination was always newer, so the gate never short-circuited: every
+no-change export read the entire library and pulled every online-only file onto disk.
+
+**The accepted trade-off is the restored-backup case.** A same-size content swap whose mtime went
+*backwards* — restoring an older file over a newer one — now reads as unchanged and is skipped. Repair
+it by touching the sources or deleting the target copies. Re-running is otherwise safe.
 
 ### 3 — Export to destinations
 
@@ -113,8 +158,20 @@ For each cloud destination with a valid OAuth token:
 
 Sharing links (when `generateLink`) are keyed by `(stable_id, child_id)` and later written to
 Supabase for the portal. Equal filenames in separate packages cannot overwrite each other's links.
-Google Drive folder creation is coalesced within a run, and an existing same-name file is skipped
-only when both its size and Drive MD5 checksum match the local file.
+An existing remote file is skipped only when both its size and its provider content hash match the
+local file — Drive's `md5Checksum`, OneDrive's `quickXorHash` — each computed natively and reused
+across destinations and runs. A destination's mtime+size cache short-circuits all of that; what it
+costs when that cache is **cold** is described in
+[Cloud destination comparison](/cloud-storage/overview#what-a-run-costs-when-its-upload-cache-is-cold).
+
+**Google Drive folder resolution is race-safe.** Drive addresses folders by id, not path, and accepts
+several folders with one name in the same parent — so uploading 8-wide into a tree that does not
+exist yet used to create up to eight copies of every level. The destination tree is now resolved once
+before the concurrent batch starts, concurrent callers for one path segment await a single shared
+find-or-create, and when several same-named folders already exist the **oldest** is chosen
+deterministically so every run converges on the same folder. Duplicates that are found are reported
+in the run log; merging the ones already in a client's Drive is a manual, preview-first action on the
+destination — see [Google Drive duplicate folders](/operations/gdrive-dedupe).
 
 ### 5 — Publish to DAM
 
@@ -125,6 +182,27 @@ Despite the name, this step doesn't touch Supabase or the CDN — it generates t
 Always runs after the steps above, if a Supabase config is present for the active client. Assets are matched by **folder-based stable identity**: an 8-hex-char hash suffix on the package folder (` __a1b2c3d4`) plus a per-folder `.dchub.json` manifest mapping individual files to a stable child ID, with SHA-256 content-hash matching as a fallback for renamed files. That pair is immune to filename and taxonomy renames. Stale rows are **soft-marked `disconnected`**, never deleted, so ratings/comments/history stay attached — see [Stable asset identity](/desktop/identity).
 
 An asset in a folder with no hash suffix has no identity to sync by: it is reported as an error and skipped. Create packages through the Vocabulary screen so they are born with one.
+
+**Rows are written one request each, eight at a time.** Every row is its own `PATCH` (existing) or
+`POST` (new) — never a bulk upsert, because `PATCH` leaves omitted columns untouched and that is what
+keeps the pipeline from overwriting portal-owned values like `perm`. What is concurrent is only the
+waiting: parents and singles are written first, then children once every parent uuid is known, and
+readme.md files alongside. The parent→child barrier is load-bearing; a child needs its parent's
+resolved uuid. A failed row is logged and counted and does not stop its siblings, and **Stop** halts
+further dispatch while letting requests already in the air finish.
+
+**A package's `readme.md` is regenerated every run but written only when it changed.** Its content is
+a pure function of the row it describes — no timestamp — so a run over unchanged data writes nothing
+and reports `readme.md: 0 updated · N unchanged`. That matters because these notes live in the
+client's synced source folder, one per package: an unconditional write handed Dropbox the whole
+library to re-upload after every run. The comparison is against the file on disk rather than a record
+of what the last run wrote, so an edited or deleted readme is still healed by the next run.
+
+Because a long run can cross the one-hour access-token expiry, a `401` is retried once with a
+force-refreshed token. That refresh is **single-flight**: eight concurrent writes hitting `401`
+together trigger one `refreshSession()`, not eight. GoTrue rotates the refresh token on use, so
+concurrent refreshes would present an already-spent token and can trip reuse detection — revoking the
+session that had just been renewed.
 
 This step also cleans up R2 thumbnails, originals, and known page-preview objects for assets no longer present on disk. Exact keys are rebuilt from `(stable_id, child_id)`, the row's effective access level, and the shared `@sotto/domain/assetStorage` rules, so public and gated buckets use the same addresses as upload. Any key still referenced by an active record is protected (including a gallery parent's shared thumbnail). Only rows successfully marked `disconnected` contribute deletion keys. Row disconnects and object deletes pass a blast-radius check: above the small-deletion floor, removals cannot exceed rows written unless the operator selected **Allow large deletions**.
 If any source subtree failed to scan, row disconnects are refused outright; a partial source view is
@@ -142,6 +220,9 @@ desktop refreshes its vocabulary; existing filesystem names are not rewritten au
 ### Version history sync
 
 Scans each asset's `versions/` subfolder and upserts the `version_history` table: the current version is marked `Active`, older ones `History`; versions removed from disk are marked `Disconnected`; assets removed entirely are marked `Removed`.
+
+The scan half runs at the *top* of the run, concurrently with everything after it (see above); only
+the upsert waits for the portal sync, which is what it actually depends on.
 
 ## CDN URLs and spaces
 

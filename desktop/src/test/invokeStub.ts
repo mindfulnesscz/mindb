@@ -59,8 +59,12 @@ class InvokeStub {
    * Canned replies for commands with no built-in behaviour — the cloud bridge
    * (`upload_to_dropbox`, `onedrive_refresh_token`, …), where the point of the test is the
    * arguments handed to Rust rather than anything the fake does with them.
+   *
+   * A FUNCTION is called with the call's arguments, for commands whose answer depends on them —
+   * `cloud_upload_stream` returns 202 for every chunk of an upload session but 200/201 for the
+   * last one, and a single canned value cannot express that.
    */
-  replies = new Map<string, unknown>();
+  replies = new Map<string, unknown | ((args: Record<string, unknown>) => unknown)>();
   private thumbnailFingerprints = new Map<
     string,
     { mtimeMs: number; size: number; width: number; quality: number }
@@ -170,8 +174,12 @@ class InvokeStub {
       case 'delete_r2_object':
         this.remoteKeys.delete(args.objectKey as string);
         return null;
-      default:
-        return this.replies.get(cmd) ?? {};
+      default: {
+        const reply = this.replies.get(cmd);
+        return typeof reply === 'function'
+          ? (reply as (a: Record<string, unknown>) => unknown)(args)
+          : reply ?? {};
+      }
     }
   };
 }

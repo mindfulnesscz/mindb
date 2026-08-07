@@ -10,8 +10,11 @@
 > - Unsanitized taxonomy labels → **fixed** (`sanitizeSegment()` in `filenameTranslator.ts`).
 > - Bucket-wide CDN GC → **landed** (`cdn-gc` edge fn + `cdnGarbageCollection.ts`, commit 200b1f2).
 >
-> Net: the audit is effectively fully closed. Remaining, both non-blocking: GDrive **G2** (merge the
-> already-existing duplicate folders) is still to build, and thumbnail regeneration still fingerprints
+> **Re-check 2026-08-07:** GDrive **G2** has landed — the desktop merges the already-existing
+> duplicate folders (`services/cloud/gdriveDedupe.ts`, Settings → Cloud destinations → Maintenance),
+> and G1 gained the deterministic oldest-folder pick so runs converge on one folder.
+>
+> Net: the audit is effectively fully closed. Remaining, non-blocking: thumbnail regeneration still fingerprints
 > on mtime+size rather than a content hash (a deliberate, documented tradeoff). The prune-guard fix is
 > hand-applied on the tree and still needs its regression test (prompt 01).
 >
@@ -61,7 +64,7 @@ your file.
 | ❌ | [ ] | `processRenameTasks` placebo | **Still a no-op** (`renameTasks.ts:60-64`): flips running→completed, applies no rename. Now honors dry-run/stop, but performs no work. Note: the *risky* half (tag deletion) is separately guarded, so this is a "does nothing" bug, not a destructive one. |
 | ✅ | [ ] | Stop button doesn't stop | `isStopping` wired into run context; every stage + post-run step checks it at checkpoints. |
 | ✅ | [x] | admin UI fails open | `RoleContext` defaults to `public`; `AdminLandingPage` renders a locked state when unconfigured. |
-| ❌ | [ ] | GDrive dup-folder race + weak skip | **Still open.** `getOrCreateGDriveFolder` still list-then-create with no in-flight dedup (concurrent uploads → duplicate folders); skip still size-only (`md5Checksum` fetched but unused). |
+| ✅ | [x] | GDrive dup-folder race + weak skip | **Fixed (`DONE_02`, 2026-08-07).** One shared in-flight resolve per path segment, tree pre-resolved before the 8-wide batch, duplicate sets resolve to the oldest folder deterministically, skip compares Drive MD5. Existing duplicates are merged by the desktop cleanup tool. |
 | ❌ | [ ] | cloudUrls bare-`stem` collision | **Still open.** A composite `mapKey` was added but the bare `stem` is still written and is what every consumer reads (`exportPlan.ts`, `damService.ts`), so two same-stem assets still collide. The composite key is dead. |
 | ❌ | [ ] | unsanitized taxonomy labels → paths | **Still open.** `translateExportName` only trims whitespace; output goes straight into `join(...)` in `packages.ts`/`publishLocal.ts`. A label with `/` or `..` becomes path structure / can escape the package dir. Lowest-risk of the four but the closest to a safety issue. |
 | ✅ | [ ] | unstable pagination | `fetchAllForClient` now appends `&order=id.asc`. |

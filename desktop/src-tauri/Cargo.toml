@@ -39,13 +39,19 @@ tauri-plugin-shell = "2"
 tauri-plugin-store = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
-reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
+# `stream` is what allows a request body to be a file on disk rather than a Vec in memory
+# (`upload_stream.rs`). Without it a 500 MB deliverable is resident in full before it is sent.
+reqwest = { version = "0.12", features = ["rustls-tls", "stream"], default-features = false }
 sha2 = "0.10"
 md-5 = "0.11"
 hmac = "0.12"
 hex = "0.4"
 keyring = "4.1.6"
-tokio = { version = "1", features = ["net", "io-util", "time", "fs"] }
+tokio = { version = "1", features = ["net", "io-util", "time", "fs", "macros", "rt-multi-thread"] }
+# The standard AsyncRead → Stream bridge, for streaming a file (or one byte range of it) as a
+# request body. Both crates were already in the lock as transitive dependencies of reqwest/tauri —
+# this declares what is being used directly, it does not add anything to the build.
+tokio-util = { version = "0.7", features = ["io"] }
 # Thumbnail rendering, all in-process. `image` decodes rasters; `webp` is libwebp built from
 # vendored C and STATICALLY linked (verified: no libwebp in `otool -L`), replacing the `cwebp`
 # binary. `pdfium-render` binds the bundled PDFium dynamic library, replacing `pdftoppm`.

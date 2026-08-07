@@ -17,6 +17,7 @@ import {
 } from '../../../domain/client';
 import { typeLabel, statusClass, credHint } from '../destLabels';
 import { useDestAuth } from '../useDestAuth';
+import { GDriveDedupeCard } from './GDriveDedupeCard';
 import css from '../CloudDestinations.module.css';
 
 export function DestCredentialsForm({
@@ -261,6 +262,10 @@ export function DestCredentialsForm({
                 )}
               </div>
             </div>
+
+            {cfg.type === 'gdrive' && (
+              <GDriveDedupeCard cfg={cfg as GDriveDestConfig} destName={form.name || 'this destination'} />
+            )}
           </>
         )}
       </div>

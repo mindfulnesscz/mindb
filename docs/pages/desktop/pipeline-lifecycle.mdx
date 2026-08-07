@@ -18,6 +18,6 @@ The calling UI subsequently runs Supabase asset/tag synchronization and version-
 
 Most file jobs catch their own error, increment `stats.errors`, and continue. A stage-level exception reaches the outer catch and prevents later stages inside `runPipeline`; metadata sync behavior then depends on the caller. There is no cross-provider rollback. If R2 succeeds and Google Drive fails, the R2 object remains.
 
-Progress is stage-local and can jump or reset in ways that do not represent whole-run elapsed time. Completion with `skipped > 0` is labelled “completed with issues,” although many skips are expected and harmless.
+Progress is stage-local and can jump or reset in ways that do not represent whole-run elapsed time. Elapsed time is reported separately: every stage banner carries its own duration and the run closes with a `RUN TOTAL` block compared against the last comparable run — see [Logs and diagnostics → Timings](/desktop/logs). Completion with `skipped > 0` is labelled “completed with issues,” although many skips are expected and harmless.
 
 See [Scanning](/desktop/scanning), [Safe reruns](/operations/safe-reruns), and [Logs](/desktop/logs).

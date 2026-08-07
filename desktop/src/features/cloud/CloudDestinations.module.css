@@ -456,3 +456,79 @@
 }
 .saveBtn:hover:not(:disabled) { filter: brightness(0.85); }
 .saveBtn:disabled { opacity: 0.4; cursor: default; }
+
+/* ── Duplicate-folder cleanup report ─────────────────────────────────────── */
+
+.dedupeReport {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+}
+
+.dedupeMeta {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-subtle);
+}
+
+.dedupeTotals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.dedupeTableWrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.dedupeTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-xs);
+}
+
+.dedupeTable th,
+.dedupeTable td {
+  padding: var(--sp-2) var(--sp-3);
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+
+.dedupeTable th {
+  color: var(--text-subtle);
+  font-weight: var(--weight-semibold);
+}
+
+.dedupeTable tr:last-child td { border-bottom: none; }
+
+.dedupeMono {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.dedupeDetails {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.dedupeDetails summary { cursor: pointer; }
+
+.dedupeConfirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid rgba(194,59,59,0.25);
+  background: rgba(194,59,59,0.05);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+}

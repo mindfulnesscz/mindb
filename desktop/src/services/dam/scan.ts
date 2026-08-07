@@ -7,7 +7,7 @@
 import {
   readDir,
 } from '@tauri-apps/plugin-fs';
-import { join } from '@tauri-apps/api/path';
+import { joinPath } from '../pipeline/paths';
 import type { AppSettings } from '../../store/settingsStore';
 import {
   parseFilename, isVideoFile, isPreviewArtifact, type VocabMap,
@@ -65,9 +65,9 @@ export async function collectOutDirInfos(
     const entries = await listDir(dir);
     const outEntry = entries.find(e => e.isDirectory && isOutFolder(e.name, s));
     if (outEntry) {
-      const outPath  = await join(dir, outEntry.name);
+      const outPath  = joinPath(dir, outEntry.name);
       const scope    = scopeFor(dir, anchors);
-      const noteBase = scope ? await join(damRoot, scope.split('/').pop()!) : damRoot;
+      const noteBase = scope ? joinPath(damRoot, scope.split('/').pop()!) : damRoot;
       const projRel  = scope ? relativeTo(dir, scope) : relativeTo(dir, source);
       const parts    = pathParts(projRel);
       const n        = parts.length;
@@ -83,7 +83,7 @@ export async function collectOutDirInfos(
     );
     if (hasFiles) {
       const scope    = scopeFor(dir, anchors);
-      const noteBase = scope ? await join(damRoot, scope.split('/').pop()!) : damRoot;
+      const noteBase = scope ? joinPath(damRoot, scope.split('/').pop()!) : damRoot;
       const projRel  = scope ? relativeTo(dir, scope) : relativeTo(dir, source);
       const parts    = pathParts(projRel);
       const n        = parts.length;
@@ -100,14 +100,14 @@ export async function collectOutDirInfos(
          document a spurious vault note. */
       if (e.isDirectory && !shouldSkip(e.name, s) && !isPackageFolder(e.name, s)
           && !isPreviewArtifact(e.name)) {
-        await walk(await join(dir, e.name));
+        await walk(joinPath(dir, e.name));
       }
     }
   }
 
   for (const e of await listDir(source)) {
     if (e.isDirectory && !shouldSkip(e.name, s)) {
-      await walk(await join(source, e.name));
+      await walk(joinPath(source, e.name));
     }
   }
   return results;

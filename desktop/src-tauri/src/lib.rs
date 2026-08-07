@@ -9,6 +9,8 @@ mod reveal;
 mod native;
 mod render;
 mod path_policy;
+mod quickxor;
+mod upload_stream;
 
 /// Extensions routed through LibreOffice → PDF → PDFium.
 ///
@@ -41,11 +43,12 @@ const RASTER_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff
  * different hat. The trivial commands — keychain, reveal — stay sync on purpose.
  */
 
-/// Exact, streaming content comparison for local publish/cache decisions.
-///
-/// Size + mtime is the cheap gate in TypeScript; this closes the restored-backup case where the
-/// source is older than the destination but its bytes changed without changing length. Streaming
-/// avoids loading two large creative files into the webview at once.
+/// Exact, streaming content comparison. NO LONGER called by the pipeline's unchanged check:
+/// reading a Dropbox online-only file forces macOS File Provider to download it, so the
+/// byte-compare made every no-change export materialize the whole library on disk
+/// (`isUnchanged` in pipeline/fs.ts is metadata-only now — see the comment there).
+/// Kept for a future explicit "deep compare / verify" action, where downloading is the point.
+/// Streaming avoids loading two large creative files into the webview at once.
 #[tauri::command(async)]
 fn files_equal(
     app: tauri::AppHandle,
@@ -105,6 +108,18 @@ fn file_md5(app: tauri::AppHandle, path: String) -> Result<String, String> {
     let file = std::fs::File::open(&path)
         .map_err(|e| format!("open {}: {e}", path.display()))?;
     reader_md5(BufReader::new(file))
+}
+
+/// The OneDrive half of the same question: Graph publishes `file.hashes.quickXorHash` for an item,
+/// so a local file can be proved identical to the remote copy without uploading it. Streams from
+/// disk for the same reason `file_md5` does — the decision is "should this 500 MB video be sent
+/// again", and loading it into the webview to answer that would cost more than sending it.
+#[tauri::command(async)]
+fn file_quick_xor_hash(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let path = path_policy::require_allowed_file(&app, &path, "checksum source")?;
+    let file = std::fs::File::open(&path)
+        .map_err(|e| format!("open {}: {e}", path.display()))?;
+    quickxor::reader_quick_xor_hash(BufReader::new(file))
 }
 
 #[cfg(test)]
@@ -334,6 +349,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             files_equal,
             file_md5,
+            file_quick_xor_hash,
             generate_thumbnail,
             generate_document_previews,
             wait_for_oauth_redirect,
@@ -344,6 +360,7 @@ pub fn run() {
             r2::list_r2_keys,
             r2::delete_r2_object,
             cloud::upload_to_dropbox,
+            upload_stream::cloud_upload_stream,
             cloud::onedrive_device_code,
             cloud::onedrive_poll_token,
             cloud::onedrive_refresh_token,

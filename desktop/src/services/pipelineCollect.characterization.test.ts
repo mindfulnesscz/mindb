@@ -107,7 +107,13 @@ describe('collect — filling a package anchor', () => {
     expect(vfs.text(`${PKG}/Product Slides — Deck v2.pdf`)).toBe('revised');
   });
 
-  it('re-copies changed content restored with an older mtime', async () => {
+  it('treats a same-size restore with an older mtime as unchanged — metadata only, never a read', async () => {
+    // The deliberate trade-off behind the cloud-placeholder fix: isUnchanged() must never open
+    // the source, because a read forces Dropbox/File Provider to download every online-only
+    // file — which made a no-change export read the whole library. So a same-size content swap
+    // whose mtime went BACKWARDS is indistinguishable from unchanged and is skipped. A real
+    // restore is repaired by touching the sources or deleting the package copies. A restore
+    // that changes size, or carries a newer mtime, still republishes (previous test).
     seedCampaign();
     await collect();
 
@@ -116,9 +122,9 @@ describe('collect — filling a package anchor', () => {
     vfs.put(source, sameSizeReplacement, 500);
     const second = await collect();
 
-    expect(second.stats.copied).toBe(1);
-    expect(vfs.text(`${PKG}/Product Slides — Deck v2.pdf`))
-      .toBe(sameSizeReplacement);
+    expect(second.stats.copied).toBe(0);
+    expect(second.stats.skipped).toBe(2);
+    expect(vfs.text(`${PKG}/Product Slides — Deck v2.pdf`)).not.toBe(sameSizeReplacement);
   });
 
   it('harvests OUT from siblings AND from nested identity folders, but never through another package', async () => {

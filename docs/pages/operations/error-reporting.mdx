@@ -50,6 +50,12 @@ and buttons to open it or reveal it in Finder. Send this file when reporting a p
 It truncates at 256 KB rather than rotating — this is a diagnostic tail, not an audit trail — and
 always starts at a whole entry so it stays parseable line by line.
 
+**Settings → Diagnostics lists a second file beside it**, `run-timings.jsonl` — one line per
+pipeline run, recording how long each phase took. It is not an error sink and nothing in this page
+applies to it: no contexts, no breadcrumbs, no portal view, and it is written on every run rather
+than only when something fails. See [Logs and diagnostics → Comparing
+runs](/desktop/logs) for what it holds and what makes two runs comparable.
+
 ## The portal view
 
 **Admin → Diagnostics**, visible to **super admins only**. Error messages quote asset names and folder

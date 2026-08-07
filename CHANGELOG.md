@@ -5,6 +5,322 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased]
+
+**Deployment**
+
+- **One migration, and the `cdn-reconcile` function must be deployed with it — never before it.**
+  `20260807120000_cdn_move_queue_keep_attempt_marker` stops the queue trigger clearing `attempts`
+  and `last_error` on a re-queue; the reconcile's new "skip the page sweep when the level did not
+  move" rule reads that marker to decide when skipping is unsafe. Function first would mean the
+  trigger keeps erasing it, and an asset whose earlier pass failed could keep a page readable at a
+  wider level than its row.
+
+  **Staging and production need no commands.** `db.yml` runs `supabase db push` and then
+  `supabase functions deploy` in that order in one job, on merge to `staging` and to `main` — so the
+  ordering above is already guaranteed by the pipeline. **Local is the one environment that is
+  manual**: `npx supabase migration up` (pending migrations only, never a reset).
+- **Check the move queue after the first drain on each environment**, with the query in
+  [Access levels → Is the queue healthy?](docs/pages/cloud-storage/access-levels.mdx). It is the
+  only place the change is visible as a number, and `previously_failed > 0` is worth reading as an
+  alert rather than a statistic.
+- No environment variables or secrets change. The one new file, `run-timings.jsonl`, is created in
+  the app data directory on the first run after upgrading and is safe to delete at any time — it
+  costs the timing history and nothing else.
+- **The first run after upgrading has nothing to compare against.** Deltas appear from the second
+  comparable run onwards; until then the `RUN TOTAL` block prints without them.
+
+### Added
+
+- **The run log now says how long everything took.** Every section-DONE banner ends with its own
+  duration, the source scan gets the line it never had, and the run closes with a `RUN TOTAL` block
+  naming the five slowest phases and their share of the run.
+
+  Nothing in the log carried a timestamp before this, which is why run speed regressed across
+  several audits without anyone being able to say where — a stage that had quietly become the
+  slowest thing in the run looked exactly like one that had not. The total is wall clock from the
+  Run button, so it covers the pre-run fetches and the post-run portal sync, not only the pipeline:
+  those are where the audit found the silent gaps. A `measured … of …` line reports the summed
+  phases against that total, so untimed work shows up as the difference rather than hiding in it.
+
+  Steps inside a phase — the Supabase export's fetch/plan/writes/readmes/disconnect, one cloud
+  destination of several — report their own durations where they happen but stay out of the
+  ranking, so a parent and its own child cannot take two of the five slots to say one thing.
+
+  **This changes no pipeline behaviour**: no stage was reordered, parallelised or skipped, and no
+  banner's existing text changed — the duration is appended after it. It exists so the changes that
+  do reorder things have a number to be measured against. See
+  [Logs and diagnostics → Timings](docs/pages/desktop/logs.mdx).
+
+- **Runs are kept, and each one is compared against the last.** The run log is in-memory and dies
+  with the app, so a duration you could see but not keep answered "where does this run spend its
+  time" and not "is this slower than it used to be" — which is the question a regression is. Every
+  run now appends a line to `run-timings.jsonl` in the app data directory, and the `RUN TOTAL`
+  block carries the change since the last comparable run, per phase and in total.
+
+  **Comparable means the same client, the same stages enabled, and the same dry-run flag.** A run
+  with thumbnails off is not faster than one with thumbnails on, and matching on the stage set is
+  what stops the log claiming it is. Stopped runs are excluded on both sides — a partial
+  measurement would report a large fictional regression on the next full run. With nothing
+  comparable on file the deltas are omitted rather than guessed at. Asset count is deliberately not
+  part of the match, because it drifts every run and would reject nearly every comparison; it is
+  printed in the provenance line instead, so an unfair comparison can be recognised as one.
+
+  Sub-100ms movement reports as unchanged rather than as a signed number, and a phase the baseline
+  never had reports as `new` rather than as an infinite regression.
+
+  The file is one JSON object per line — every phase *and* sub-step, not only the five that made
+  the ranking — capped at 500 runs, and reachable from **Settings → Diagnostics**, which now lists
+  it alongside the error log. Reading and writing it is best effort: it is a measurement, and it
+  must never fail a run that otherwise succeeded.
+
+- **The last ten runs are readable in the app.** **Settings → Diagnostics** now renders the timing
+  history instead of only offering to open the file: each run with its wall clock and its change
+  since the comparable run before it, expanding to **every** phase — not just the five the log
+  ranks — slowest first, each with its duration, its share of the run drawn as the row's fill, and
+  its own delta. Sub-steps and the untimed remainder are shown underneath.
+
+  It reads the same file and uses the same comparability rule as the log, from the same code, so a
+  delta shown here and the one printed that day cannot disagree. Open and Reveal are unchanged, for
+  the full 500-run history and for attaching to a bug report.
+
+### Changed
+
+- **The run no longer waits in series for four things that share nothing.** The vocabulary refresh,
+  the `r2-grant` request, the asset-level read and the page-preview limit were awaited one after
+  another before the run touched a file — four round trips, paid as a sum, when only the grant
+  needs anything the others produce (it needs nothing at all: the two database reads need the
+  environment configuration, never the grant). They are now fetched together, so the pre-run costs
+  the slowest read instead of all four, and the run log carries one `PRE-RUN READS` phase with each
+  read's own duration on its own line.
+
+  **What the log says, and what a failure falls back to, are unchanged** — deliberately, down to the
+  order. The lines are emitted after the join rather than as each read lands, so an operator reads
+  the same run they read before; a failed grant still disables the CDN steps with the same line, and
+  still discards the two reads that have already finished, because `preview_page_limit` decides how
+  many pages a degraded run renders **locally** and keeping a value the serial version never reached
+  would change what lands on disk. A read that throws behind a good grant still stops the ones after
+  it, which is what falling out of the old `try` block did.
+
+- **The version-history walk happens under the run instead of after it.** `scanVersionMap` is a
+  second full pass over the source tree — it reads the `versions/` subtrees the main scan skips — and
+  it ran after every network sync had finished, with the run doing nothing else while it did.
+  Nothing it reads is produced by the run (no stage writes into an `OUT` folder: readmes land in the
+  package root, renders land in `thumbnails/`, which the walk filters out), so it now starts right
+  after the source scan and is awaited where its result is consumed. `VERSION SCAN` in the timings
+  is therefore the *wait*, normally a few milliseconds, and the line reports the walk's own duration
+  next to it. It starts only for a run whose portal sync will read it, and only after the source scan
+  — two full walks racing on one disk would slow down the one every stage is waiting for.
+
+- **Every batched stage now refills its slots instead of waiting for its slowest member.** Renders,
+  CDN thumbnail/page/original uploads, cloud uploads and the CDN prune and delete sweeps all ran as
+  chunked barriers: eight started, and then all eight waited for the slowest before the next eight
+  began. One 500 MB video, or one 400-page deck, held seven slots empty for as long as it took. They
+  now dispatch through the same worker pool the Supabase writes use, which starts the next item the
+  moment a slot frees.
+
+  **No width was raised.** Uploads and renders stay at eight, which is the measured sweet spot and,
+  for rendering, the number of one-shot PDFium workers the machine should be running. Deletes run
+  four at a time — narrower on purpose, because every request in a prune sweep destroys an object
+  and those lists are short.
+
+  **Page previews had a second version of the same problem.** Documents ran strictly one at a time
+  with their pages eight-wide inside, so a two-page deck used two of eight slots and a library of
+  short documents ran at a fraction of the width it was configured for. Pages now pool across
+  documents. Each document's stale-page sweep still runs strictly after that document's own pages
+  are all settled — it deletes everything under the asset's page prefixes that this run did not
+  claim, so starting it beside a sibling page's upload would race a delete against the write about
+  to claim that key.
+
+  **What is uploaded, deleted, skipped or kept is unchanged.** The still-referenced guard on a stale
+  object, the blast-radius verdict before a CDN delete, the per-key bucket routing, per-file error
+  accounting and the `[DRY]` previews all behave exactly as before; only the moment a request is
+  dispatched moved. **Stop** is still checked before every dispatch, and requests already in the air
+  still finish.
+
+- **Path arithmetic stopped crossing the Rust bridge.** `join`, `dirname` and `basename` from
+  `@tauri-apps/api/path` read like string helpers but each one is an IPC round trip, and the scan,
+  publish, collect and DAM walks called them **once per directory entry** — a few thousand bridge
+  crossings per run to concatenate strings. They are now pure functions
+  (`services/pipeline/paths.ts`) producing byte-identical results, which the characterization suites
+  check by comparing full absolute paths. `.` and `..` are deliberately *not* resolved:
+  canonicalisation belongs in Rust, behind the path-policy scope check. Genuinely
+  platform-specific lookups such as `appDataDir()` still go through the real API.
+
+- **The run log no longer fights the run for the main thread.** Every log line was its own store
+  update and its own React render, and a run emits one per file per stage — thousands of renders
+  whose only visible effect was a line appearing a few milliseconds sooner, competing with the work
+  that produced them. Lines are now buffered for up to 100 ms and progress is throttled to about ten
+  updates a second.
+
+  **Section banners still flush immediately**, carrying everything buffered before them, so a tail
+  keeps its stage structure and the order of lines is never affected. Nothing is dropped: the buffer
+  is flushed when the run ends, and the final progress value is always delivered rather than left at
+  97 %. The log panel renders the most recent 1,500 lines and says how many earlier ones are hidden
+  — the full log is still in memory, the cap only bounds the DOM. See
+  [Logs and diagnostics](docs/pages/desktop/logs.mdx).
+
+- **The Supabase export writes rows eight at a time instead of one at a time.** It was issuing one
+  awaited PostgREST round trip per asset row, in series, for parents and then for children. At the
+  150–300 ms a round trip actually costs, a 300-asset library spent 45–90 seconds of every run doing
+  nothing but waiting — the largest single gap the run-timing work exposed, and one that was
+  invisible until durations were in the log.
+
+  **What each request sends is unchanged.** Every row is still its own `PATCH` or `POST`, never a
+  bulk upsert: `PATCH` leaves omitted columns untouched, which is precisely what keeps a run from
+  overwriting `perm` or blanking a `thumbnail_url` it has no opinion about this time. Only the
+  dispatch is concurrent. Parents still complete before any child starts — a child needs its
+  parent's resolved uuid — and readme.md files are written the same eight-wide way.
+
+  Per-row error accounting is unchanged (one log line, one counted error, siblings unaffected), and
+  **Stop** still halts dispatch immediately while letting requests already in the air finish, the
+  same cooperative checkpoint every other stage uses.
+
+  The scheduler behind it is a real worker pool (`services/pipeline/pool.ts`): the next row starts
+  the moment a slot frees, rather than each group of eight waiting for its slowest member. It is
+  shared, and the remaining stages move onto it next.
+
+- **`readme.md` is only written where it changed.** Every package folder gets one of these notes,
+  regenerated on every run — and each one carried a `_Last synced: <timestamp>_` line, so its
+  content differed from the copy on disk every single time. A run therefore rewrote every readme in
+  the library, inside the client's **synced Dropbox source tree**, which then spent the minutes
+  after each run re-uploading hundreds of tiny files that said the same thing as before.
+
+  The timestamp is gone and the content is now a pure function of the row it describes. Before
+  writing, the export reads the existing file and compares: identical means no write. A run over
+  unchanged data now writes **zero** readmes and reports `readme.md: 0 updated · N unchanged`.
+
+  **The notes are not stale as a result.** They are still regenerated in full every run — a changed
+  rating, view count, status or permission changes the content, and that file is written. The
+  comparison is against the file on disk rather than a record of what we wrote last time, so a
+  teammate's edit to a readme in the shared folder, or a deleted one, is still healed by the next
+  run. Nothing moved: same path, same name, same format minus one line, so Obsidian reads them
+  exactly as before.
+
+- **The CDN reconcile stopped being the run.** It was 20.5 s of a 23.7 s run over 29 assets — 87 %
+  of the wall clock — and almost none of it was work. Page previews have no URL column, so the mover
+  finds them by attempting a copy from every level except the target and expecting three of four to
+  miss; it did that for every queued asset whether or not its level had moved, one round trip at a
+  time. A twenty-page deck is sixty attempts, forty of them guaranteed to find nothing, and the
+  migration that introduced the queue seeded it with the whole library on the reasoning that a no-op
+  pass is cheap.
+
+  Four changes, in order of what they were worth:
+
+  **The page sweep runs only when the level actually moved.** `cdn_move_queue.was_level` was already
+  recorded and described as "purely diagnostic"; when it still matches the row's effective level the
+  pages are where they belong. Every case that cannot be shown safe still sweeps — including a row
+  whose previous attempt failed, because a partial pass can leave one document's pages split across
+  two levels while `was_level` still looks correct.
+
+  **Within one bucket the bytes no longer pass through the function.** A move used to GET the whole
+  object into the edge runtime, hash it, and PUT it back. Same-bucket moves — every level change
+  inside the gated tier — are now one server-side `x-amz-copy-source` request. Crossing the
+  public/gated boundary still streams, because temporary credentials are minted per bucket and no
+  single signature can read one and write the other.
+
+  **Assets and their pages move concurrently** (4 × 6) instead of one round trip at a time.
+
+  **A run waits for its own client only.** The desktop passes `client_id`, so it no longer queues
+  behind another tenant's backlog; anything left is drained by a second pass that outlives the run.
+  It still *does* wait for its own client, deliberately: the Stream sync immediately after reads
+  each master off `download_url`, which must already point at the key its level requires.
+
+  **No access-level behaviour changes.** The same objects end up at the same keys with the same
+  `x-amz-meta-sha256` and cache headers, an unservable key is still refused, a page's source is
+  still deleted as part of its move, and a failed asset still stays queued with its reason.
+
+- **Cloud export stops paying full price for a cold upload cache.** Each destination keeps an
+  mtime+size record per delivered file, and with that cache warm the export was already fast — no
+  network, no reads. Everything it does on a cache MISS was written as though a miss were rare. It
+  is not: the cache is empty on a first run, after reconnecting a destination (it is keyed by
+  destination id), after clearing the app data folder, and effectively after any sync client that
+  rewrites mtimes.
+
+  **A file's content is now hashed at most once, ever.** Drive's skip needs the local MD5, and
+  hashing means READING the file — which on a Dropbox or iCloud source tree means macOS downloads an
+  online-only file to answer "has this changed", the same bug class as the byte-compare removed from
+  the publish stage. Two destinations used to pay it twice for the same bytes, and a reconnected
+  destination paid it again on every later run. The hash is recorded beside the upload records,
+  keyed by SOURCE path and fingerprinted on mtime+size, so a second destination, a later run and a
+  resumed run all reuse it. A file whose mtime or size moved is re-hashed rather than trusted.
+
+  **Google Drive lists each destination folder once instead of asking about every file.** Drive has
+  no paths, so every cache-missed file cost a `files.list` round trip of its own — 300 assets across
+  12 folders spent 300 requests learning what 12 could say. After the destination tree is resolved,
+  its folders are listed once and every upload in that run reads its answer from there. Two files of
+  one name in a folder resolve to the **oldest**, the rule folder resolution already used, so two
+  runs cannot update different copies; a file created during the run is folded back into the listing
+  so a same-name sibling later in the run updates it rather than adding a duplicate. **A failed
+  listing falls back to a query per file** — a listing believed complete when it is not would read
+  as "not uploaded yet" and put a second copy beside the client's file, which is the same reasoning
+  behind the CDN key manifest's `null`.
+
+  **A stopped export now keeps what it learned.** The cache was written only after the last
+  destination, so stopping a long run — a normal thing to do — discarded every record of what had
+  already been sent, and the next run started cold against a destination that was half up to date.
+
+  What is uploaded, skipped, or linked is unchanged, and the export boundary is untouched: a client
+  destination still receives assets and never an artifact.
+
+- **Every provider now streams a large upload from disk, and they all do it the same way.** The three
+  cloud providers each buffered a whole deliverable before sending it, in three different places, and
+  nothing recorded a reason. Drive and OneDrive pulled the file across the IPC bridge into the
+  webview and posted it from there — copied twice, and resident for the length of the transfer.
+  Dropbox looked like the exception and was not: it ran natively, but read the file into a `Vec<u8>`
+  and then copied each 48 MB chunk out of it again, so "native" bought a smaller copy rather than
+  none. The comment claiming it streamed from disk had been wrong for as long as it had been there.
+
+  There is now one native command that reads a file — or one byte range of it, for a chunked session
+  — straight into the request body. Peak memory is a read buffer whatever the file's size. Nothing
+  else moved: auth, folder resolution, the skip decision and the choice of upload shape all stay in
+  TypeScript, per provider, which is why a provider change is still a change to one small module.
+
+  **Small files deliberately still go through memory**, because for them it is simpler and the bound
+  is the provider's own — Drive's multipart create (≤5 MiB) interleaves metadata with the bytes in
+  one body, and OneDrive's simple PUT (≤4 MiB) is a single request. The threshold each provider
+  already had is the threshold for streaming.
+
+  **The destination is bound.** A command that reads any allowed file and posts it to a
+  caller-supplied URL with a caller-supplied `Authorization` header is an exfiltration primitive if
+  it is not, so the URL must be HTTPS at an allowlisted host — matched exactly or as a dot-suffix,
+  and checked before a byte is read. This is the same rule `supabase_request` follows. The byte range
+  is validated against the file too, because a body shorter than its declared `Content-Length` does
+  not fail against these providers, it stalls the connection.
+
+  Also fixed while there: the Dropbox whole-file read was blocking work inside an `async fn`, which
+  pins a runtime thread for its duration. Nothing in that path blocks now.
+
+### Fixed
+
+- **OneDrive re-uploaded every file it could have skipped.** Alone among the providers it had no
+  skip-if-unchanged rule at all: on any cache miss it read the whole file off disk and PUT it. A
+  cold cache therefore re-sent the entire library over a link the operator is usually waiting on,
+  and on a synced source tree the read alone could pull every online-only file back down.
+
+  Sotto now asks Graph what is already at that path first. Sizes are compared before anything is
+  read; only if they match is the local **QuickXorHash** computed — Microsoft's own 160-bit content
+  hash, implemented natively and streamed from disk — and compared with the item's
+  `file.hashes.quickXorHash`. Both matching skips the file, and a sharing link is still collected
+  for it so the portal keeps its URL.
+
+  **Size alone is deliberately not enough**, which is the same judgement Drive's uploader has always
+  made: an edit preserving the byte count would otherwise leave a client on the old file
+  indefinitely. Every uncertain answer points at uploading instead — a 404, a 401, a Graph outage,
+  or an item that publishes no QuickXorHash (personal OneDrive publishes SHA-1/SHA-256 instead) all
+  send the file exactly as before.
+
+- **A token expiring mid-run could revoke the session instead of renewing it.** A `401` is retried
+  once with a force-refreshed token, which was correct while requests went out one at a time. With
+  eight in flight, expiry makes eight of them `401` within milliseconds and every one of them asked
+  for its own refresh — but GoTrue rotates the refresh token on use, so all but the first present a
+  token that has just been spent. Best case seven refreshes fail and those rows error; worst case
+  refresh-token reuse detection revokes the session the first call had just renewed, and the rest of
+  the run fails as "not signed in". The refresh is now single-flight: N concurrent `401`s share one
+  `refreshSession()` and all receive its result.
+
+---
+
 ## [3.2.2] — 2026-08-06
 
 A hotfix for 3.2.1, which could not run a pipeline at all on a fresh install — and, alongside it, the

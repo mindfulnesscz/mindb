@@ -7,7 +7,7 @@
 | R2 originals | SHA-256 metadata skip; changed bytes overwrite stable key |
 | R2 thumbnails | May shortcut from DB inventory before hash check |
 | Dropbox | Remote path existence skip; may retain stale content |
-| OneDrive | Same path overwritten |
+| OneDrive | Skip if same path + matching size and QuickXorHash; else overwritten |
 | Google Drive | Skip if same-name + matching size and MD5; else update in place |
 | Supabase | Reconnect by `(stable_id, child_id)`; missing rows are disconnected, never deleted |
 

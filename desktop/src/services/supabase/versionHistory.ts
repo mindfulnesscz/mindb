@@ -7,6 +7,7 @@
 import { type VocabularyData, buildVocabMap, parseFilename } from '@sotto/domain';
 import type { SupabaseConfig } from './rest';
 import { makeHeaders, sbFetch, fetchAllForClient, BATCH } from './rest';
+import { timePhase } from '../pipeline/timing';
 import { fetchVHForAssets } from './assetQueries';
 import type { AssetVersions } from '../pipeline/types';
 
@@ -20,6 +21,7 @@ export async function syncVersionHistory(
   appendLog:  (type: string, msg: string) => void,
   options:    { dryRun?: boolean; shouldStop?: () => boolean } = {},
 ): Promise<void> {
+  const phase = timePhase('VERSION HISTORY');
   appendLog('section', '━━━ VERSION HISTORY SYNC ━━━');
 
   const base     = `${config.url}/rest/v1`;
@@ -129,7 +131,7 @@ export async function syncVersionHistory(
       `  [DRY] would upsert ${toUpsert.length}, disconnect ${toDisconnect.length}, ` +
       `and remove ${toRemove.length} version-history record(s)`,
     );
-    appendLog('section', '━━━ VH DRY RUN DONE ━━━');
+    appendLog('section', `━━━ VH DRY RUN DONE ━━━ in ${phase.done()}`);
     return;
   }
 
@@ -180,6 +182,6 @@ export async function syncVersionHistory(
   await patchVHStatus(toRemove,     'Removed',      'remove');
 
   appendLog('section',
-    `━━━ VH DONE — ${toUpsert.length} upserted · ${toDisconnect.length} disconnected · ${toRemove.length} removed ━━━`,
+    `━━━ VH DONE — ${toUpsert.length} upserted · ${toDisconnect.length} disconnected · ${toRemove.length} removed ━━━ in ${phase.done()}`,
   );
 }

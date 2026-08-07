@@ -23,10 +23,20 @@ import {
 } from '../../../packages/domain/src/assetStorage.ts';
 import { tempCredentials, copyObject, s3, type TempCreds } from '../_shared/r2.ts';
 import { callerAuthFailureBody } from '../_shared/caller-auth-policy.ts';
+import { needsPageSweep, type QueueEntry } from '../_shared/reconcile-policy.ts';
+import { mapPool } from '../_shared/pool.ts';
 
 /** How many assets one invocation will move. Bounded so a large backlog cannot exceed the
  *  function's wall-clock limit; the queue keeps the rest for the next call. */
 const BATCH = 25;
+
+/* Concurrency. Every unit of work here is a network round trip to R2 or Cloudflare, so the serial
+   loop this replaces was almost entirely idle — a batch of twenty-five assets took twenty seconds
+   of a desktop run, of which nearly none was work.
+   At most ASSETS × PAGES requests are in flight. Kept modest on purpose: a cross-bucket move still
+   streams its object through this function's memory, so the product is a memory bound too. */
+const ASSET_CONCURRENCY = 4;
+const PAGE_CONCURRENCY  = 6;
 
 /** Must match parseGatedKey in workers/cdn-gate/src/authz.ts — a key the Worker cannot parse is a
  *  404 on a file the portal is offering, so it is never written. */
@@ -74,13 +84,39 @@ Deno.serve(async (req) => {
   });
 
   /* Either reconcile the assets the caller names — the portal knows exactly what it just changed,
-     so it need not wait behind an unrelated backlog — or take the oldest slice of the queue. */
-  const body = await req.json().catch(() => ({})) as { asset_ids?: string[] };
-  const queued: { asset_id: string }[] = body.asset_ids?.length
-    ? body.asset_ids.slice(0, BATCH).map(id => ({ asset_id: id }))
-    : ((await db.from('cdn_move_queue')
-        .select('asset_id').order('queued_at', { ascending: true }).limit(BATCH)).data ?? []);
-  if (!queued.length) return json(200, { moved: 0, skipped: 0, failed: 0, remaining: 0 });
+     so it need not wait behind an unrelated backlog — or take the oldest slice of the queue.
+     `client_id` narrows that slice the same way for the desktop: a run has to wait for the assets
+     it just changed, because Stream pulls a master from `download_url` immediately afterwards, but
+     it has no reason to wait behind another tenant's backlog. */
+  const body = await req.json().catch(() => ({})) as { asset_ids?: string[]; client_id?: string };
+  type QueueRow = { asset_id: string; was_level: string | null; attempts: number; last_error: string | null };
+  const columns = 'asset_id,was_level,attempts,last_error';
+
+  let queued: QueueRow[];
+  if (body.asset_ids?.length) {
+    const ids = body.asset_ids.slice(0, BATCH);
+    queued = ((await db.from('cdn_move_queue').select(columns).in('asset_id', ids)).data ?? []) as QueueRow[];
+    // A named asset with no queue row is still reconciled — the caller knows something the queue
+    // does not — but with no recorded history, so it sweeps pages.
+    const known = new Set(queued.map(q => q.asset_id));
+    for (const id of ids) {
+      if (!known.has(id)) queued.push({ asset_id: id, was_level: null, attempts: 0, last_error: null });
+    }
+  } else {
+    const query = db.from('cdn_move_queue')
+      .select(body.client_id ? `${columns},assets!inner(client_id)` : columns)
+      .order('queued_at', { ascending: true })
+      .limit(BATCH);
+    if (body.client_id) query.eq('assets.client_id', body.client_id);
+    queued = ((await query).data ?? []) as unknown as QueueRow[];
+  }
+  if (!queued.length) {
+    const { count: idle } = await db.from('cdn_move_queue').select('*', { count: 'exact', head: true });
+    return json(200, { moved: 0, skipped: 0, failed: 0, remaining: idle ?? 0 });
+  }
+  const queueByAsset = new Map<string, QueueEntry>(queued.map(q => [q.asset_id, {
+    wasLevel: q.was_level, attempts: q.attempts ?? 0, lastError: q.last_error,
+  }]));
 
   const { data: assets } = await db.from('assets')
     .select('id,client_id,stable_id,child_id,perm,status,thumbnail_url,download_url,stream_uid,preview_page_count')
@@ -94,7 +130,7 @@ Deno.serve(async (req) => {
   const bucketOf = (t: 'public' | 'gated') => (t === 'public' ? env('R2_BUCKET') : env('R2_GATED_BUCKET'));
   const domainOf = (t: 'public' | 'gated') => (t === 'public' ? env('R2_PUBLIC_DOMAIN') : env('R2_GATED_DOMAIN'));
 
-  let moved = 0, skipped = 0, failed = 0, reflagged = 0;
+  let moved = 0, skipped = 0, failed = 0, reflagged = 0, sweptPages = 0, sweepsSkipped = 0;
   const done: string[] = [];
 
   /* ── Why an asset failed, per asset ───────────────────────────────────────────
@@ -156,7 +192,10 @@ Deno.serve(async (req) => {
     return null;
   }
 
-  for (const a of assets ?? []) {
+  /* Assets are independent of one another: each one moves its own objects and repoints its own row,
+     and the counters below are incremented from a single-threaded event loop. What was serial was
+     only the waiting. */
+  await mapPool(ASSET_CONCURRENCY, assets ?? [], async (a) => {
     const level = effectiveLevel(a) as AccessLevel;
     const patch: Record<string, string> = {};
     let assetFailed = false;
@@ -187,17 +226,20 @@ Deno.serve(async (req) => {
         continue;
       }
 
+      // The hash becomes the `?v=` stamp on the URL this run writes back, so it is the one copy
+      // that has to know what it moved.
       const result = await copyObject(
         accountId,
         { creds: creds[currentTier], bucket: bucketOf(currentTier), key },
         { creds: creds[targetTier], bucket: bucketOf(targetTier), key: targetKey },
+        { wantHash: true },
       );
       if (!result.ok) {
         fail(a.id, column, `copy ${key} → ${targetKey} failed: ${result.reason}`);
         assetFailed = true;
         continue;
       }
-      patch[column] = assetUrl(domainOf(targetTier), targetKey, result.sha256);
+      patch[column] = assetUrl(domainOf(targetTier), targetKey, result.sha256 ?? undefined);
       moved++;
     }
 
@@ -231,15 +273,28 @@ Deno.serve(async (req) => {
        SOURCE IS DELETED HERE, unlike the column path above. A superseded thumbnail is safe to leave
        because its column was repointed, so nothing references the old object. A page has no column to
        repoint: the old object stays at a WIDER level, reachable by anyone holding a cookie for it.
-       Orphaned is not unreachable. */
-    for (const mv of planPageMoves(level, a.client_id, a.stable_id, a.child_id,
-                                   a.preview_page_count ?? 0)) {
+       Orphaned is not unreachable.
+
+       ONLY WHEN THE LEVEL ACTUALLY MOVED. Probing four levels for a page that did not move is three
+       round trips that cannot succeed, and 20260802090000 seeded this queue with the entire library
+       on the reasoning that a no-op pass is cheap. It was not: it was most of a pipeline run.
+       `needsPageSweep` (../_shared/reconcile-policy.ts) holds the rule, and every case it cannot
+       show safe still sweeps. */
+    const pageMoves = needsPageSweep(level, queueByAsset.get(a.id))
+      ? planPageMoves(level, a.client_id, a.stable_id, a.child_id, a.preview_page_count ?? 0)
+      : [];
+    if (pageMoves.length) sweptPages += pageMoves.length;
+    else if (a.preview_page_count) sweepsSkipped++;
+
+    await mapPool(PAGE_CONCURRENCY, pageMoves, async (mv) => {
       if (mv.targetTier === 'gated' && !GATED_KEY_SHAPE.test(mv.targetKey)) {
         fail(a.id, 'page', `refused to write an unservable page key: ${mv.targetKey}`);
         assetFailed = true;
-        continue;
+        return;
       }
 
+      // No `wantHash`: a page has no URL column, so nothing ever stamps it — which lets a
+      // same-bucket move be one server-side request that never touches the bytes.
       const result = await copyObject(
         accountId,
         { creds: creds[mv.fromTier], bucket: bucketOf(mv.fromTier), key: mv.sourceKey },
@@ -252,7 +307,7 @@ Deno.serve(async (req) => {
           fail(a.id, 'page', `copy ${mv.sourceKey} → ${mv.targetKey} failed: ${result.reason}`);
           assetFailed = true;
         }
-        continue;
+        return;
       }
       moved++;
 
@@ -264,7 +319,7 @@ Deno.serve(async (req) => {
           `copied to ${mv.targetKey} but could not delete the wider original ${mv.sourceKey} (HTTP ${del.status})`);
         assetFailed = true;
       }
-    }
+    });
 
     if (Object.keys(patch).length) {
       const { error } = await db.from('assets').update(patch).eq('id', a.id);
@@ -279,7 +334,7 @@ Deno.serve(async (req) => {
     // identity never touched again still needs a separate bucket-wide GC with parent LIST access;
     // the client-scoped temporary R2 grant intentionally cannot perform that global diff.
     if (!assetFailed) done.push(a.id);
-  }
+  });
 
   if (done.length) await db.from('cdn_move_queue').delete().in('asset_id', done);
 
@@ -288,13 +343,15 @@ Deno.serve(async (req) => {
      function logs. Written per asset rather than as one bulk update, because the reasons differ;
      bounded by BATCH, so this is at most 25 statements. */
   const stuck = (assets ?? []).map(a => a.id).filter(id => !done.includes(id));
-  for (const id of stuck) {
+  await mapPool(ASSET_CONCURRENCY, stuck, async (id) => {
     const reason = failures.find(f => f.asset_id === id);
     await db.from('cdn_move_queue')
       .update({ attempts: 1, last_error: reason ? `${reason.stage}: ${reason.reason}` : 'unknown' })
       .eq('asset_id', id);
-  }
+  });
 
   const { count } = await db.from('cdn_move_queue').select('*', { count: 'exact', head: true });
-  return json(200, { moved, skipped, failed, reflagged, remaining: count ?? 0, failures });
+  return json(200, {
+    moved, skipped, failed, reflagged, sweptPages, sweepsSkipped, remaining: count ?? 0, failures,
+  });
 });
