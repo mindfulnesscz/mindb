@@ -24,7 +24,9 @@ import css from '../PipelineView.module.css';
 
 export function ConfigSidebar() {
   const { settings, setField } = useSettingsStore();
-  const { runStatus, progress, stopRun } = usePipelineStore();
+  const runStatus = usePipelineStore(s => s.runStatus);
+  const progress  = usePipelineStore(s => s.progress);
+  const stopRun   = usePipelineStore(s => s.stopRun);
   const { clients, activeClientId, updateClient } = useClientStore();
   const activeClient = clients.find(c => c.id === activeClientId) ?? null;
 

@@ -40,7 +40,16 @@ const APP_VERSION = __APP_VERSION__;
 export function useRunPipeline(selectedDests: CloudDestination[]): () => Promise<void> {
   const settings = useSettingsStore(s => s.settings);
   const vocab    = useVocabularyStore(s => s.data);
-  const { startRun, appendLog, addIssue, finishRun, setProgress, setSupabaseSync } = usePipelineStore();
+  /* One selector per action, not `usePipelineStore()`. Subscribing to the whole store made the
+     component holding this hook re-render on every log line the run appended — thousands of
+     renders of the pipeline view, caused by the run and competing with it. Actions are stable
+     references, so these subscriptions never fire. */
+  const startRun        = usePipelineStore(s => s.startRun);
+  const appendLog       = usePipelineStore(s => s.appendLog);
+  const addIssue        = usePipelineStore(s => s.addIssue);
+  const finishRun       = usePipelineStore(s => s.finishRun);
+  const setProgress     = usePipelineStore(s => s.setProgress);
+  const setSupabaseSync = usePipelineStore(s => s.setSupabaseSync);
   const { clients, activeClientId } = useClientStore();
   const activeClient = clients.find(c => c.id === activeClientId) ?? null;
 

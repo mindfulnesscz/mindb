@@ -121,6 +121,19 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   canonicalisation belongs in Rust, behind the path-policy scope check. Genuinely
   platform-specific lookups such as `appDataDir()` still go through the real API.
 
+- **The run log no longer fights the run for the main thread.** Every log line was its own store
+  update and its own React render, and a run emits one per file per stage — thousands of renders
+  whose only visible effect was a line appearing a few milliseconds sooner, competing with the work
+  that produced them. Lines are now buffered for up to 100 ms and progress is throttled to about ten
+  updates a second.
+
+  **Section banners still flush immediately**, carrying everything buffered before them, so a tail
+  keeps its stage structure and the order of lines is never affected. Nothing is dropped: the buffer
+  is flushed when the run ends, and the final progress value is always delivered rather than left at
+  97 %. The log panel renders the most recent 1,500 lines and says how many earlier ones are hidden
+  — the full log is still in memory, the cap only bounds the DOM. See
+  [Logs and diagnostics](docs/pages/desktop/logs.mdx).
+
 - **The Supabase export writes rows eight at a time instead of one at a time.** It was issuing one
   awaited PostgREST round trip per asset row, in series, for parents and then for children. At the
   150–300 ms a round trip actually costs, a 300-asset library spent 45–90 seconds of every run doing

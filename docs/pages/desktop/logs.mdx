@@ -11,6 +11,19 @@ Always read the section header before interpreting a symbol.
 | `CLOUD EXPORT` green `✓` | Provider call succeeded; Dropbox separately logs existing paths as dim skips |
 | red `✕` | That file/operation failed; sibling jobs usually continue |
 
+**The log arrives in batches, and that is deliberate.** A run emits a line per file, and each line
+used to be its own store update and its own React render — thousands of them, on the same main
+thread the run is using. Ordinary lines are now buffered for up to 100 ms; **section banners flush
+immediately**, taking everything buffered before them along, so the stage structure of a tail is
+always current and the order of lines is never affected. Progress is throttled to about ten updates
+a second, with the final value always delivered. Nothing is dropped: the buffer is flushed when the
+run ends.
+
+The panel **renders the most recent 1,500 lines** and reports how many earlier ones are hidden. The
+cap bounds what is in the DOM, not what is kept — the full log stays in memory for the session. It
+is not persisted either way, so anything that has to survive the app belongs in the error log or in
+`run-timings.jsonl` (both reachable from **Settings → Diagnostics**).
+
 ## Timings
 
 Every section-DONE banner ends with how long that section took — `━━━ THUMBNAILS DONE — 42 created · 0 errors ━━━ in 41.0s` — and the run closes with a `RUN TOTAL` block:
