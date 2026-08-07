@@ -5,7 +5,7 @@ CONTEXT block from `DONE_01_security-hardening-S0-S7.md` to any prompt before ha
 `REF_` files are reference/strategy, not tasks. `DONE_` files are already implemented — kept for
 context, don't re-run.
 
-_Last updated 2026-08-07 (00a/00b/00c landed; `02` closed; `04a`–`04f` performance series filed, evidence in `REF_performance-audit.md`; **`04a`, `04b` and `04c` landed** — the run log carries per-phase durations, the Supabase row writes are pooled 8-wide on the shared `asyncPool` that `04d` reuses, and a no-change run writes zero readmes into the client's synced source tree)._
+_Last updated 2026-08-07 (00a/00b/00c landed; `02` closed; `04a`–`04f` performance series filed, evidence in `REF_performance-audit.md`; **`04a`–`04d` landed** — the run log carries per-phase durations, every batched stage runs on the shared `asyncPool` instead of a chunked barrier, path arithmetic no longer crosses the Rust bridge per file, the log no longer competes with the run for the main thread, and a no-change run writes zero readmes into the client's synced source tree. `04e` is next)._
 
 ## 🚢 3.2.2 — code complete
 
@@ -28,7 +28,6 @@ throughput, which `00b` part A restored but which no automated test can observe.
 
 | # | File | What it does | Status |
 |---|---|---|---|
-| 04d | `04d_perf-worker-pools-and-ipc.md` | Chunked barriers → true worker pools; pure-string path joins (kill per-file IPC); log/progress batching. | TODO — `asyncPool` is built and shipped, so Part A is a mechanical swap |
 | 04e | `04e_perf-cloud-export.md` | Drive folder-children sweep instead of per-file LIST; MD5 memo (stops cold-cache Dropbox downloads); OneDrive skip-if-unchanged; stretch: uploads in Rust. | TODO |
 | 04f | `04f_perf-stage-overlap.md` | Parallel pre-run fetches; early scanVersionMap; optional publish ∥ CDN overlap. Riskiest — run LAST. | TODO |
 | 05 | `05_asset-conversion-and-tag-inference.md` | The adoption feature: folder→asset conversion (drop/batch/right-click) + path/file-type tag inference. Prompts A–E, has its own dependency graph. | TODO (feature work — after the perf series) |
@@ -36,6 +35,31 @@ throughput, which `00b` part A restored but which no automated test can observe.
 The evidence behind the 04 series: `REF_performance-audit.md`.
 
 ## ✅ Done (implemented — don't re-run)
+
+- `DONE_04d_perf-worker-pools-and-ipc.md` — all three parts. **A**: every chunked
+  `for (i += 8) { await Promise.all(chunk) }` is now `asyncPool`, so a slot refills the moment it
+  frees instead of the whole batch waiting on its slowest member — thumbnails (rasters and
+  documents), all three CDN upload stages, cloud export, both `pruneStaleObject` sweeps and
+  `deleteCdnObjects`. **No width was raised**: 8 for uploads/renders, 4 for the destructive sweeps.
+  Page previews were additionally FLATTENED — documents used to run one at a time with pages 8-wide
+  inside, so a two-page deck used two slots; jobs now pool across documents with a **completion
+  latch** that keeps each document's stale-page sweep strictly after its own pages settle (the sweep
+  deletes everything under the asset's page prefixes this run did not claim, so overlapping it with
+  a sibling page's upload would race a delete against that write). Every converted site is followed
+  by `if (isStopping()) return;` — the chunked loops returned out of the stage on stop, and without
+  it a stopped run would start printing banners it never printed. **B**: `services/pipeline/paths.ts`
+  — pure `joinPath`/`parentPath`/`baseName` replacing `@tauri-apps/api/path` in the scan, publish,
+  collect and DAM walks, which were paying an IPC round trip **per directory entry**. `.` and `..`
+  are deliberately NOT resolved (canonicalisation belongs in Rust behind `path_policy`), and it lives
+  in the desktop rather than `@sotto/domain` because a new module there breaks every local edge
+  function until the container is recreated. **C**: log lines buffer for 100 ms and `setProgress` is
+  throttled to ~10 Hz, but **section banners flush synchronously** carrying everything buffered
+  before them, so order is never affected; `finishRun` flushes and cancels the trailing progress
+  timer. Also: the log view now renders the last 1,500 lines rather than the whole array, and four
+  components that subscribed to the WHOLE store (including the one holding `useRunPipeline`) take
+  per-field selectors — without that the batching bought nothing. Tests: `paths.test.ts` (including
+  agreement with `vfs.pathApi()`, the normal form the characterization suites compare against) and
+  `store/pipelineStore.test.ts`. **Still owed: the timed before/after run.**
 
 - `DONE_04c_perf-readme-churn.md` — a no-change run now writes **zero** readmes. Every package
   folder gets a `readme.md`, and each carried a `_Last synced: <timestamp>_` line, so its content
@@ -161,6 +185,14 @@ The evidence behind the 04 series: `REF_performance-audit.md`.
 - `docs/pages/ideas/slimming-the-bundled-libreoffice.mdx` — the ~800MB trim, relevant before auto-update is turned on.
 
 ## Known deliberate residual (not a task)
+- **`services/pipeline/paths.ts` does not resolve `.` or `..`** (`04d` Part B). Nothing in the
+  pipeline composes them, and collapsing them in JS would be a way to climb out of a folder
+  `path_policy` had approved. Canonicalisation stays in Rust, behind the scope check. Same file:
+  `appDataDir()` and every other OS question still goes through `@tauri-apps/api/path`.
+- **A `section` log line flushes the buffer synchronously** (`04d` Part C). Everything else waits up
+  to 100 ms. That is what keeps stage banners current in a tail, keeps breadcrumbs attributable, and
+  guarantees batching never reorders a log. If you add a log type that must be immediate, flush it
+  the same way rather than lowering the interval.
 - Thumbnail regeneration fingerprints on **mtime + size, not a content hash** (`render.rs`), so a content edit preserving both won't regenerate. Documented tradeoff (hashing = read every file), not a bug.
 - **The per-thumbnail `.json` sidecars are render caches, not metadata** — they hold the source size+mtime and the width/quality settings, the only way to know a render is stale. Deleting them re-renders the library. `00c` C2 **hid** them rather than consolidating, and consolidating stays wrong: eight concurrent renderers writing one shared manifest is last-writer-wins, and a corrupt write would invalidate a whole gallery instead of one thumbnail.
 - **CDN object keys are built from folder identity (`stable_id`/`child_id`), never from filenames** (`cdnUpload.ts:4`). Renaming or moving a local artifact changes no key and orphans nothing — don't re-derive this fear when touching the layout. It is what made `00c` C3 affordable, and what makes its migration free.
