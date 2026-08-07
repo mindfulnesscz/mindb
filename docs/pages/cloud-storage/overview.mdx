@@ -6,12 +6,35 @@ A destination has a provider, name, pipeline role (`internal` / `client`), porta
 
 | Provider | Sign-in | Existing-name behavior | Structure | Best fit | Main weakness |
 |---|---|---|---|---|---|
-| Local | None | mtime/size skip in local publishing | Can mirror folders | Synced enterprise folder, inspectable output | Depends on another sync client; local disk coupling |
-| Dropbox | Browser PKCE | **Skips if path exists**, regardless of changed content | Cloud stage is flat into remote path | Simple delivery, stable shared links | Existing remote file can become stale |
-| OneDrive | Device code | Skip only when size **and** QuickXorHash match; PUT overwrites otherwise | Cloud stage is flat | Microsoft 365 users | Conditional Access; personal drives publish no QuickXorHash |
+| Local | None | mtime/size skip in local publishing | Mirrors the source tree | Synced enterprise folder, inspectable output | Depends on another sync client; local disk coupling |
+| Dropbox | Browser PKCE | **Skips if path exists**, regardless of changed content | Remote path per file; folders created implicitly | Simple delivery, stable shared links | Existing remote file can become stale |
+| OneDrive | Device code | Skip only when size **and** QuickXorHash match; PUT overwrites otherwise | Remote path per file; folders created implicitly | Microsoft 365 users | Conditional Access; personal drives publish no QuickXorHash |
 | Google Drive | Browser PKCE plus client secret | Skip only when size **and** MD5 match; update in place when changed | Resolves remote folders by id, listing each once per run | Workspace/Shared Drive collaboration | Broad OAuth scope; public permission creation |
 
 All three provider uploads are one API operation per file, not a zip or transactional batch.
+
+## Which folders a destination receives
+
+`exportLayout` is portal-owned and required, one of three values. The two folder layouts are not a
+preference — they are two genuinely different trees, and a destination used to have no way to say
+which one it meant:
+
+| Layout | What arrives | Delivered by |
+|---|---|---|
+| `source` | The source tree: package and category folders (identity suffixes stripped), the `OUT` segment dropped, galleries kept | Local destinations always; cloud destinations since 3.2.3 |
+| `folders` *(default)* | The `OUT` subtree only — a gallery keeps its folder, anything else lands in the destination root | Cloud destinations, and the value every stored destination carries |
+| `flat` | Everything in one folder, no nesting | Any destination |
+
+A local destination reads `source` and `folders` as the same thing: it has mirrored the source tree
+since it existed, and re-reading `folders` as "OUT subtree only" would restructure every local
+delivery to fix a naming inconsistency. On a **cloud** destination the two differ, and an unknown or
+absent value resolves to `folders` — never to `source` — so nothing moves on upgrade.
+
+**Switching a live destination to `source` is a migration, not a setting.** Every file uploads again
+under a new remote path, and because the cloud export never deletes, the copies already at the
+destination root stay there until they are removed (on Drive: preview-first
+[duplicate-folder cleanup](/operations/gdrive-dedupe), or by hand). Sharing links are re-collected
+against the new paths and rewritten in Supabase, so the portal follows automatically.
 
 ## How the bytes actually move
 

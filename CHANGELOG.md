@@ -32,6 +32,33 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **A cloud destination can now be told to deliver the full source tree.** `exportLayout` takes a
+  third value, `source`: package and category folders are kept (identity suffixes stripped), the
+  `OUT` segment is dropped, galleries keep their folder — the same tree a local destination has
+  always written. Pick it per destination in the portal, under **Export layout → Full source tree**.
+
+  This was reported as "the cloud export flattens the output": a Drive destination on Full folders
+  received `04 Mucha Family/Deck.pdf` where the local export of the same library wrote
+  `01 Works/01 Graphics/Batch I/Deck.pdf`. Both were doing what they were built to do. "Keep the
+  folders" simply meant two different trees — the publish stage mirrored the source, the cloud
+  export kept only the part below OUT — and one enum value spelled `folders` was covering both, so
+  the destination had no way to say which it wanted and the operator no way to see which they got.
+
+  The two are now named apart rather than merged. **Nothing moves on upgrade:** an unknown or absent
+  layout resolves to `folders`, never to `source`, so every stored destination keeps the tree it has
+  been delivering, and a local destination reads both folder values as the source tree exactly as
+  before. The run log now names the layout it used, because the two differ only in what a file
+  *without* a gallery gets and were otherwise indistinguishable from the log.
+
+  **Switching a live destination to `source` is a migration.** Every file re-uploads under a new
+  remote path, and the cloud export never deletes — the copies already at the destination root stay
+  until they are cleared (on Drive, the preview-first duplicate-folder cleanup, or by hand). Sharing
+  links are re-collected and rewritten in Supabase, so the portal follows on its own.
+
+  The path rules now live in one place, `services/pipeline/deliveryLayout.ts`, read by both stages;
+  the publish walk's own copy is gone. A test runs the publish and cloud stages over one library in
+  one run and asserts they deliver identical relative paths, so the two cannot drift apart again.
+
 - **The run log now says how long everything took.** Every section-DONE banner ends with its own
   duration, the source scan gets the line it never had, and the run closes with a `RUN TOTAL` block
   naming the five slowest phases and their share of the run.

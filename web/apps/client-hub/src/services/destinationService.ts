@@ -10,14 +10,18 @@ export type DestType = 'local' | 'dropbox' | 'onedrive' | 'gdrive'
 export type DestPipelineRole = 'internal' | 'client'
 
 /**
- * Required base layout (exactly one).
- * - folders — preserve OUT-relative folder tree
+ * Required base layout (exactly one). Mirrors `DestExportLayout` in the desktop's domain/client.ts —
+ * the two must agree, since this writes the value that one reads.
+ * - source — mirror the source tree: package/category folders, OUT dropped, galleries kept
+ * - folders — preserve the OUT-relative tree only (galleries; everything else at the root)
  * - flat — dump files into one folder (share links; no nesting)
  *
  * Packages are optional via `includePackages` and nest *inside* the folder tree
  * (they are never a standalone dump at the target root).
  */
-export type DestExportLayout = 'folders' | 'flat'
+export type DestExportLayout = 'source' | 'folders' | 'flat'
+
+const EXPORT_LAYOUTS: DestExportLayout[] = ['source', 'folders', 'flat']
 
 export type PortalDestConfig =
   | { type: 'local'; path: string }
@@ -56,15 +60,18 @@ export function roleAtLeast(user: Role, min: Role): boolean {
   return ROLE_RANK[user] >= ROLE_RANK[min]
 }
 
-/** Keep exportLayout and includePackages internally consistent. */
+/** Keep exportLayout and includePackages internally consistent.
+ *  An unknown or absent layout resolves to `folders`, never to `source`: that is what every
+ *  destination stored before `source` existed carries, and promoting one here would silently
+ *  restructure a client's delivery on the desktop's next run. */
 export function resolveExportShape(raw: Record<string, unknown> | Partial<PortalDestination>): {
   exportLayout: DestExportLayout
   includePackages: boolean
 } {
-  const exportLayout: DestExportLayout =
-    (raw as { exportLayout?: unknown }).exportLayout === 'flat' ? 'flat' : 'folders'
+  const stored = (raw as { exportLayout?: unknown }).exportLayout as DestExportLayout
+  const exportLayout: DestExportLayout = EXPORT_LAYOUTS.includes(stored) ? stored : 'folders'
   const includePackages =
-    exportLayout === 'folders' && Boolean((raw as { includePackages?: unknown }).includePackages)
+    exportLayout !== 'flat' && Boolean((raw as { includePackages?: unknown }).includePackages)
   return { exportLayout, includePackages }
 }
 

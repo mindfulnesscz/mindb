@@ -131,7 +131,7 @@ it by touching the sources or deleting the target copies. Re-running is otherwis
 
 Resolves the checked **local** destination’s machine path (falling back to `settings.targetFolder`). Shape comes from `exportLayout` + optional `includePackages`. Publish/export always keeps **highest version only** (one file per base+extension).
 
-- **`folders` (default):** mirrors the source tree looking for `OUT`, publishes contents (filenames translated), recurses otherwise. Stable-identity hash suffixes (` __a1b2c3d4`) are stripped from folder names. Package folders next to OUT are skipped here unless packages are included.
+- **`source` and `folders` (default):** mirrors the source tree looking for `OUT`, publishes contents (filenames translated), recurses otherwise. Stable-identity hash suffixes (` __a1b2c3d4`) are stripped from folder names. Package folders next to OUT are skipped here unless packages are included. A local destination has always delivered this tree, so **both values mean it here** — see the note under [Cloud export](#4--cloud-export) for why they differ there.
 - **`flat`:** all publishable OUT files into the target root (no nesting).
 - **`includePackages` (with folders):** first **refreshes each source package from sibling OUT** (same mirror rules as Distribute), then copies those live files into the target at their **nested source-relative paths**. Package filenames are translated. Never dumps packages alone at target root.
 
@@ -152,9 +152,20 @@ Source packages never use `🚫`.
 
 For each cloud destination with a valid OAuth token:
 
-- **`folders`:** uploads collected OUT assets, preserving folders under OUT (highest version only).
+- **`source`:** uploads collected OUT assets into the **same tree a local destination receives** — package and category folders kept (identity suffixes stripped), the `OUT` segment dropped, galleries kept.
+- **`folders` (default):** uploads collected OUT assets preserving folders **under** OUT only. A deliverable with no gallery therefore lands in `remotePath` itself, and its package folder is not created.
 - **`flat`:** dumps files into `remotePath`.
-- **`includePackages`:** refreshes source packages from OUT, then uploads package files under their nested relative paths.
+- **`includePackages`:** refreshes source packages from OUT, then uploads package files under their nested relative paths. Available with either folder layout.
+
+**Why two folder layouts.** They are the two trees this stage and the publish stage each already
+produced, now named apart. `folders` was a cloud destination’s only meaning before 3.2.3 and stays
+the default for that reason: an unknown or absent value resolves to `folders`, never to `source`, so
+no stored destination restructures itself on upgrade. Switching a live destination to `source` moves
+every file into a new remote path on the next run — the cloud export never deletes, so the copies
+already at the destination root stay until they are cleared (on Drive, via
+[duplicate-folder cleanup](/operations/gdrive-dedupe) or by hand). The path rules for `source` are
+shared with the publish stage in `services/pipeline/deliveryLayout.ts`, and a test runs both stages
+over one library and compares what they deliver.
 
 Sharing links (when `generateLink`) are keyed by `(stable_id, child_id)` and later written to
 Supabase for the portal. Equal filenames in separate packages cannot overwrite each other's links.
